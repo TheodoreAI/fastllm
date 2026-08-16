@@ -1,4 +1,5 @@
 import MessageContent from './MessageContent'
+import PendingWriteCard from './PendingWriteCard'
 
 export default function ChatPanel({
   messages,
@@ -9,6 +10,8 @@ export default function ChatPanel({
   streaming,
   onSendMessage,
   userDisplayName,
+  onApproveWrite,
+  onRejectWrite,
 }) {
   return (
     <main className="chat">
@@ -35,6 +38,13 @@ export default function ChatPanel({
               </ul>
             )}
             <MessageContent content={m.content} />
+            {m.pendingWrites && m.pendingWrites.length > 0 && (
+              <div className="pending-writes">
+                {m.pendingWrites.map((w) => (
+                  <PendingWriteCard key={w.id} write={w} onApprove={onApproveWrite} onReject={onRejectWrite} />
+                ))}
+              </div>
+            )}
             {m.sources && m.sources.length > 0 && (
               <details className="sources">
                 <summary>{m.sources.length} source{m.sources.length === 1 ? '' : 's'}</summary>

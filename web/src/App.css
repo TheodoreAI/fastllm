@@ -840,6 +840,105 @@ body {
   font-size: 0.95em;
 }
 
+.pending-writes {
+  margin: 0 0 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pending-write {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  overflow: hidden;
+}
+
+.pending-write-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  font-size: 0.8125rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.pending-write-header code {
+  font-family: ui-monospace, 'SF Mono', Consolas, 'Cascadia Code', monospace;
+  font-size: 0.95em;
+}
+
+.pending-write-status {
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-faint);
+}
+
+.pending-write.status-approved .pending-write-status {
+  color: var(--success);
+}
+
+.pending-write.status-error .pending-write-status,
+.pending-write.status-rejected .pending-write-status {
+  color: var(--danger);
+}
+
+.pending-write-diff {
+  max-height: 260px;
+  overflow: auto;
+  font-family: ui-monospace, 'SF Mono', Consolas, 'Cascadia Code', monospace;
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+.diff-row {
+  display: flex;
+  padding: 0 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.diff-marker {
+  flex-shrink: 0;
+  width: 1.2em;
+  color: var(--text-faint);
+  user-select: none;
+}
+
+.diff-add {
+  background: color-mix(in srgb, var(--success) 14%, transparent);
+}
+
+.diff-add .diff-marker {
+  color: var(--success);
+}
+
+.diff-del {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+
+.diff-del .diff-marker {
+  color: var(--danger);
+}
+
+.pending-write-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+}
+
+.pending-write-actions .btn-primary,
+.pending-write-actions .btn-secondary {
+  width: auto;
+  margin-top: 0;
+  padding: 6px 12px;
+  font-size: 0.8125rem;
+}
+
 .sources summary {
   cursor: pointer;
   color: rgba(255, 255, 255, 0.55);

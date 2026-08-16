@@ -103,6 +103,14 @@ export function quitServer() {
   return fetch('/api/quit', { method: 'POST' })
 }
 
+export function approveWrite(id) {
+  return fetch(`/api/writes/${id}/approve`, { method: 'POST' })
+}
+
+export function rejectWrite(id) {
+  return fetch(`/api/writes/${id}/reject`, { method: 'POST' })
+}
+
 export function saveRagSettings(settings) {
   return fetch('/api/settings/rag', {
     method: 'PUT',
@@ -154,6 +162,8 @@ export async function streamChat({ message, model, skillId, conversationId }, ca
         callbacks.onReasoning?.(payload.reasoning)
       } else if (eventType === 'tool_call') {
         callbacks.onToolCall?.(payload)
+      } else if (eventType === 'pending_write') {
+        callbacks.onPendingWrite?.(payload)
       } else if (eventType === 'error') {
         callbacks.onError?.(payload.error || 'The model backend returned an error.')
       } else if (payload.token) {
