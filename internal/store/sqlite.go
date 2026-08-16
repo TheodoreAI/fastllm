@@ -4,6 +4,7 @@ package store
 
 import (
 	"database/sql"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 
@@ -11,6 +12,14 @@ import (
 
 	"fastllm/internal/vector"
 )
+
+//go:embed seed/skills.json
+var seedSkillsJSON []byte
+
+// defaultWorkspaceID must match the workspace ID callers pass in (see
+// internal/chat.defaultWorkspace) — fastllm has no multi-workspace UI yet,
+// so every caller uses this same literal.
+const defaultWorkspaceID = "default"
 
 const schema = `
 CREATE TABLE IF NOT EXISTS messages (
@@ -42,6 +51,14 @@ CREATE TABLE IF NOT EXISTS skills (
 	prompt TEXT NOT NULL,
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+-- meta holds one-time migration/seed flags, e.g. "seeded_default_skills",
+-- so a fresh install gets starter data exactly once even if the user
+-- later deletes all of it.
+CREATE TABLE IF NOT EXISTS meta (
+	key TEXT PRIMARY KEY,
+	value TEXT NOT NULL
+);
 `
 
 type Message struct {
@@ -59,7 +76,46 @@ func Open(path string) (*sql.DB, error) {
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("store: migrate: %w", err)
 	}
+	if err := seedDefaultSkills(db); err != nil {
+		return nil, fmt.Errorf("store: seed skills: %w", err)
+	}
 	return db, nil
+}
+
+// seedSkill is the shape of each entry in seed/skills.json — the starter
+// presets a fresh install ships with.
+type seedSkill struct {
+	Name   string `json:"name"`
+	Prompt string `json:"prompt"`
+}
+
+const seedFlagKey = "seeded_default_skills"
+
+// seedDefaultSkills inserts the starter presets exactly once per database,
+// tracked via the meta table rather than "is the skills table empty" — the
+// latter would re-seed every time a user deletes all their skills.
+func seedDefaultSkills(db *sql.DB) error {
+	var seeded string
+	err := db.QueryRow(`SELECT value FROM meta WHERE key = ?`, seedFlagKey).Scan(&seeded)
+	if err == nil {
+		return nil // already seeded, whatever the current skill count is
+	}
+	if err != sql.ErrNoRows {
+		return err
+	}
+
+	var defaultSkills []seedSkill
+	if err := json.Unmarshal(seedSkillsJSON, &defaultSkills); err != nil {
+		return fmt.Errorf("parse seed/skills.json: %w", err)
+	}
+
+	for _, s := range defaultSkills {
+		if _, err := SaveSkill(db, defaultWorkspaceID, s.Name, s.Prompt); err != nil {
+			return err
+		}
+	}
+	_, err = db.Exec(`INSERT INTO meta (key, value) VALUES (?, '1')`, seedFlagKey)
+	return err
 }
 
 func SaveMessage(db *sql.DB, workspaceID, role, content string) error {
