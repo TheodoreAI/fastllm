@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"fastllm/internal/chat"
+	"fastllm/internal/files"
 	"fastllm/internal/llm"
 	"fastllm/internal/store"
 	"fastllm/internal/vector"
@@ -32,6 +33,7 @@ func main() {
 	chatModel := getenv("LLM_CHAT_MODEL", "llama3.1")
 	embedModel := getenv("LLM_EMBED_MODEL", "nomic-embed-text")
 	addr := getenv("FASTLLM_ADDR", ":8080")
+	filesRoot := getenv("FASTLLM_FILES_ROOT", "") // empty = file-read tool disabled
 
 	db, err := store.Open(dbPath)
 	if err != nil {
@@ -48,7 +50,11 @@ func main() {
 	log.Printf("loaded %d chunks into vector store", len(chunks))
 
 	llmClient := llm.New(baseURL, apiKey, chatModel, embedModel)
-	handler := chat.New(db, llmClient, vecStore)
+	fileReader := files.New(filesRoot)
+	if fileReader.Enabled() {
+		log.Printf("file-read tool enabled, sandboxed to %s", fileReader.Root)
+	}
+	handler := chat.New(db, llmClient, vecStore, fileReader)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/chat", handler.Chat)
