@@ -33,14 +33,18 @@ func New(db *sql.DB, llmClient *llm.Client, vec *vector.Store) *Handler {
 }
 
 type chatRequest struct {
-	Message string `json:"message"`
-	Model   string `json:"model"`
-	SkillID int64  `json:"skill_id"`
+	Message        string `json:"message"`
+	Model          string `json:"model"`
+	SkillID        int64  `json:"skill_id"`
+	ConversationID int64  `json:"conversation_id"`
 }
 
 // Chat streams the assistant's reply back to the client as Server-Sent
 // Events, one small chunk of text per event, so the UI can render tokens
-// as they arrive instead of waiting for the full response.
+// as they arrive instead of waiting for the full response. If no
+// conversation_id is given, a new conversation is created and its ID is
+// sent back to the client as a "conversation" event before streaming
+// starts, so the frontend can track which thread it's now in.
 func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	var req chatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Message) == "" {
@@ -48,22 +52,40 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := store.SaveMessage(h.DB, defaultWorkspace, "user", req.Message); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	ctx := r.Context()
-	messages, sources := h.buildPrompt(ctx, req.Message, req.SkillID)
-
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 		return
 	}
+
+	convID := req.ConversationID
+	isNewConversation := convID == 0
+	if isNewConversation {
+		var err error
+		convID, err = store.CreateConversation(h.DB, defaultWorkspace, conversationTitle(req.Message))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	if err := store.SaveMessage(h.DB, defaultWorkspace, convID, "user", req.Message); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	ctx := r.Context()
+	messages, sources := h.buildPrompt(ctx, convID, req.Message, req.SkillID)
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+
+	if isNewConversation {
+		payload, _ := json.Marshal(map[string]int64{"conversation_id": convID})
+		fmt.Fprintf(w, "event: conversation\ndata: %s\n\n", payload)
+		flusher.Flush()
+	}
 
 	if len(sources) > 0 {
 		payload, _ := json.Marshal(map[string]any{"sources": sources})
@@ -86,10 +108,25 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if full.Len() > 0 {
-		_ = store.SaveMessage(h.DB, defaultWorkspace, "assistant", full.String())
+		_ = store.SaveMessage(h.DB, defaultWorkspace, convID, "assistant", full.String())
 	}
 	fmt.Fprintf(w, "event: done\ndata: {}\n\n")
 	flusher.Flush()
+}
+
+// conversationTitle derives a short thread title from the first message,
+// the same way ChatGPT/Claude do — truncated to a single line.
+func conversationTitle(message string) string {
+	title := strings.TrimSpace(strings.SplitN(message, "\n", 2)[0])
+	const maxLen = 48
+	runes := []rune(title)
+	if len(runes) > maxLen {
+		title = string(runes[:maxLen]) + "…"
+	}
+	if title == "" {
+		title = "New conversation"
+	}
+	return title
 }
 
 // source is a chunk retrieved for a chat answer, reported to the client
@@ -104,7 +141,7 @@ type source struct {
 // also returns the chunks that were retrieved, for display in the UI. If
 // skillID is non-zero and resolves to a saved skill, that skill's prompt
 // replaces the default system prompt.
-func (h *Handler) buildPrompt(ctx context.Context, question string, skillID int64) ([]llm.Message, []source) {
+func (h *Handler) buildPrompt(ctx context.Context, conversationID int64, question string, skillID int64) ([]llm.Message, []source) {
 	prompt := systemPrompt
 	if skillID != 0 {
 		if s, err := store.GetSkill(h.DB, defaultWorkspace, skillID); err == nil {
@@ -131,7 +168,7 @@ func (h *Handler) buildPrompt(ctx context.Context, question string, skillID int6
 		}
 	}
 
-	history, err := store.LoadMessages(h.DB, defaultWorkspace)
+	history, err := store.LoadMessages(h.DB, defaultWorkspace, conversationID)
 	if err == nil {
 		// Keep the prompt bounded: last 20 messages plus the new one already saved.
 		start := 0
@@ -216,13 +253,45 @@ func (h *Handler) DeleteSkill(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// ListMessages returns every message in one conversation, given by the
+// required ?conversation_id= query parameter.
 func (h *Handler) ListMessages(w http.ResponseWriter, r *http.Request) {
-	msgs, err := store.LoadMessages(h.DB, defaultWorkspace)
+	convID, err := strconv.ParseInt(r.URL.Query().Get("conversation_id"), 10, 64)
+	if err != nil {
+		http.Error(w, "conversation_id is required", http.StatusBadRequest)
+		return
+	}
+	msgs, err := store.LoadMessages(h.DB, defaultWorkspace, convID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, msgs)
+}
+
+// ListConversations returns every conversation thread, most recently
+// active first.
+func (h *Handler) ListConversations(w http.ResponseWriter, r *http.Request) {
+	convs, err := store.ListConversations(h.DB, defaultWorkspace)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, convs)
+}
+
+// DeleteConversation removes a conversation and all its messages.
+func (h *Handler) DeleteConversation(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid conversation id", http.StatusBadRequest)
+		return
+	}
+	if err := store.DeleteConversation(h.DB, defaultWorkspace, id); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 type uploadRequest struct {

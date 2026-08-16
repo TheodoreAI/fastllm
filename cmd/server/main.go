@@ -57,6 +57,8 @@ func main() {
 	mux.HandleFunc("GET /api/skills", handler.ListSkills)
 	mux.HandleFunc("POST /api/skills", handler.CreateSkill)
 	mux.HandleFunc("DELETE /api/skills/{id}", handler.DeleteSkill)
+	mux.HandleFunc("GET /api/conversations", handler.ListConversations)
+	mux.HandleFunc("DELETE /api/conversations/{id}", handler.DeleteConversation)
 
 	serveFrontend(mux)
 

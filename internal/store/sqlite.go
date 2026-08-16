@@ -7,6 +7,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	_ "modernc.org/sqlite"
 
@@ -22,9 +23,18 @@ var seedSkillsJSON []byte
 const defaultWorkspaceID = "default"
 
 const schema = `
+CREATE TABLE IF NOT EXISTS conversations (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	workspace_id TEXT NOT NULL,
+	title TEXT NOT NULL,
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+	updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS messages (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	workspace_id TEXT NOT NULL,
+	conversation_id INTEGER,
 	role TEXT NOT NULL,
 	content TEXT NOT NULL,
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -68,6 +78,72 @@ type Message struct {
 	CreatedAt string `json:"created_at"`
 }
 
+// Conversation is a single chat thread — a named, ordered sequence of
+// messages. Deleting one cascades to its messages (see DeleteConversation).
+type Conversation struct {
+	ID        int64  `json:"id"`
+	Title     string `json:"title"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+// CreateConversation starts a new, empty conversation thread.
+func CreateConversation(db *sql.DB, workspaceID, title string) (int64, error) {
+	res, err := db.Exec(`INSERT INTO conversations (workspace_id, title) VALUES (?, ?)`, workspaceID, title)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// ListConversations returns every conversation in the workspace, most
+// recently updated first.
+func ListConversations(db *sql.DB, workspaceID string) ([]Conversation, error) {
+	rows, err := db.Query(`
+		SELECT id, title, created_at, updated_at
+		FROM conversations
+		WHERE workspace_id = ?
+		ORDER BY updated_at DESC`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []Conversation{}
+	for rows.Next() {
+		var c Conversation
+		if err := rows.Scan(&c.ID, &c.Title, &c.CreatedAt, &c.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// DeleteConversation removes a conversation and every message in it.
+func DeleteConversation(db *sql.DB, workspaceID string, id int64) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`DELETE FROM messages WHERE workspace_id = ? AND conversation_id = ?`, workspaceID, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM conversations WHERE workspace_id = ? AND id = ?`, workspaceID, id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// touchConversation bumps updated_at so the conversation list can sort by
+// recent activity.
+func touchConversation(db *sql.DB, id int64) error {
+	_, err := db.Exec(`UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`, id)
+	return err
+}
+
 func Open(path string) (*sql.DB, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -76,10 +152,62 @@ func Open(path string) (*sql.DB, error) {
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("store: migrate: %w", err)
 	}
+	if err := addConversationIDColumn(db); err != nil {
+		return nil, fmt.Errorf("store: migrate: %w", err)
+	}
 	if err := seedDefaultSkills(db); err != nil {
 		return nil, fmt.Errorf("store: seed skills: %w", err)
 	}
+	if err := migrateOrphanMessages(db); err != nil {
+		return nil, fmt.Errorf("store: migrate orphan messages: %w", err)
+	}
 	return db, nil
+}
+
+// addConversationIDColumn adds the conversation_id column to a messages
+// table created before conversations existed. CREATE TABLE IF NOT EXISTS
+// in the schema above is a no-op on an already-existing table, so this
+// ALTER is the actual upgrade path for pre-existing databases.
+func addConversationIDColumn(db *sql.DB) error {
+	_, err := db.Exec(`ALTER TABLE messages ADD COLUMN conversation_id INTEGER`)
+	if err != nil && strings.Contains(err.Error(), "duplicate column name") {
+		return nil
+	}
+	return err
+}
+
+const migrateOrphanFlagKey = "migrated_orphan_messages"
+
+// migrateOrphanMessages groups any pre-existing messages with no
+// conversation_id (from before conversations existed) into a single
+// "Previous conversation" thread, once, so old history isn't lost when
+// this feature ships. Tracked via meta, like seedDefaultSkills, so it
+// runs exactly once even if the user later deletes that conversation.
+func migrateOrphanMessages(db *sql.DB) error {
+	var done string
+	err := db.QueryRow(`SELECT value FROM meta WHERE key = ?`, migrateOrphanFlagKey).Scan(&done)
+	if err == nil {
+		return nil
+	}
+	if err != sql.ErrNoRows {
+		return err
+	}
+
+	var orphanCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM messages WHERE conversation_id IS NULL`).Scan(&orphanCount); err != nil {
+		return err
+	}
+	if orphanCount > 0 {
+		convID, err := CreateConversation(db, defaultWorkspaceID, "Previous conversation")
+		if err != nil {
+			return err
+		}
+		if _, err := db.Exec(`UPDATE messages SET conversation_id = ? WHERE conversation_id IS NULL`, convID); err != nil {
+			return err
+		}
+	}
+	_, err = db.Exec(`INSERT INTO meta (key, value) VALUES (?, '1')`, migrateOrphanFlagKey)
+	return err
 }
 
 // seedSkill is the shape of each entry in seed/skills.json — the starter
@@ -118,19 +246,29 @@ func seedDefaultSkills(db *sql.DB) error {
 	return err
 }
 
-func SaveMessage(db *sql.DB, workspaceID, role, content string) error {
-	_, err := db.Exec(`INSERT INTO messages (workspace_id, role, content) VALUES (?, ?, ?)`, workspaceID, role, content)
-	return err
+// SaveMessage appends a message to a conversation and bumps the
+// conversation's updated_at so recently-active threads sort first.
+func SaveMessage(db *sql.DB, workspaceID string, conversationID int64, role, content string) error {
+	_, err := db.Exec(
+		`INSERT INTO messages (workspace_id, conversation_id, role, content) VALUES (?, ?, ?, ?)`,
+		workspaceID, conversationID, role, content)
+	if err != nil {
+		return err
+	}
+	return touchConversation(db, conversationID)
 }
 
-func LoadMessages(db *sql.DB, workspaceID string) ([]Message, error) {
-	rows, err := db.Query(`SELECT id, role, content, created_at FROM messages WHERE workspace_id = ? ORDER BY id ASC`, workspaceID)
+func LoadMessages(db *sql.DB, workspaceID string, conversationID int64) ([]Message, error) {
+	rows, err := db.Query(
+		`SELECT id, role, content, created_at FROM messages
+		 WHERE workspace_id = ? AND conversation_id = ? ORDER BY id ASC`,
+		workspaceID, conversationID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var out []Message
+	out := []Message{}
 	for rows.Next() {
 		var m Message
 		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.CreatedAt); err != nil {

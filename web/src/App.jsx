@@ -39,14 +39,16 @@ export default function App() {
   const [skillFormOpen, setSkillFormOpen] = useState(false)
   const [skillName, setSkillName] = useState('')
   const [skillPrompt, setSkillPrompt] = useState('')
+  const [conversations, setConversations] = useState([])
+  const [conversationId, setConversationId] = useState(null)
+  const [conversationToDelete, setConversationToDelete] = useState(null)
   const bottomRef = useRef(null)
   const fileInputRef = useRef(null)
 
   useEffect(() => {
-    fetch('/api/messages')
-      .then((r) => r.json())
-      .then((data) => setMessages(data ?? []))
-      .catch(() => {})
+    refreshConversations().then((list) => {
+      if (list.length > 0) openConversation(list[0].id)
+    })
     refreshDocuments()
     refreshSkills()
     fetch('/api/models')
@@ -62,6 +64,44 @@ export default function App() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
+
+  function refreshConversations() {
+    return fetch('/api/conversations')
+      .then((r) => r.json())
+      .then((data) => {
+        const list = data ?? []
+        setConversations(list)
+        return list
+      })
+      .catch(() => [])
+  }
+
+  function openConversation(id) {
+    setConversationId(id)
+    fetch(`/api/messages?conversation_id=${id}`)
+      .then((r) => r.json())
+      .then((data) => setMessages(data ?? []))
+      .catch(() => setMessages([]))
+  }
+
+  function startNewChat() {
+    setConversationId(null)
+    setMessages([])
+  }
+
+  async function confirmDeleteConversation() {
+    const id = conversationToDelete
+    setConversationToDelete(null)
+    if (id == null) return
+    try {
+      await fetch(`/api/conversations/${id}`, { method: 'DELETE' })
+      if (String(conversationId) === String(id)) startNewChat()
+      const list = await refreshConversations()
+      if (String(conversationId) === String(id) && list.length > 0) openConversation(list[0].id)
+    } catch {
+      // ignore
+    }
+  }
 
   function refreshDocuments() {
     fetch('/api/documents')
@@ -90,7 +130,12 @@ export default function App() {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, model, skill_id: skillId ? Number(skillId) : 0 }),
+        body: JSON.stringify({
+          message: text,
+          model,
+          skill_id: skillId ? Number(skillId) : 0,
+          conversation_id: conversationId ?? 0,
+        }),
       })
       if (!res.ok || !res.body) throw new Error(await res.text())
 
@@ -114,7 +159,10 @@ export default function App() {
           const eventType = eventLine ? eventLine.slice(6).trim() : 'message'
           const payload = JSON.parse(dataLine.slice(5).trim())
 
-          if (eventType === 'sources' && payload.sources) {
+          if (eventType === 'conversation' && payload.conversation_id) {
+            setConversationId(payload.conversation_id)
+            refreshConversations()
+          } else if (eventType === 'sources' && payload.sources) {
             setMessages((prev) => {
               const next = [...prev]
               next[next.length - 1] = { ...next[next.length - 1], sources: payload.sources }
@@ -136,6 +184,7 @@ export default function App() {
       setMessages((prev) => [...prev, { role: 'assistant', content: `Error: ${err.message}` }])
     } finally {
       setStreaming(false)
+      refreshConversations()
     }
   }
 
@@ -219,6 +268,42 @@ export default function App() {
 
       <div className="body">
         <aside className="sidebar">
+          <section className="panel">
+            <h2>Conversations</h2>
+            <button type="button" className="btn-secondary" onClick={startNewChat}>
+              + New chat
+            </button>
+
+            <ul className="conversation-list">
+              {conversations.length === 0 && (
+                <li className="doc-empty">No conversations yet</li>
+              )}
+              {conversations.map((c) => (
+                <li
+                  key={c.id}
+                  className={`conversation-item ${String(c.id) === String(conversationId) ? 'active' : ''}`}
+                >
+                  <button
+                    type="button"
+                    className="conversation-title"
+                    onClick={() => openConversation(c.id)}
+                    title={c.title}
+                  >
+                    {c.title}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-icon"
+                    title="Delete this conversation"
+                    onClick={() => setConversationToDelete(c.id)}
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+
           <section className="panel">
             <h2>Model</h2>
             <select
@@ -363,6 +448,27 @@ export default function App() {
           </form>
         </main>
       </div>
+
+      {conversationToDelete != null && (
+        <div className="modal-overlay" onClick={() => setConversationToDelete(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Delete conversation?</h3>
+            <p>
+              This deletes "
+              {conversations.find((c) => c.id === conversationToDelete)?.title ?? 'this conversation'}
+              " and all its messages. This can't be undone.
+            </p>
+            <div className="modal-actions">
+              <button type="button" className="btn-secondary" onClick={() => setConversationToDelete(null)}>
+                Cancel
+              </button>
+              <button type="button" className="btn-danger" onClick={confirmDeleteConversation}>
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
