@@ -38,6 +38,13 @@ func (s *Store) Load(chunks []Chunk) {
 	s.chunks = chunks
 }
 
+// Clear removes every chunk from the index.
+func (s *Store) Clear() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.chunks = nil
+}
+
 type scored struct {
 	chunk Chunk
 	score float32

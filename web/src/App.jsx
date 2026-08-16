@@ -1,5 +1,35 @@
 import { useEffect, useRef, useState } from 'react'
 import './App.css'
+import ConversationList from './components/ConversationList'
+import ModelPicker from './components/ModelPicker'
+import SkillPanel from './components/SkillPanel'
+import KnowledgeBasePanel from './components/KnowledgeBasePanel'
+import ChatPanel from './components/ChatPanel'
+import DeleteConversationModal from './components/DeleteConversationModal'
+import SettingsModal from './components/SettingsModal'
+import { useTheme } from './useTheme'
+import {
+  fetchConversations,
+  fetchMessages,
+  deleteConversation,
+  fetchDocuments,
+  fetchSkills,
+  fetchModels,
+  fetchSettings,
+  fetchRagSettings,
+  saveRagSettings,
+  clearKnowledgeBase,
+  clearConversations,
+  createSkill as apiCreateSkill,
+  deleteSkillById,
+  indexDocument,
+  uploadFile,
+  streamChat,
+} from './api'
+
+// Files we accept for upload: plain-text-like formats (indexed as-is,
+// client never needs to read their bytes) plus PDF (extracted server-side).
+const UPLOAD_FILE_PATTERN = /\.(txt|md|markdown|mdx|json|ya?ml|csv|tsv|log|go|js|jsx|ts|tsx|py|rb|java|c|cc|cpp|h|hpp|rs|sh|sql|html|css|xml|pdf)$/i
 
 export default function App() {
   const [messages, setMessages] = useState([])
@@ -10,33 +40,77 @@ export default function App() {
   const [documents, setDocuments] = useState([])
   const [models, setModels] = useState([])
   const [model, setModel] = useState('')
+  const [skills, setSkills] = useState([])
+  const [skillId, setSkillId] = useState('')
+  const [skillFormOpen, setSkillFormOpen] = useState(false)
+  const [skillName, setSkillName] = useState('')
+  const [skillPrompt, setSkillPrompt] = useState('')
+  const [conversations, setConversations] = useState([])
+  const [conversationId, setConversationId] = useState(null)
+  const [conversationToDelete, setConversationToDelete] = useState(null)
+  const [settings, setSettings] = useState(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [ragSettings, setRagSettings] = useState(null)
+  const [theme, setTheme] = useTheme()
   const bottomRef = useRef(null)
+  const fileInputRef = useRef(null)
+  const folderInputRef = useRef(null)
 
   useEffect(() => {
-    fetch('/api/messages')
-      .then((r) => r.json())
-      .then((data) => setMessages(data ?? []))
-      .catch(() => {})
+    refreshConversations().then((list) => {
+      if (list.length > 0) openConversation(list[0].id)
+    })
     refreshDocuments()
-    fetch('/api/models')
-      .then((r) => r.json())
-      .then((data) => {
-        const list = data ?? []
-        setModels(list)
-        if (list.length > 0) setModel((m) => m || list[0].name)
-      })
-      .catch(() => {})
+    refreshSkills()
+    fetchModels().then((list) => {
+      setModels(list)
+      if (list.length > 0) setModel((m) => m || list[0].name)
+    })
+    fetchSettings().then(setSettings)
+    fetchRagSettings().then(setRagSettings)
   }, [])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
+  function refreshConversations() {
+    return fetchConversations().then((list) => {
+      setConversations(list)
+      return list
+    })
+  }
+
+  function openConversation(id) {
+    setConversationId(id)
+    fetchMessages(id).then(setMessages)
+  }
+
+  function startNewChat() {
+    setConversationId(null)
+    setMessages([])
+  }
+
+  async function confirmDeleteConversation() {
+    const id = conversationToDelete
+    setConversationToDelete(null)
+    if (id == null) return
+    try {
+      await deleteConversation(id)
+      if (String(conversationId) === String(id)) startNewChat()
+      const list = await refreshConversations()
+      if (String(conversationId) === String(id) && list.length > 0) openConversation(list[0].id)
+    } catch {
+      // ignore
+    }
+  }
+
   function refreshDocuments() {
-    fetch('/api/documents')
-      .then((r) => r.json())
-      .then((data) => setDocuments(data ?? []))
-      .catch(() => {})
+    fetchDocuments().then(setDocuments)
+  }
+
+  function refreshSkills() {
+    fetchSkills().then(setSkills)
   }
 
   async function sendMessage(e) {
@@ -49,75 +123,145 @@ export default function App() {
     setMessages((prev) => [...prev, { role: 'user', content: text }, { role: 'assistant', content: '', sources: [] }])
 
     try {
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, model }),
-      })
-      if (!res.ok || !res.body) throw new Error(await res.text())
-
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-
-      for (;;) {
-        const { value, done } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-
-        const events = buffer.split('\n\n')
-        buffer = events.pop() ?? ''
-
-        for (const event of events) {
-          const lines = event.split('\n')
-          const eventLine = lines.find((l) => l.startsWith('event:'))
-          const dataLine = lines.find((l) => l.startsWith('data:'))
-          if (!dataLine) continue
-          const eventType = eventLine ? eventLine.slice(6).trim() : 'message'
-          const payload = JSON.parse(dataLine.slice(5).trim())
-
-          if (eventType === 'sources' && payload.sources) {
+      await streamChat(
+        { message: text, model, skillId, conversationId },
+        {
+          onConversation: (id) => {
+            setConversationId(id)
+            refreshConversations()
+          },
+          onSources: (sources) => {
             setMessages((prev) => {
               const next = [...prev]
-              next[next.length - 1] = { ...next[next.length - 1], sources: payload.sources }
+              next[next.length - 1] = { ...next[next.length - 1], sources }
               return next
             })
-          } else if (payload.token) {
+          },
+          onToken: (token) => {
             setMessages((prev) => {
               const next = [...prev]
               next[next.length - 1] = {
                 ...next[next.length - 1],
-                content: next[next.length - 1].content + payload.token,
+                content: next[next.length - 1].content + token,
               }
               return next
             })
-          }
+          },
         }
-      }
+      )
     } catch (err) {
       setMessages((prev) => [...prev, { role: 'assistant', content: `Error: ${err.message}` }])
     } finally {
       setStreaming(false)
+      refreshConversations()
+    }
+  }
+
+  async function indexContent(filename, content) {
+    setDocStatus(`Indexing ${filename}…`)
+    try {
+      const res = await indexDocument(filename, content)
+      if (!res.ok) throw new Error(await res.text())
+      const data = await res.json()
+      setDocStatus(`Indexed ${data.chunks} chunk(s) from ${filename}.`)
+      refreshDocuments()
+    } catch (err) {
+      setDocStatus(`Error indexing ${filename}: ${err.message}`)
+    }
+  }
+
+  async function indexFile(file, label) {
+    setDocStatus(`Uploading ${label}…`)
+    try {
+      const res = await uploadFile(file)
+      if (!res.ok) throw new Error(await res.text())
+      const data = await res.json()
+      setDocStatus(`Indexed ${data.chunks} chunk(s) from ${label}.`)
+      refreshDocuments()
+    } catch (err) {
+      setDocStatus(`Error indexing ${label}: ${err.message}`)
     }
   }
 
   async function uploadDocument(e) {
     e.preventDefault()
     if (!docText.trim()) return
-    setDocStatus('Uploading…')
+    await indexContent('pasted-text.txt', docText)
+    setDocText('')
+  }
+
+  // Shared by both the flat file picker and the folder picker: skips
+  // unsupported extensions and indexes everything else one at a time
+  // (sequential, so the status line stays readable and we don't flood
+  // the embedding backend with concurrent requests).
+  async function indexFileList(files, { relativeLabel } = {}) {
+    for (const file of files) {
+      if (!UPLOAD_FILE_PATTERN.test(file.name)) {
+        setDocStatus(`Skipped ${file.name}: unsupported file type.`)
+        continue
+      }
+      const label = relativeLabel ? file.webkitRelativePath || file.name : file.name
+      await indexFile(file, label)
+    }
+  }
+
+  async function handleFilePicked(e) {
+    const files = Array.from(e.target.files ?? [])
+    e.target.value = '' // allow re-selecting the same file later
+    await indexFileList(files)
+  }
+
+  async function handleFolderPicked(e) {
+    const files = Array.from(e.target.files ?? [])
+    e.target.value = ''
+    await indexFileList(files, { relativeLabel: true })
+  }
+
+  async function handleClearKnowledgeBase() {
     try {
-      const res = await fetch('/api/documents', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename: 'pasted-text.txt', content: docText }),
-      })
-      if (!res.ok) throw new Error(await res.text())
-      const data = await res.json()
-      setDocStatus(`Indexed ${data.chunks} chunk(s).`)
-      setDocText('')
+      await clearKnowledgeBase()
+      setDocStatus('Knowledge base cleared.')
       refreshDocuments()
     } catch (err) {
-      setDocStatus(`Error: ${err.message}`)
+      setDocStatus(`Error clearing knowledge base: ${err.message}`)
+    }
+  }
+
+  async function handleClearConversations() {
+    await clearConversations()
+    await refreshConversations()
+    startNewChat()
+  }
+
+  async function handleSaveRagSettings(next) {
+    const res = await saveRagSettings(next)
+    if (!res.ok) throw new Error(await res.text())
+    const saved = await res.json()
+    setRagSettings(saved)
+  }
+
+  async function createSkill(e) {
+    e.preventDefault()
+    if (!skillName.trim() || !skillPrompt.trim()) return
+    try {
+      const res = await apiCreateSkill(skillName, skillPrompt)
+      if (!res.ok) throw new Error(await res.text())
+      setSkillName('')
+      setSkillPrompt('')
+      setSkillFormOpen(false)
+      refreshSkills()
+    } catch {
+      // Best-effort: leave the form open with the user's input intact.
+    }
+  }
+
+  async function deleteSkill(id) {
+    try {
+      await deleteSkillById(id)
+      if (String(skillId) === String(id)) setSkillId('')
+      refreshSkills()
+    } catch {
+      // ignore
     }
   }
 
@@ -130,86 +274,88 @@ export default function App() {
           <span className="dot green" />
         </div>
         <span className="titlebar-title">fastllm</span>
+        <div className="titlebar-actions">
+          <button
+            type="button"
+            className="titlebar-btn"
+            title="Settings"
+            onClick={() => setSettingsOpen(true)}
+          >
+            ⚙
+          </button>
+        </div>
       </div>
 
       <div className="body">
         <aside className="sidebar">
-          <section className="panel">
-            <h2>Model</h2>
-            <select
-              className="model-select"
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              disabled={models.length === 0}
-            >
-              {models.length === 0 && <option>Default</option>}
-              {models.map((m) => (
-                <option key={m.name} value={m.name}>
-                  {m.name}
-                </option>
-              ))}
-            </select>
-          </section>
+          <ConversationList
+            conversations={conversations}
+            conversationId={conversationId}
+            onNewChat={startNewChat}
+            onOpen={openConversation}
+            onRequestDelete={setConversationToDelete}
+          />
 
-          <section className="panel">
-            <h2>Knowledge base</h2>
-            <form onSubmit={uploadDocument}>
-              <textarea
-                placeholder="Paste text to index for retrieval…"
-                value={docText}
-                onChange={(e) => setDocText(e.target.value)}
-                rows={7}
-              />
-              <button type="submit" className="btn-primary">Index text</button>
-            </form>
-            {docStatus && <p className="status">{docStatus}</p>}
+          <ModelPicker models={models} model={model} onChange={setModel} />
 
-            <ul className="doc-list">
-              {documents.length === 0 && <li className="doc-empty">Nothing indexed yet</li>}
-              {documents.map((d) => (
-                <li key={d.id} className="doc-item">
-                  <span className="doc-name">{d.filename}</span>
-                  <span className="doc-count">{d.chunk_count} chunk{d.chunk_count === 1 ? '' : 's'}</span>
-                </li>
-              ))}
-            </ul>
-          </section>
+          <SkillPanel
+            skills={skills}
+            skillId={skillId}
+            onSkillIdChange={setSkillId}
+            onDeleteSkill={deleteSkill}
+            skillFormOpen={skillFormOpen}
+            onOpenForm={() => setSkillFormOpen(true)}
+            onCloseForm={() => setSkillFormOpen(false)}
+            skillName={skillName}
+            onSkillNameChange={setSkillName}
+            skillPrompt={skillPrompt}
+            onSkillPromptChange={setSkillPrompt}
+            onCreateSkill={createSkill}
+          />
+
+          <KnowledgeBasePanel
+            docText={docText}
+            onDocTextChange={setDocText}
+            onUploadDocument={uploadDocument}
+            fileInputRef={fileInputRef}
+            onFilePicked={handleFilePicked}
+            folderInputRef={folderInputRef}
+            onFolderPicked={handleFolderPicked}
+            docStatus={docStatus}
+            documents={documents}
+          />
         </aside>
 
-        <main className="chat">
-          <div className="messages">
-            {messages.map((m, i) => (
-              <div key={i} className={`message ${m.role}`}>
-                <span className="role">{m.role}</span>
-                <p>{m.content}</p>
-                {m.sources && m.sources.length > 0 && (
-                  <details className="sources">
-                    <summary>{m.sources.length} source{m.sources.length === 1 ? '' : 's'}</summary>
-                    <ul>
-                      {m.sources.map((s, si) => (
-                        <li key={si}>{s.content}</li>
-                      ))}
-                    </ul>
-                  </details>
-                )}
-              </div>
-            ))}
-            <div ref={bottomRef} />
-          </div>
-
-          <form className="composer" onSubmit={sendMessage}>
-            <input
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder="Ask something…"
-              disabled={streaming}
-            />
-            <button type="submit" className="btn-primary" disabled={streaming || !input.trim()}>
-              {streaming ? 'Sending…' : 'Send'}
-            </button>
-          </form>
-        </main>
+        <ChatPanel
+          messages={messages}
+          bottomRef={bottomRef}
+          input={input}
+          onInputChange={setInput}
+          streaming={streaming}
+          onSendMessage={sendMessage}
+        />
       </div>
+
+      {conversationToDelete != null && (
+        <DeleteConversationModal
+          title={conversations.find((c) => c.id === conversationToDelete)?.title ?? 'this conversation'}
+          onCancel={() => setConversationToDelete(null)}
+          onConfirm={confirmDeleteConversation}
+        />
+      )}
+
+      {settingsOpen && (
+        <SettingsModal
+          theme={theme}
+          onThemeChange={setTheme}
+          settings={settings}
+          ragSettings={ragSettings}
+          onSaveRagSettings={handleSaveRagSettings}
+          onClearKnowledgeBase={handleClearKnowledgeBase}
+          onClearConversations={handleClearConversations}
+          onClose={() => setSettingsOpen(false)}
+        />
+      )}
     </div>
   )
 }
