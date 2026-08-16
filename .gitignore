@@ -1,4 +1,5 @@
 fastllm.exe
+fastllm.exe~
 fastllm.db
 fastllm.log
 web/node_modules/
