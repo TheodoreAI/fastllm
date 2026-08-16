@@ -6,6 +6,8 @@ import SkillPanel from './components/SkillPanel'
 import KnowledgeBasePanel from './components/KnowledgeBasePanel'
 import ChatPanel from './components/ChatPanel'
 import DeleteConversationModal from './components/DeleteConversationModal'
+import SettingsModal from './components/SettingsModal'
+import { useTheme } from './useTheme'
 import {
   fetchConversations,
   fetchMessages,
@@ -13,6 +15,7 @@ import {
   fetchDocuments,
   fetchSkills,
   fetchModels,
+  fetchSettings,
   createSkill as apiCreateSkill,
   deleteSkillById,
   indexDocument,
@@ -40,6 +43,9 @@ export default function App() {
   const [conversations, setConversations] = useState([])
   const [conversationId, setConversationId] = useState(null)
   const [conversationToDelete, setConversationToDelete] = useState(null)
+  const [settings, setSettings] = useState(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [theme, setTheme] = useTheme()
   const bottomRef = useRef(null)
   const fileInputRef = useRef(null)
 
@@ -53,6 +59,7 @@ export default function App() {
       setModels(list)
       if (list.length > 0) setModel((m) => m || list[0].name)
     })
+    fetchSettings().then(setSettings)
   }, [])
 
   useEffect(() => {
@@ -210,6 +217,16 @@ export default function App() {
           <span className="dot green" />
         </div>
         <span className="titlebar-title">fastllm</span>
+        <div className="titlebar-actions">
+          <button
+            type="button"
+            className="titlebar-btn"
+            title="Settings"
+            onClick={() => setSettingsOpen(true)}
+          >
+            ⚙
+          </button>
+        </div>
       </div>
 
       <div className="body">
@@ -265,6 +282,15 @@ export default function App() {
           title={conversations.find((c) => c.id === conversationToDelete)?.title ?? 'this conversation'}
           onCancel={() => setConversationToDelete(null)}
           onConfirm={confirmDeleteConversation}
+        />
+      )}
+
+      {settingsOpen && (
+        <SettingsModal
+          theme={theme}
+          onThemeChange={setTheme}
+          settings={settings}
+          onClose={() => setSettingsOpen(false)}
         />
       )}
     </div>

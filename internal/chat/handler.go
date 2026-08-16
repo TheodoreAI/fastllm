@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os/user"
 	"strconv"
 	"strings"
 
@@ -195,6 +196,35 @@ func (h *Handler) ListModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, models)
+}
+
+type settingsResponse struct {
+	Username   string `json:"username"`
+	ChatModel  string `json:"chat_model"`
+	EmbedModel string `json:"embed_model"`
+	LLMBaseURL string `json:"llm_base_url"`
+}
+
+// Settings returns read-only info about the current machine/environment
+// for display in the app's settings page: the OS account name and the
+// LLM backend configuration the server was started with.
+func (h *Handler) Settings(w http.ResponseWriter, r *http.Request) {
+	username := "unknown"
+	if u, err := user.Current(); err == nil {
+		name := u.Username
+		// Windows usernames come back as "DOMAIN\\user" or "MACHINE\\user" —
+		// keep just the account name for display.
+		if idx := strings.LastIndexAny(name, `\/`); idx != -1 {
+			name = name[idx+1:]
+		}
+		username = name
+	}
+	writeJSON(w, settingsResponse{
+		Username:   username,
+		ChatModel:  h.LLM.ChatModel,
+		EmbedModel: h.LLM.EmbedModel,
+		LLMBaseURL: h.LLM.BaseURL,
+	})
 }
 
 // ListDocuments returns every indexed document with its chunk count.

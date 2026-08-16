@@ -37,6 +37,12 @@ export function fetchModels() {
     .catch(() => [])
 }
 
+export function fetchSettings() {
+  return fetch('/api/settings')
+    .then((r) => r.json())
+    .catch(() => null)
+}
+
 export function createSkill(name, prompt) {
   return fetch('/api/skills', {
     method: 'POST',

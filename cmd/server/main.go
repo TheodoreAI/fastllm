@@ -54,6 +54,7 @@ func main() {
 	mux.HandleFunc("POST /api/documents", handler.UploadDocument)
 	mux.HandleFunc("GET /api/documents", handler.ListDocuments)
 	mux.HandleFunc("GET /api/models", handler.ListModels)
+	mux.HandleFunc("GET /api/settings", handler.Settings)
 	mux.HandleFunc("GET /api/skills", handler.ListSkills)
 	mux.HandleFunc("POST /api/skills", handler.CreateSkill)
 	mux.HandleFunc("DELETE /api/skills/{id}", handler.DeleteSkill)
