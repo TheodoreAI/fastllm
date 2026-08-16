@@ -99,6 +99,10 @@ export function fetchRagSettings() {
     .catch(() => null)
 }
 
+export function quitServer() {
+  return fetch('/api/quit', { method: 'POST' })
+}
+
 export function saveRagSettings(settings) {
   return fetch('/api/settings/rag', {
     method: 'PUT',

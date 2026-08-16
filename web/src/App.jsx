@@ -27,6 +27,7 @@ import {
   indexDocument,
   uploadFile,
   streamChat,
+  quitServer,
 } from './api'
 
 // Files we accept for upload: plain-text-like formats (indexed as-is,
@@ -58,6 +59,9 @@ export default function App() {
   const [conversationError, setConversationError] = useState('')
   const [settings, setSettings] = useState(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [quitConfirmOpen, setQuitConfirmOpen] = useState(false)
+  const [quitting, setQuitting] = useState(false)
+  const [serverStopped, setServerStopped] = useState(false)
   const [ragSettings, setRagSettings] = useState(null)
   const [theme, setTheme] = useTheme()
   const [sectionOrder, moveSection] = useSectionOrder(DEFAULT_SECTION_ORDER)
@@ -297,6 +301,23 @@ export default function App() {
     }
   }
 
+  async function confirmQuit() {
+    setQuitting(true)
+    try {
+      await quitServer()
+    } catch {
+      // The server closing its own connection to respond can itself look
+      // like a fetch error — that's still a successful quit, not a failure.
+    }
+    // window.close() is a no-op on tabs the user navigated to directly
+    // (as opposed to ones opened via script) — most browsers silently
+    // ignore it. Fall back to an in-page "stopped" state so the tab
+    // doesn't sit there looking alive against a server that's gone.
+    window.close()
+    setQuitConfirmOpen(false)
+    setServerStopped(true)
+  }
+
   async function confirmDeleteSkill() {
     const id = skillToDelete
     setSkillToDelete(null)
@@ -310,6 +331,25 @@ export default function App() {
     } catch (err) {
       setSkillError(`Couldn't delete this skill: ${err.message}`)
     }
+  }
+
+  if (serverStopped) {
+    return (
+      <div className="app">
+        <div className="titlebar">
+          <div className="traffic-lights">
+            <span className="dot red" />
+            <span className="dot yellow" />
+            <span className="dot green" />
+          </div>
+          <span className="titlebar-title">fastllm</span>
+        </div>
+        <div className="stopped-state">
+          <p className="stopped-title">fastllm has stopped.</p>
+          <p className="stopped-hint">You can close this tab, or relaunch it from the Desktop shortcut.</p>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -329,6 +369,14 @@ export default function App() {
             onClick={() => setSettingsOpen(true)}
           >
             ⚙
+          </button>
+          <button
+            type="button"
+            className="titlebar-btn"
+            title="Quit fastllm"
+            onClick={() => setQuitConfirmOpen(true)}
+          >
+            ⏻
           </button>
         </div>
       </div>
@@ -417,6 +465,16 @@ export default function App() {
           confirmLabel="Delete"
           onCancel={() => setSkillToDelete(null)}
           onConfirm={confirmDeleteSkill}
+        />
+      )}
+
+      {quitConfirmOpen && (
+        <ConfirmDeleteModal
+          heading="Quit fastllm?"
+          description="This stops the local server. Any open browser tabs will stop working until you relaunch it from the Desktop shortcut."
+          confirmLabel={quitting ? 'Quitting…' : 'Quit'}
+          onCancel={() => setQuitConfirmOpen(false)}
+          onConfirm={confirmQuit}
         />
       )}
 

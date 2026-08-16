@@ -865,6 +865,30 @@ body {
   background-clip: padding-box;
 }
 
+/* ---------- stopped state ---------- */
+
+.stopped-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--text-dim);
+}
+
+.stopped-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+}
+
+.stopped-hint {
+  font-size: 13px;
+  margin: 0;
+}
+
 /* ---------- titlebar actions / settings ---------- */
 
 .titlebar-actions {
