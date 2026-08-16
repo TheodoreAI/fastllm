@@ -30,6 +30,8 @@ import {
   uploadFile,
   streamChat,
   quitServer,
+  approveWrite,
+  rejectWrite,
 } from './api'
 
 // Files we accept for upload: plain-text-like formats (indexed as-is,
@@ -153,7 +155,7 @@ export default function App() {
 
     setInput('')
     setStreaming(true)
-    setMessages((prev) => [...prev, { role: 'user', content: text }, { role: 'assistant', content: '', sources: [], reasoning: '', toolCalls: [] }])
+    setMessages((prev) => [...prev, { role: 'user', content: text }, { role: 'assistant', content: '', sources: [], reasoning: '', toolCalls: [], pendingWrites: [] }])
 
     try {
       await streamChat(
@@ -197,6 +199,17 @@ export default function App() {
               next[next.length - 1] = {
                 ...last,
                 toolCalls: [...(last.toolCalls || []), call],
+              }
+              return next
+            })
+          },
+          onPendingWrite: (write) => {
+            setMessages((prev) => {
+              const next = [...prev]
+              const last = next[next.length - 1]
+              next[next.length - 1] = {
+                ...last,
+                pendingWrites: [...(last.pendingWrites || []), { ...write, status: 'pending' }],
               }
               return next
             })
@@ -358,6 +371,38 @@ export default function App() {
     }
   }
 
+  function updatePendingWrite(id, patch) {
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.pendingWrites?.some((w) => w.id === id)
+          ? { ...m, pendingWrites: m.pendingWrites.map((w) => (w.id === id ? { ...w, ...patch } : w)) }
+          : m
+      )
+    )
+  }
+
+  async function handleApproveWrite(id) {
+    updatePendingWrite(id, { status: 'applying' })
+    try {
+      const res = await approveWrite(id)
+      if (!res.ok) throw new Error(await res.text())
+      updatePendingWrite(id, { status: 'approved' })
+    } catch (err) {
+      updatePendingWrite(id, { status: 'error', error: err.message })
+    }
+  }
+
+  async function handleRejectWrite(id) {
+    updatePendingWrite(id, { status: 'applying' })
+    try {
+      const res = await rejectWrite(id)
+      if (!res.ok) throw new Error(await res.text())
+      updatePendingWrite(id, { status: 'rejected' })
+    } catch (err) {
+      updatePendingWrite(id, { status: 'error', error: err.message })
+    }
+  }
+
   if (serverStopped) {
     return (
       <div className="app">
@@ -470,6 +515,8 @@ export default function App() {
           streaming={streaming}
           onSendMessage={sendMessage}
           userDisplayName={settings?.username}
+          onApproveWrite={handleApproveWrite}
+          onRejectWrite={handleRejectWrite}
         />
       </div>
 

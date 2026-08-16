@@ -33,7 +33,8 @@ func main() {
 	chatModel := getenv("LLM_CHAT_MODEL", "llama3.1")
 	embedModel := getenv("LLM_EMBED_MODEL", "nomic-embed-text")
 	addr := getenv("FASTLLM_ADDR", ":8080")
-	filesRoot := getenv("FASTLLM_FILES_ROOT", "") // empty = file-read tool disabled
+	filesRoot := getenv("FASTLLM_FILES_ROOT", "")       // empty = file-read tool disabled
+	filesWrite := getenv("FASTLLM_FILES_WRITE", "") != "" // also requires FASTLLM_FILES_ROOT; every write needs manual approval regardless
 
 	db, err := store.Open(dbPath)
 	if err != nil {
@@ -50,9 +51,12 @@ func main() {
 	log.Printf("loaded %d chunks into vector store", len(chunks))
 
 	llmClient := llm.New(baseURL, apiKey, chatModel, embedModel)
-	fileReader := files.New(filesRoot)
+	fileReader := files.New(filesRoot, filesWrite)
 	if fileReader.Enabled() {
 		log.Printf("file-read tool enabled, sandboxed to %s", fileReader.Root)
+	}
+	if fileReader.WritesEnabled() {
+		log.Printf("file-write tool enabled (manual approval required for every write)")
 	}
 	handler := chat.New(db, llmClient, vecStore, fileReader)
 
@@ -73,6 +77,8 @@ func main() {
 	mux.HandleFunc("DELETE /api/skills/{id}", handler.DeleteSkill)
 	mux.HandleFunc("GET /api/conversations", handler.ListConversations)
 	mux.HandleFunc("DELETE /api/conversations/{id}", handler.DeleteConversation)
+	mux.HandleFunc("POST /api/writes/{id}/approve", handler.ApproveWrite)
+	mux.HandleFunc("POST /api/writes/{id}/reject", handler.RejectWrite)
 
 	server := &http.Server{Addr: addr, Handler: mux}
 	mux.HandleFunc("POST /api/quit", quitHandler(server))

@@ -4,7 +4,9 @@ package chat
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +14,7 @@ import (
 	"os/user"
 	"strconv"
 	"strings"
+	"sync"
 
 	"fastllm/internal/files"
 	"fastllm/internal/llm"
@@ -45,15 +48,61 @@ var readFileTool = llm.Tool{
 	},
 }
 
+// writeFileTool is the schema advertised to the model when file writes
+// are enabled. Never executed directly from a tool call — every write is
+// held as a PendingWrite until a human approves it via the API.
+var writeFileTool = llm.Tool{
+	Type: "function",
+	Function: llm.ToolFunction{
+		Name:        "write_file",
+		Description: "Propose writing content to a file in the local project directory. This does not write immediately — a human must review and approve the change first. Path is relative to the project root.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]any{
+					"type":        "string",
+					"description": "Path to the file, relative to the project root (e.g. \"notes.md\" or \"src/util.go\"). Created if it doesn't exist.",
+				},
+				"content": map[string]any{
+					"type":        "string",
+					"description": "The full new content of the file.",
+				},
+			},
+			"required": []string{"path", "content"},
+		},
+	},
+}
+
+// PendingWrite is a model-proposed file write awaiting human approval.
+// Held in memory only — never touches disk until Approve is called, and
+// is discarded (not persisted) on server restart.
+type PendingWrite struct {
+	ID              string `json:"id"`
+	Path            string `json:"path"`
+	NewContent      string `json:"new_content"`
+	ExistingContent string `json:"existing_content"`
+	FileExists      bool   `json:"file_exists"`
+	Resolved        bool   `json:"-"`
+}
+
 type Handler struct {
 	DB     *sql.DB
 	LLM    *llm.Client
 	Vector *vector.Store
 	Files  *files.Reader
+
+	writesMu sync.Mutex
+	writes   map[string]*PendingWrite
 }
 
 func New(db *sql.DB, llmClient *llm.Client, vec *vector.Store, fileReader *files.Reader) *Handler {
-	return &Handler{DB: db, LLM: llmClient, Vector: vec, Files: fileReader}
+	return &Handler{DB: db, LLM: llmClient, Vector: vec, Files: fileReader, writes: make(map[string]*PendingWrite)}
+}
+
+func newWriteID() string {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 type chatRequest struct {
@@ -118,10 +167,15 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.Files.Enabled() {
-		fileReads := h.runFileTools(ctx, req.Model, &messages)
-		for _, fr := range fileReads {
+		reads, writes := h.runFileTools(ctx, req.Model, &messages)
+		for _, fr := range reads {
 			payload, _ := json.Marshal(fr)
 			fmt.Fprintf(w, "event: tool_call\ndata: %s\n\n", payload)
+			flusher.Flush()
+		}
+		for _, pw := range writes {
+			payload, _ := json.Marshal(pw)
+			fmt.Fprintf(w, "event: pending_write\ndata: %s\n\n", payload)
 			flusher.Flush()
 		}
 	}
@@ -235,54 +289,133 @@ type fileRead struct {
 }
 
 // runFileTools makes a single non-streaming pre-flight request with the
-// read_file tool declared. If the model requests one or more reads, each
-// is executed against h.Files (sandboxed to its configured root) and the
-// results are appended to *messages as a tool round-trip (the assistant's
-// tool-call message, followed by one tool-result message per call) so the
-// subsequent streamed answer can see file contents. Models without tool
-// support, or that choose not to call the tool, leave messages untouched.
-// Errors reading a file (not found, outside sandbox, etc.) are reported
-// back to the model as the tool result rather than failing the request,
-// so it can tell the user what went wrong.
-func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]llm.Message) []fileRead {
-	reply, err := h.LLM.Chat(ctx, model, *messages, []llm.Tool{readFileTool})
+// read_file (and, if enabled, write_file) tools declared. If the model
+// requests one or more calls, each is resolved and the results are
+// appended to *messages as a tool round-trip (the assistant's tool-call
+// message, followed by one tool-result message per call) so the
+// subsequent streamed answer can see the outcome. Models without tool
+// support, or that choose not to call a tool, leave messages untouched.
+//
+// read_file is executed immediately (read-only, low risk). write_file is
+// never executed here — it's recorded as a PendingWrite awaiting human
+// approval via the /api/writes endpoints, and the model is told exactly
+// that in its tool result, so its final answer can honestly say the
+// change is pending review rather than claiming it already happened.
+func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]llm.Message) ([]fileRead, []*PendingWrite) {
+	tools := []llm.Tool{readFileTool}
+	if h.Files.WritesEnabled() {
+		tools = append(tools, writeFileTool)
+	}
+
+	reply, err := h.LLM.Chat(ctx, model, *messages, tools)
 	if err != nil || len(reply.ToolCalls) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	*messages = append(*messages, reply)
 
 	var reads []fileRead
+	var pending []*PendingWrite
 	for _, call := range reply.ToolCalls {
-		if call.Function.Name != "read_file" {
-			continue
-		}
-		var args struct {
-			Path string `json:"path"`
-		}
-		_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
-
-		var result string
-		fr := fileRead{Path: args.Path}
-		content, truncated, readErr := h.Files.Read(args.Path)
-		if readErr != nil {
-			fr.Error = readErr.Error()
-			result = "Error reading file: " + readErr.Error()
-		} else {
-			fr.Truncated = truncated
-			result = content
-			if truncated {
-				result += "\n\n[truncated]"
+		switch call.Function.Name {
+		case "read_file":
+			var args struct {
+				Path string `json:"path"`
 			}
+			_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+
+			var result string
+			fr := fileRead{Path: args.Path}
+			content, truncated, readErr := h.Files.Read(args.Path)
+			if readErr != nil {
+				fr.Error = readErr.Error()
+				result = "Error reading file: " + readErr.Error()
+			} else {
+				fr.Truncated = truncated
+				result = content
+				if truncated {
+					result += "\n\n[truncated]"
+				}
+			}
+			reads = append(reads, fr)
+			*messages = append(*messages, llm.Message{Role: "tool", ToolCallID: call.ID, Content: result})
+
+		case "write_file":
+			var args struct {
+				Path    string `json:"path"`
+				Content string `json:"content"`
+			}
+			_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+
+			var result string
+			if !h.Files.WritesEnabled() {
+				result = "Error: file writes are not enabled."
+			} else if len(args.Content) > files.MaxWriteBytes {
+				result = fmt.Sprintf("Error: proposed content is too large (%d bytes, max %d).", len(args.Content), files.MaxWriteBytes)
+			} else if _, err := h.Files.ResolveForWrite(args.Path); err != nil {
+				result = "Error: " + err.Error()
+			} else {
+				existing, exists, _ := h.Files.ExistingContent(args.Path)
+				pw := &PendingWrite{
+					ID:              newWriteID(),
+					Path:            args.Path,
+					NewContent:      args.Content,
+					ExistingContent: existing,
+					FileExists:      exists,
+				}
+				h.writesMu.Lock()
+				h.writes[pw.ID] = pw
+				h.writesMu.Unlock()
+				pending = append(pending, pw)
+				result = fmt.Sprintf("Change to %q proposed and awaiting human approval (id: %s). Do not tell the user it has been written yet — it is pending review.", args.Path, pw.ID)
+			}
+			*messages = append(*messages, llm.Message{Role: "tool", ToolCallID: call.ID, Content: result})
 		}
-		reads = append(reads, fr)
-		*messages = append(*messages, llm.Message{
-			Role:       "tool",
-			ToolCallID: call.ID,
-			Content:    result,
-		})
 	}
-	return reads
+	return reads, pending
+}
+
+// takePendingWrite removes and returns a pending write by ID, or nil if
+// it doesn't exist or was already resolved (approve/reject is one-shot).
+func (h *Handler) takePendingWrite(id string) *PendingWrite {
+	h.writesMu.Lock()
+	defer h.writesMu.Unlock()
+	pw, ok := h.writes[id]
+	if !ok || pw.Resolved {
+		return nil
+	}
+	pw.Resolved = true
+	delete(h.writes, id)
+	return pw
+}
+
+// ApproveWrite performs a pending model-proposed file write to disk. This
+// is the only path in the whole file-write feature that actually touches
+// disk — everything upstream (the tool call, runFileTools) only ever
+// stages a PendingWrite in memory.
+func (h *Handler) ApproveWrite(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	pw := h.takePendingWrite(id)
+	if pw == nil {
+		http.Error(w, "no such pending write (already resolved or unknown id)", http.StatusNotFound)
+		return
+	}
+	if err := h.Files.Write(pw.Path, pw.NewContent); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"path": pw.Path, "written": true})
+}
+
+// RejectWrite discards a pending write without touching disk.
+func (h *Handler) RejectWrite(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	pw := h.takePendingWrite(id)
+	if pw == nil {
+		http.Error(w, "no such pending write (already resolved or unknown id)", http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // ListModels returns the chat-capable models available on the LLM backend.
