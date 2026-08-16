@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useEscapeKey } from '../useEscapeKey'
+import { FONT_OPTIONS } from '../useFontFamily'
+import { FONT_SCALE_OPTIONS } from '../useFontScale'
 
 // __APP_VERSION__ / __BUILD_TIME__ are baked in at build time by
 // vite.config.js from package.json + the build clock — see there for why.
@@ -15,6 +17,10 @@ function formatBuildTime(iso) {
 export default function SettingsModal({
   theme,
   onThemeChange,
+  fontFamily,
+  onFontFamilyChange,
+  fontScale,
+  onFontScaleChange,
   settings,
   ragSettings,
   onSaveRagSettings,
@@ -91,6 +97,41 @@ export default function SettingsModal({
               Dark
             </button>
           </div>
+
+          <label className="settings-field">
+            <span>Font</span>
+            <select
+              className="model-select"
+              value={fontFamily}
+              onChange={(e) => onFontFamilyChange(e.target.value)}
+            >
+              {FONT_OPTIONS.map((group) => (
+                <optgroup key={group.group} label={group.group}>
+                  {group.choices.map((choice) => (
+                    <option key={choice.label} value={choice.value}>
+                      {choice.label}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          </label>
+
+          <label className="settings-field">
+            <span>Text size</span>
+            <div className="theme-toggle">
+              {FONT_SCALE_OPTIONS.map((opt) => (
+                <button
+                  key={opt.label}
+                  type="button"
+                  className={`theme-option ${fontScale === opt.value ? 'active' : ''}`}
+                  onClick={() => onFontScaleChange(opt.value)}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </label>
         </div>
 
         <div className="settings-section">

@@ -7,7 +7,11 @@ import KnowledgeBasePanel from './components/KnowledgeBasePanel'
 import ChatPanel from './components/ChatPanel'
 import ConfirmDeleteModal from './components/ConfirmDeleteModal'
 import SettingsModal from './components/SettingsModal'
+import DraggableSection from './components/DraggableSection'
 import { useTheme } from './useTheme'
+import { useFontFamily } from './useFontFamily'
+import { useFontScale } from './useFontScale'
+import { useSectionOrder } from './useSectionOrder'
 import {
   fetchConversations,
   fetchMessages,
@@ -25,11 +29,14 @@ import {
   indexDocument,
   uploadFile,
   streamChat,
+  quitServer,
 } from './api'
 
 // Files we accept for upload: plain-text-like formats (indexed as-is,
 // client never needs to read their bytes) plus PDF (extracted server-side).
 const UPLOAD_FILE_PATTERN = /\.(txt|md|markdown|mdx|json|ya?ml|csv|tsv|log|go|js|jsx|ts|tsx|py|rb|java|c|cc|cpp|h|hpp|rs|sh|sql|html|css|xml|pdf)$/i
+
+const DEFAULT_SECTION_ORDER = ['conversations', 'model', 'skills', 'knowledge']
 
 export default function App() {
   const [messages, setMessages] = useState([])
@@ -54,8 +61,14 @@ export default function App() {
   const [conversationError, setConversationError] = useState('')
   const [settings, setSettings] = useState(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [quitConfirmOpen, setQuitConfirmOpen] = useState(false)
+  const [quitting, setQuitting] = useState(false)
+  const [serverStopped, setServerStopped] = useState(false)
   const [ragSettings, setRagSettings] = useState(null)
   const [theme, setTheme] = useTheme()
+  const [fontFamily, setFontFamily] = useFontFamily()
+  const [fontScale, setFontScale] = useFontScale()
+  const [sectionOrder, moveSection] = useSectionOrder(DEFAULT_SECTION_ORDER)
   const bottomRef = useRef(null)
   const fileInputRef = useRef(null)
   const folderInputRef = useRef(null)
@@ -292,6 +305,23 @@ export default function App() {
     }
   }
 
+  async function confirmQuit() {
+    setQuitting(true)
+    try {
+      await quitServer()
+    } catch {
+      // The server closing its own connection to respond can itself look
+      // like a fetch error — that's still a successful quit, not a failure.
+    }
+    // window.close() is a no-op on tabs the user navigated to directly
+    // (as opposed to ones opened via script) — most browsers silently
+    // ignore it. Fall back to an in-page "stopped" state so the tab
+    // doesn't sit there looking alive against a server that's gone.
+    window.close()
+    setQuitConfirmOpen(false)
+    setServerStopped(true)
+  }
+
   async function confirmDeleteSkill() {
     const id = skillToDelete
     setSkillToDelete(null)
@@ -305,6 +335,25 @@ export default function App() {
     } catch (err) {
       setSkillError(`Couldn't delete this skill: ${err.message}`)
     }
+  }
+
+  if (serverStopped) {
+    return (
+      <div className="app">
+        <div className="titlebar">
+          <div className="traffic-lights">
+            <span className="dot red" />
+            <span className="dot yellow" />
+            <span className="dot green" />
+          </div>
+          <span className="titlebar-title">fastllm</span>
+        </div>
+        <div className="stopped-state">
+          <p className="stopped-title">fastllm has stopped.</p>
+          <p className="stopped-hint">You can close this tab, or relaunch it from the Desktop shortcut.</p>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -325,49 +374,70 @@ export default function App() {
           >
             ⚙
           </button>
+          <button
+            type="button"
+            className="titlebar-btn"
+            title="Quit fastllm"
+            onClick={() => setQuitConfirmOpen(true)}
+          >
+            ⏻
+          </button>
         </div>
       </div>
 
       <div className="body">
         <aside className="sidebar">
-          <ConversationList
-            conversations={conversations}
-            conversationId={conversationId}
-            onNewChat={startNewChat}
-            onOpen={openConversation}
-            onRequestDelete={setConversationToDelete}
-            error={conversationError}
-          />
+          {sectionOrder.map((key, index) => {
+            const section = {
+              conversations: (
+                <ConversationList
+                  conversations={conversations}
+                  conversationId={conversationId}
+                  onNewChat={startNewChat}
+                  onOpen={openConversation}
+                  onRequestDelete={setConversationToDelete}
+                  error={conversationError}
+                />
+              ),
+              model: <ModelPicker models={models} model={model} onChange={setModel} />,
+              skills: (
+                <SkillPanel
+                  skills={skills}
+                  skillId={skillId}
+                  onSkillIdChange={setSkillId}
+                  onRequestDeleteSkill={setSkillToDelete}
+                  skillFormOpen={skillFormOpen}
+                  onOpenForm={() => setSkillFormOpen(true)}
+                  onCloseForm={() => setSkillFormOpen(false)}
+                  skillName={skillName}
+                  onSkillNameChange={setSkillName}
+                  skillPrompt={skillPrompt}
+                  onSkillPromptChange={setSkillPrompt}
+                  onCreateSkill={createSkill}
+                  error={skillError}
+                />
+              ),
+              knowledge: (
+                <KnowledgeBasePanel
+                  docText={docText}
+                  onDocTextChange={setDocText}
+                  onUploadDocument={uploadDocument}
+                  fileInputRef={fileInputRef}
+                  onFilePicked={handleFilePicked}
+                  folderInputRef={folderInputRef}
+                  onFolderPicked={handleFolderPicked}
+                  docStatus={docStatus}
+                  documents={documents}
+                />
+              ),
+            }[key]
 
-          <ModelPicker models={models} model={model} onChange={setModel} />
-
-          <SkillPanel
-            skills={skills}
-            skillId={skillId}
-            onSkillIdChange={setSkillId}
-            onRequestDeleteSkill={setSkillToDelete}
-            skillFormOpen={skillFormOpen}
-            onOpenForm={() => setSkillFormOpen(true)}
-            onCloseForm={() => setSkillFormOpen(false)}
-            skillName={skillName}
-            onSkillNameChange={setSkillName}
-            skillPrompt={skillPrompt}
-            onSkillPromptChange={setSkillPrompt}
-            onCreateSkill={createSkill}
-            error={skillError}
-          />
-
-          <KnowledgeBasePanel
-            docText={docText}
-            onDocTextChange={setDocText}
-            onUploadDocument={uploadDocument}
-            fileInputRef={fileInputRef}
-            onFilePicked={handleFilePicked}
-            folderInputRef={folderInputRef}
-            onFolderPicked={handleFolderPicked}
-            docStatus={docStatus}
-            documents={documents}
-          />
+            return (
+              <DraggableSection key={key} sectionKey={key} index={index} onReorder={moveSection}>
+                {section}
+              </DraggableSection>
+            )
+          })}
         </aside>
 
         <ChatPanel
@@ -402,10 +472,24 @@ export default function App() {
         />
       )}
 
+      {quitConfirmOpen && (
+        <ConfirmDeleteModal
+          heading="Quit fastllm?"
+          description="This stops the local server. Any open browser tabs will stop working until you relaunch it from the Desktop shortcut."
+          confirmLabel={quitting ? 'Quitting…' : 'Quit'}
+          onCancel={() => setQuitConfirmOpen(false)}
+          onConfirm={confirmQuit}
+        />
+      )}
+
       {settingsOpen && (
         <SettingsModal
           theme={theme}
           onThemeChange={setTheme}
+          fontFamily={fontFamily}
+          onFontFamilyChange={setFontFamily}
+          fontScale={fontScale}
+          onFontScaleChange={setFontScale}
           settings={settings}
           ragSettings={ragSettings}
           onSaveRagSettings={handleSaveRagSettings}

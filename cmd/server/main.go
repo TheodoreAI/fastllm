@@ -5,9 +5,11 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"fastllm/internal/chat"
 	"fastllm/internal/llm"
@@ -66,11 +68,32 @@ func main() {
 	mux.HandleFunc("GET /api/conversations", handler.ListConversations)
 	mux.HandleFunc("DELETE /api/conversations/{id}", handler.DeleteConversation)
 
+	server := &http.Server{Addr: addr, Handler: mux}
+	mux.HandleFunc("POST /api/quit", quitHandler(server))
+
 	serveFrontend(mux)
 
 	log.Printf("fastllm listening on %s (llm backend: %s)", addr, baseURL)
-	if err := http.ListenAndServe(addr, mux); err != nil {
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
+	}
+}
+
+// quitHandler lets the frontend request a clean shutdown (used by the
+// titlebar Quit button) — this is a locally-run desktop-style app with no
+// remote exposure, so no auth is needed beyond it already listening on
+// localhost. Responds first, then shuts down from a goroutine so the
+// response actually reaches the browser before the process exits.
+func quitHandler(server *http.Server) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		go func() {
+			time.Sleep(200 * time.Millisecond)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			server.Shutdown(ctx)
+			os.Exit(0)
+		}()
 	}
 }
 
