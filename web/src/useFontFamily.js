@@ -9,36 +9,37 @@ export const FONT_OPTIONS = [
   {
     group: 'System',
     choices: [
-      { label: 'System default', value: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', 'Ubuntu', 'Cantarell', system-ui, sans-serif" },
+      { label: 'System default', value: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Ubuntu, Cantarell, system-ui, sans-serif" },
     ],
   },
   {
     group: 'Sans-serif',
     choices: [
-      { label: 'Helvetica', value: "'Helvetica Neue', Helvetica, Arial, sans-serif" },
-      { label: 'Verdana', value: "Verdana, Geneva, sans-serif" },
-      { label: 'Trebuchet MS', value: "'Trebuchet MS', sans-serif" },
+      { label: 'Helvetica', value: "'Helvetica Neue', Helvetica, Arial, 'Liberation Sans', sans-serif" },
+      { label: 'Verdana', value: "Verdana, Geneva, 'DejaVu Sans', sans-serif" },
+      { label: 'Trebuchet MS', value: "'Trebuchet MS', 'Noto Sans', sans-serif" },
+      { label: 'Ubuntu', value: "Ubuntu, Cantarell, Arial, sans-serif" },
     ],
   },
   {
     group: 'Serif',
     choices: [
-      { label: 'Georgia', value: "Georgia, 'Times New Roman', serif" },
-      { label: 'Times New Roman', value: "'Times New Roman', Times, serif" },
-      { label: 'Iowan / Palatino', value: "'Iowan Old Style', 'Palatino Linotype', Palatino, serif" },
+      { label: 'Georgia', value: "Georgia, 'Noto Serif', 'Liberation Serif', 'Times New Roman', serif" },
+      { label: 'Times New Roman', value: "'Times New Roman', Times, 'Liberation Serif', serif" },
+      { label: 'Iowan / Palatino', value: "'Iowan Old Style', 'Palatino Linotype', Palatino, 'DejaVu Serif', serif" },
     ],
   },
   {
     group: 'Monospace',
     choices: [
-      { label: 'SF Mono', value: "ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, monospace" },
-      { label: 'Courier New', value: "'Courier New', Courier, monospace" },
+      { label: 'SF Mono', value: "ui-monospace, 'SF Mono', Menlo, 'Cascadia Code', Consolas, 'Ubuntu Mono', 'DejaVu Sans Mono', monospace" },
+      { label: 'Courier New', value: "'Courier New', Courier, 'Liberation Mono', monospace" },
     ],
   },
   {
     group: 'Rounded',
     choices: [
-      { label: 'Comic Sans MS', value: "'Comic Sans MS', 'Comic Sans', cursive" },
+      { label: 'Comic Sans MS', value: "'Comic Sans MS', 'Comic Sans', 'Chalkboard SE', cursive" },
     ],
   },
 ]
