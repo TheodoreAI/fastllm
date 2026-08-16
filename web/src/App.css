@@ -240,6 +240,13 @@ body {
   cursor: grabbing;
 }
 
+.panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+}
+
 .panel h2 {
   font-size: 11px;
   font-weight: 600;
@@ -251,7 +258,7 @@ body {
 
 .model-select {
   width: 100%;
-  background: var(--bg-panel);
+  background: color-mix(in srgb, var(--bg-panel), var(--text) 6%);
   color: var(--text);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
@@ -290,7 +297,7 @@ body {
 
 .sidebar textarea {
   width: 100%;
-  background: var(--bg-panel);
+  background: color-mix(in srgb, var(--bg-panel), var(--text) 6%);
   color: var(--text);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
@@ -379,7 +386,7 @@ body {
 
 .skill-name-input {
   width: 100%;
-  background: var(--bg-panel);
+  background: color-mix(in srgb, var(--bg-panel), var(--text) 6%);
   color: var(--text);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
@@ -435,7 +442,7 @@ body {
   gap: 8px;
   padding: 7px 8px;
   border-radius: var(--radius-sm);
-  background: var(--bg-panel);
+  background: color-mix(in srgb, var(--bg-panel), var(--text) 6%);
   font-size: 12.5px;
 }
 
@@ -473,7 +480,7 @@ body {
 }
 
 .conversation-item.active {
-  background: var(--bg-panel);
+  background: color-mix(in srgb, var(--bg-panel), var(--text) 6%);
 }
 
 .conversation-item:hover:not(.active) {
