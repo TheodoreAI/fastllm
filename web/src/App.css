@@ -193,6 +193,53 @@ body {
   gap: 18px;
 }
 
+/* ---------- draggable sidebar sections ---------- */
+
+.draggable-section {
+  position: relative;
+  border-radius: var(--radius-sm);
+  transition: background 0.1s ease;
+}
+
+.draggable-section.is-drag-over {
+  box-shadow: 0 -2px 0 0 var(--accent);
+}
+
+.draggable-section.is-dragging {
+  opacity: 0.4;
+}
+
+.drag-handle {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  color: var(--text-faint);
+  font-size: 12px;
+  cursor: grab;
+  opacity: 0;
+  transition: opacity 0.1s ease, background 0.1s ease, color 0.1s ease;
+  z-index: 2;
+}
+
+.draggable-section:hover .drag-handle {
+  opacity: 1;
+}
+
+.drag-handle:hover {
+  background: rgba(128, 128, 128, 0.18);
+  color: var(--text);
+}
+
+.drag-handle:active {
+  cursor: grabbing;
+}
+
 .panel h2 {
   font-size: 11px;
   font-weight: 600;

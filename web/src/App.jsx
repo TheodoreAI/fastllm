@@ -7,7 +7,9 @@ import KnowledgeBasePanel from './components/KnowledgeBasePanel'
 import ChatPanel from './components/ChatPanel'
 import ConfirmDeleteModal from './components/ConfirmDeleteModal'
 import SettingsModal from './components/SettingsModal'
+import DraggableSection from './components/DraggableSection'
 import { useTheme } from './useTheme'
+import { useSectionOrder } from './useSectionOrder'
 import {
   fetchConversations,
   fetchMessages,
@@ -30,6 +32,8 @@ import {
 // Files we accept for upload: plain-text-like formats (indexed as-is,
 // client never needs to read their bytes) plus PDF (extracted server-side).
 const UPLOAD_FILE_PATTERN = /\.(txt|md|markdown|mdx|json|ya?ml|csv|tsv|log|go|js|jsx|ts|tsx|py|rb|java|c|cc|cpp|h|hpp|rs|sh|sql|html|css|xml|pdf)$/i
+
+const DEFAULT_SECTION_ORDER = ['conversations', 'model', 'skills', 'knowledge']
 
 export default function App() {
   const [messages, setMessages] = useState([])
@@ -56,6 +60,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [ragSettings, setRagSettings] = useState(null)
   const [theme, setTheme] = useTheme()
+  const [sectionOrder, moveSection] = useSectionOrder(DEFAULT_SECTION_ORDER)
   const bottomRef = useRef(null)
   const fileInputRef = useRef(null)
   const folderInputRef = useRef(null)
@@ -330,44 +335,57 @@ export default function App() {
 
       <div className="body">
         <aside className="sidebar">
-          <ConversationList
-            conversations={conversations}
-            conversationId={conversationId}
-            onNewChat={startNewChat}
-            onOpen={openConversation}
-            onRequestDelete={setConversationToDelete}
-            error={conversationError}
-          />
+          {sectionOrder.map((key, index) => {
+            const section = {
+              conversations: (
+                <ConversationList
+                  conversations={conversations}
+                  conversationId={conversationId}
+                  onNewChat={startNewChat}
+                  onOpen={openConversation}
+                  onRequestDelete={setConversationToDelete}
+                  error={conversationError}
+                />
+              ),
+              model: <ModelPicker models={models} model={model} onChange={setModel} />,
+              skills: (
+                <SkillPanel
+                  skills={skills}
+                  skillId={skillId}
+                  onSkillIdChange={setSkillId}
+                  onRequestDeleteSkill={setSkillToDelete}
+                  skillFormOpen={skillFormOpen}
+                  onOpenForm={() => setSkillFormOpen(true)}
+                  onCloseForm={() => setSkillFormOpen(false)}
+                  skillName={skillName}
+                  onSkillNameChange={setSkillName}
+                  skillPrompt={skillPrompt}
+                  onSkillPromptChange={setSkillPrompt}
+                  onCreateSkill={createSkill}
+                  error={skillError}
+                />
+              ),
+              knowledge: (
+                <KnowledgeBasePanel
+                  docText={docText}
+                  onDocTextChange={setDocText}
+                  onUploadDocument={uploadDocument}
+                  fileInputRef={fileInputRef}
+                  onFilePicked={handleFilePicked}
+                  folderInputRef={folderInputRef}
+                  onFolderPicked={handleFolderPicked}
+                  docStatus={docStatus}
+                  documents={documents}
+                />
+              ),
+            }[key]
 
-          <ModelPicker models={models} model={model} onChange={setModel} />
-
-          <SkillPanel
-            skills={skills}
-            skillId={skillId}
-            onSkillIdChange={setSkillId}
-            onRequestDeleteSkill={setSkillToDelete}
-            skillFormOpen={skillFormOpen}
-            onOpenForm={() => setSkillFormOpen(true)}
-            onCloseForm={() => setSkillFormOpen(false)}
-            skillName={skillName}
-            onSkillNameChange={setSkillName}
-            skillPrompt={skillPrompt}
-            onSkillPromptChange={setSkillPrompt}
-            onCreateSkill={createSkill}
-            error={skillError}
-          />
-
-          <KnowledgeBasePanel
-            docText={docText}
-            onDocTextChange={setDocText}
-            onUploadDocument={uploadDocument}
-            fileInputRef={fileInputRef}
-            onFilePicked={handleFilePicked}
-            folderInputRef={folderInputRef}
-            onFolderPicked={handleFolderPicked}
-            docStatus={docStatus}
-            documents={documents}
-          />
+            return (
+              <DraggableSection key={key} sectionKey={key} index={index} onReorder={moveSection}>
+                {section}
+              </DraggableSection>
+            )
+          })}
         </aside>
 
         <ChatPanel
