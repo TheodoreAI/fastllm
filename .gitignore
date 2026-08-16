@@ -1,0 +1,4 @@
+fastllm.exe
+fastllm.db
+web/node_modules/
+web/dist/
