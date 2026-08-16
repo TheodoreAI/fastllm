@@ -792,6 +792,54 @@ body {
   font-size: 0.7188rem;
 }
 
+.reasoning {
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border-left: 2px solid var(--border-strong);
+  font-size: 0.7188rem;
+}
+
+.reasoning summary {
+  cursor: pointer;
+  color: var(--text-faint);
+  outline: none;
+  font-style: italic;
+}
+
+.reasoning p {
+  margin: 6px 0 0;
+  color: var(--text-dim);
+  font-style: italic;
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+
+.tool-calls {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.7188rem;
+  color: var(--text-dim);
+}
+
+.tool-calls li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tool-calls li.is-error {
+  color: var(--danger);
+}
+
+.tool-calls code {
+  font-family: ui-monospace, 'SF Mono', Consolas, 'Cascadia Code', monospace;
+  font-size: 0.95em;
+}
+
 .sources summary {
   cursor: pointer;
   color: rgba(255, 255, 255, 0.55);

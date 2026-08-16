@@ -15,8 +15,33 @@ import (
 )
 
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+}
+
+// Tool describes one function the model may call, in OpenAI's tool schema.
+type Tool struct {
+	Type     string       `json:"type"`
+	Function ToolFunction `json:"function"`
+}
+
+type ToolFunction struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Parameters  any    `json:"parameters"`
+}
+
+// ToolCall is one function-call request from the model, as returned in a
+// non-streaming completion's message.tool_calls.
+type ToolCall struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
 }
 
 type Client struct {
@@ -41,6 +66,7 @@ type chatRequest struct {
 	Model    string    `json:"model"`
 	Messages []Message `json:"messages"`
 	Stream   bool      `json:"stream"`
+	Tools    []Tool    `json:"tools,omitempty"`
 }
 
 // Model describes one chat-capable model available on the backend.
@@ -107,15 +133,20 @@ func containsString(list []string, s string) bool {
 type chatStreamChunk struct {
 	Choices []struct {
 		Delta struct {
-			Content string `json:"content"`
+			Content   string `json:"content"`
+			Reasoning string `json:"reasoning"`
 		} `json:"delta"`
 	} `json:"choices"`
 }
 
 // StreamChat sends messages to the chat completion endpoint and calls
-// onToken for every incremental piece of text as it streams in. If model
-// is empty, c.ChatModel is used.
-func (c *Client) StreamChat(ctx context.Context, model string, messages []Message, onToken func(string)) error {
+// onToken for every incremental piece of answer text, and onReasoning (if
+// non-nil) for every incremental piece of a thinking-capable model's
+// reasoning trace, as they stream in. Ollama's OpenAI-compatible endpoint
+// sends reasoning as a "reasoning" delta field alongside "content", ahead
+// of and separate from the actual answer; models without thinking support
+// simply never populate it. If model is empty, c.ChatModel is used.
+func (c *Client) StreamChat(ctx context.Context, model string, messages []Message, onToken func(string), onReasoning func(string)) error {
 	if model == "" {
 		model = c.ChatModel
 	}
@@ -158,11 +189,67 @@ func (c *Client) StreamChat(ctx context.Context, model string, messages []Messag
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			continue // skip malformed/keepalive lines
 		}
-		if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
-			onToken(chunk.Choices[0].Delta.Content)
+		if len(chunk.Choices) > 0 {
+			if chunk.Choices[0].Delta.Content != "" {
+				onToken(chunk.Choices[0].Delta.Content)
+			}
+			if chunk.Choices[0].Delta.Reasoning != "" && onReasoning != nil {
+				onReasoning(chunk.Choices[0].Delta.Reasoning)
+			}
 		}
 	}
 	return scanner.Err()
+}
+
+type chatResponse struct {
+	Choices []struct {
+		Message Message `json:"message"`
+	} `json:"choices"`
+}
+
+// Chat sends a single non-streaming completion request with the given
+// tools declared, and returns the model's reply message — which may
+// contain ToolCalls instead of (or in addition to) Content if the model
+// wants to invoke a tool. Used as a pre-flight step before StreamChat so
+// tool calls (which arrive as accumulated JSON, awkward to stream) are
+// resolved before the user-facing streamed answer begins. If model is
+// empty, c.ChatModel is used.
+func (c *Client) Chat(ctx context.Context, model string, messages []Message, tools []Tool) (Message, error) {
+	if model == "" {
+		model = c.ChatModel
+	}
+	body, err := json.Marshal(chatRequest{Model: model, Messages: messages, Stream: false, Tools: tools})
+	if err != nil {
+		return Message{}, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return Message{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return Message{}, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return Message{}, fmt.Errorf("llm: chat completion failed: %s", resp.Status)
+	}
+
+	var cr chatResponse
+	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
+		return Message{}, err
+	}
+	if len(cr.Choices) == 0 {
+		return Message{}, fmt.Errorf("llm: empty response")
+	}
+	return cr.Choices[0].Message, nil
 }
 
 type embedRequest struct {
