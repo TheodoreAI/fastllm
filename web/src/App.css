@@ -792,6 +792,28 @@ body {
   font-size: 0.7188rem;
 }
 
+.reasoning {
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border-left: 2px solid var(--border-strong);
+  font-size: 0.7188rem;
+}
+
+.reasoning summary {
+  cursor: pointer;
+  color: var(--text-faint);
+  outline: none;
+  font-style: italic;
+}
+
+.reasoning p {
+  margin: 6px 0 0;
+  color: var(--text-dim);
+  font-style: italic;
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+
 .sources summary {
   cursor: pointer;
   color: rgba(255, 255, 255, 0.55);

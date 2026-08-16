@@ -17,6 +17,12 @@ export default function ChatPanel({
         {!messagesLoading && messages.map((m, i) => (
           <div key={i} className={`message ${m.role} ${m.isError ? 'is-error' : ''}`}>
             <span className="role">{m.role === 'user' ? userDisplayName || 'user' : m.role}</span>
+            {m.reasoning && (
+              <details className="reasoning" open={!m.content}>
+                <summary>{m.content ? 'Thinking' : 'Thinking…'}</summary>
+                <p>{m.reasoning}</p>
+              </details>
+            )}
             <MessageContent content={m.content} />
             {m.sources && m.sources.length > 0 && (
               <details className="sources">

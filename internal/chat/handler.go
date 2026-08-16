@@ -101,6 +101,10 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		payload, _ := json.Marshal(map[string]string{"token": token})
 		fmt.Fprintf(w, "data: %s\n\n", payload)
 		flusher.Flush()
+	}, func(reasoning string) {
+		payload, _ := json.Marshal(map[string]string{"reasoning": reasoning})
+		fmt.Fprintf(w, "event: reasoning\ndata: %s\n\n", payload)
+		flusher.Flush()
 	})
 	if err != nil {
 		payload, _ := json.Marshal(map[string]string{"error": err.Error()})

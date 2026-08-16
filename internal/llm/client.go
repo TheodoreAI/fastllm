@@ -107,15 +107,20 @@ func containsString(list []string, s string) bool {
 type chatStreamChunk struct {
 	Choices []struct {
 		Delta struct {
-			Content string `json:"content"`
+			Content   string `json:"content"`
+			Reasoning string `json:"reasoning"`
 		} `json:"delta"`
 	} `json:"choices"`
 }
 
 // StreamChat sends messages to the chat completion endpoint and calls
-// onToken for every incremental piece of text as it streams in. If model
-// is empty, c.ChatModel is used.
-func (c *Client) StreamChat(ctx context.Context, model string, messages []Message, onToken func(string)) error {
+// onToken for every incremental piece of answer text, and onReasoning (if
+// non-nil) for every incremental piece of a thinking-capable model's
+// reasoning trace, as they stream in. Ollama's OpenAI-compatible endpoint
+// sends reasoning as a "reasoning" delta field alongside "content", ahead
+// of and separate from the actual answer; models without thinking support
+// simply never populate it. If model is empty, c.ChatModel is used.
+func (c *Client) StreamChat(ctx context.Context, model string, messages []Message, onToken func(string), onReasoning func(string)) error {
 	if model == "" {
 		model = c.ChatModel
 	}
@@ -158,8 +163,13 @@ func (c *Client) StreamChat(ctx context.Context, model string, messages []Messag
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			continue // skip malformed/keepalive lines
 		}
-		if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
-			onToken(chunk.Choices[0].Delta.Content)
+		if len(chunk.Choices) > 0 {
+			if chunk.Choices[0].Delta.Content != "" {
+				onToken(chunk.Choices[0].Delta.Content)
+			}
+			if chunk.Choices[0].Delta.Reasoning != "" && onReasoning != nil {
+				onReasoning(chunk.Choices[0].Delta.Reasoning)
+			}
 		}
 	}
 	return scanner.Err()

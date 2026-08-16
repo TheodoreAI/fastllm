@@ -153,7 +153,7 @@ export default function App() {
 
     setInput('')
     setStreaming(true)
-    setMessages((prev) => [...prev, { role: 'user', content: text }, { role: 'assistant', content: '', sources: [] }])
+    setMessages((prev) => [...prev, { role: 'user', content: text }, { role: 'assistant', content: '', sources: [], reasoning: '' }])
 
     try {
       await streamChat(
@@ -176,6 +176,16 @@ export default function App() {
               next[next.length - 1] = {
                 ...next[next.length - 1],
                 content: next[next.length - 1].content + token,
+              }
+              return next
+            })
+          },
+          onReasoning: (reasoning) => {
+            setMessages((prev) => {
+              const next = [...prev]
+              next[next.length - 1] = {
+                ...next[next.length - 1],
+                reasoning: (next[next.length - 1].reasoning || '') + reasoning,
               }
               return next
             })
