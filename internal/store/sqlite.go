@@ -7,6 +7,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	_ "modernc.org/sqlite"
@@ -66,6 +67,14 @@ CREATE TABLE IF NOT EXISTS skills (
 -- so a fresh install gets starter data exactly once even if the user
 -- later deletes all of it.
 CREATE TABLE IF NOT EXISTS meta (
+	key TEXT PRIMARY KEY,
+	value TEXT NOT NULL
+);
+
+-- settings holds user-editable RAG/config knobs (chunk size, overlap,
+-- retrieved chunk count) so they can be tuned from the UI without a
+-- restart. Missing keys fall back to defaultSettings.
+CREATE TABLE IF NOT EXISTS settings (
 	key TEXT PRIMARY KEY,
 	value TEXT NOT NULL
 );
@@ -377,6 +386,130 @@ func GetSkill(db *sql.DB, workspaceID string, id int64) (Skill, error) {
 func DeleteSkill(db *sql.DB, workspaceID string, id int64) error {
 	_, err := db.Exec(`DELETE FROM skills WHERE workspace_id = ? AND id = ?`, workspaceID, id)
 	return err
+}
+
+// RAGSettings are the user-tunable retrieval knobs, editable from the
+// Settings page. Chunking applies to future uploads only — existing
+// chunks aren't retroactively re-split.
+type RAGSettings struct {
+	ChunkSize    int `json:"chunk_size"`
+	ChunkOverlap int `json:"chunk_overlap"`
+	TopK         int `json:"top_k"`
+}
+
+// DefaultRAGSettings mirrors the values fastllm shipped with before these
+// were configurable.
+var DefaultRAGSettings = RAGSettings{ChunkSize: 800, ChunkOverlap: 100, TopK: 4}
+
+const (
+	settingChunkSize    = "chunk_size"
+	settingChunkOverlap = "chunk_overlap"
+	settingTopK         = "top_k"
+)
+
+// GetRAGSettings reads the current RAG settings, falling back to
+// DefaultRAGSettings for any key that hasn't been set yet.
+func GetRAGSettings(db *sql.DB) (RAGSettings, error) {
+	s := DefaultRAGSettings
+	rows, err := db.Query(`SELECT key, value FROM settings WHERE key IN (?, ?, ?)`,
+		settingChunkSize, settingChunkOverlap, settingTopK)
+	if err != nil {
+		return s, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			return s, err
+		}
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			continue
+		}
+		switch key {
+		case settingChunkSize:
+			s.ChunkSize = n
+		case settingChunkOverlap:
+			s.ChunkOverlap = n
+		case settingTopK:
+			s.TopK = n
+		}
+	}
+	return s, rows.Err()
+}
+
+// SaveRAGSettings persists the given RAG settings, validating that they're
+// sane (positive sizes, overlap smaller than the chunk itself).
+func SaveRAGSettings(db *sql.DB, s RAGSettings) error {
+	if s.ChunkSize < 50 {
+		return fmt.Errorf("chunk_size must be at least 50")
+	}
+	if s.ChunkOverlap < 0 || s.ChunkOverlap >= s.ChunkSize {
+		return fmt.Errorf("chunk_overlap must be between 0 and chunk_size")
+	}
+	if s.TopK < 1 {
+		return fmt.Errorf("top_k must be at least 1")
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	values := map[string]int{
+		settingChunkSize:    s.ChunkSize,
+		settingChunkOverlap: s.ChunkOverlap,
+		settingTopK:         s.TopK,
+	}
+	for key, n := range values {
+		if _, err := tx.Exec(
+			`INSERT INTO settings (key, value) VALUES (?, ?)
+			 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+			key, strconv.Itoa(n)); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// ClearConversations deletes every conversation and message in the
+// workspace.
+func ClearConversations(db *sql.DB, workspaceID string) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`DELETE FROM messages WHERE workspace_id = ?`, workspaceID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM conversations WHERE workspace_id = ?`, workspaceID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// ClearKnowledgeBase deletes every document and chunk in the workspace.
+// The caller is responsible for also clearing the in-memory vector store.
+func ClearKnowledgeBase(db *sql.DB, workspaceID string) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`
+		DELETE FROM chunks WHERE document_id IN (SELECT id FROM documents WHERE workspace_id = ?)`,
+		workspaceID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM documents WHERE workspace_id = ?`, workspaceID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // LoadAllChunks reads every chunk back out, used to repopulate the

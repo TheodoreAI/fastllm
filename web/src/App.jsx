@@ -16,15 +16,20 @@ import {
   fetchSkills,
   fetchModels,
   fetchSettings,
+  fetchRagSettings,
+  saveRagSettings,
+  clearKnowledgeBase,
+  clearConversations,
   createSkill as apiCreateSkill,
   deleteSkillById,
   indexDocument,
+  uploadFile,
   streamChat,
 } from './api'
 
-// Text files we accept for direct upload — anything else likely needs
-// server-side extraction (e.g. PDFs) which isn't wired up yet.
-const TEXT_FILE_PATTERN = /\.(txt|md|markdown|mdx|json|ya?ml|csv|tsv|log|go|js|jsx|ts|tsx|py|rb|java|c|cc|cpp|h|hpp|rs|sh|sql|html|css|xml)$/i
+// Files we accept for upload: plain-text-like formats (indexed as-is,
+// client never needs to read their bytes) plus PDF (extracted server-side).
+const UPLOAD_FILE_PATTERN = /\.(txt|md|markdown|mdx|json|ya?ml|csv|tsv|log|go|js|jsx|ts|tsx|py|rb|java|c|cc|cpp|h|hpp|rs|sh|sql|html|css|xml|pdf)$/i
 
 export default function App() {
   const [messages, setMessages] = useState([])
@@ -45,9 +50,11 @@ export default function App() {
   const [conversationToDelete, setConversationToDelete] = useState(null)
   const [settings, setSettings] = useState(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [ragSettings, setRagSettings] = useState(null)
   const [theme, setTheme] = useTheme()
   const bottomRef = useRef(null)
   const fileInputRef = useRef(null)
+  const folderInputRef = useRef(null)
 
   useEffect(() => {
     refreshConversations().then((list) => {
@@ -60,6 +67,7 @@ export default function App() {
       if (list.length > 0) setModel((m) => m || list[0].name)
     })
     fetchSettings().then(setSettings)
+    fetchRagSettings().then(setRagSettings)
   }, [])
 
   useEffect(() => {
@@ -150,7 +158,7 @@ export default function App() {
   }
 
   async function indexContent(filename, content) {
-    setDocStatus('Uploading…')
+    setDocStatus(`Indexing ${filename}…`)
     try {
       const res = await indexDocument(filename, content)
       if (!res.ok) throw new Error(await res.text())
@@ -158,7 +166,20 @@ export default function App() {
       setDocStatus(`Indexed ${data.chunks} chunk(s) from ${filename}.`)
       refreshDocuments()
     } catch (err) {
-      setDocStatus(`Error: ${err.message}`)
+      setDocStatus(`Error indexing ${filename}: ${err.message}`)
+    }
+  }
+
+  async function indexFile(file, label) {
+    setDocStatus(`Uploading ${label}…`)
+    try {
+      const res = await uploadFile(file)
+      if (!res.ok) throw new Error(await res.text())
+      const data = await res.json()
+      setDocStatus(`Indexed ${data.chunks} chunk(s) from ${label}.`)
+      refreshDocuments()
+    } catch (err) {
+      setDocStatus(`Error indexing ${label}: ${err.message}`)
     }
   }
 
@@ -169,18 +190,54 @@ export default function App() {
     setDocText('')
   }
 
-  async function handleFilePicked(e) {
-    const files = Array.from(e.target.files ?? [])
-    e.target.value = '' // allow re-selecting the same file later
-
+  // Shared by both the flat file picker and the folder picker: skips
+  // unsupported extensions and indexes everything else one at a time
+  // (sequential, so the status line stays readable and we don't flood
+  // the embedding backend with concurrent requests).
+  async function indexFileList(files, { relativeLabel } = {}) {
     for (const file of files) {
-      if (!TEXT_FILE_PATTERN.test(file.name)) {
+      if (!UPLOAD_FILE_PATTERN.test(file.name)) {
         setDocStatus(`Skipped ${file.name}: unsupported file type.`)
         continue
       }
-      const text = await file.text()
-      await indexContent(file.name, text)
+      const label = relativeLabel ? file.webkitRelativePath || file.name : file.name
+      await indexFile(file, label)
     }
+  }
+
+  async function handleFilePicked(e) {
+    const files = Array.from(e.target.files ?? [])
+    e.target.value = '' // allow re-selecting the same file later
+    await indexFileList(files)
+  }
+
+  async function handleFolderPicked(e) {
+    const files = Array.from(e.target.files ?? [])
+    e.target.value = ''
+    await indexFileList(files, { relativeLabel: true })
+  }
+
+  async function handleClearKnowledgeBase() {
+    try {
+      await clearKnowledgeBase()
+      setDocStatus('Knowledge base cleared.')
+      refreshDocuments()
+    } catch (err) {
+      setDocStatus(`Error clearing knowledge base: ${err.message}`)
+    }
+  }
+
+  async function handleClearConversations() {
+    await clearConversations()
+    await refreshConversations()
+    startNewChat()
+  }
+
+  async function handleSaveRagSettings(next) {
+    const res = await saveRagSettings(next)
+    if (!res.ok) throw new Error(await res.text())
+    const saved = await res.json()
+    setRagSettings(saved)
   }
 
   async function createSkill(e) {
@@ -262,6 +319,8 @@ export default function App() {
             onUploadDocument={uploadDocument}
             fileInputRef={fileInputRef}
             onFilePicked={handleFilePicked}
+            folderInputRef={folderInputRef}
+            onFolderPicked={handleFolderPicked}
             docStatus={docStatus}
             documents={documents}
           />
@@ -290,6 +349,10 @@ export default function App() {
           theme={theme}
           onThemeChange={setTheme}
           settings={settings}
+          ragSettings={ragSettings}
+          onSaveRagSettings={handleSaveRagSettings}
+          onClearKnowledgeBase={handleClearKnowledgeBase}
+          onClearConversations={handleClearConversations}
           onClose={() => setSettingsOpen(false)}
         />
       )}

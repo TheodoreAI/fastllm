@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os/user"
 	"strconv"
@@ -154,7 +155,11 @@ func (h *Handler) buildPrompt(ctx context.Context, conversationID int64, questio
 
 	if h.LLM.EmbedModel != "" {
 		if embedding, err := h.LLM.Embed(ctx, question); err == nil {
-			chunks := h.Vector.Search(embedding, 4)
+			topK := store.DefaultRAGSettings.TopK
+			if rag, err := store.GetRAGSettings(h.DB); err == nil {
+				topK = rag.TopK
+			}
+			chunks := h.Vector.Search(embedding, topK)
 			if len(chunks) > 0 {
 				var b strings.Builder
 				b.WriteString("Relevant context:\n\n")
@@ -225,6 +230,54 @@ func (h *Handler) Settings(w http.ResponseWriter, r *http.Request) {
 		EmbedModel: h.LLM.EmbedModel,
 		LLMBaseURL: h.LLM.BaseURL,
 	})
+}
+
+// GetRAGSettings returns the current chunking/retrieval settings.
+func (h *Handler) GetRAGSettings(w http.ResponseWriter, r *http.Request) {
+	rag, err := store.GetRAGSettings(h.DB)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, rag)
+}
+
+// UpdateRAGSettings saves new chunking/retrieval settings. Chunk size and
+// overlap only affect documents indexed after the change; top_k applies
+// to the very next chat request.
+func (h *Handler) UpdateRAGSettings(w http.ResponseWriter, r *http.Request) {
+	var rag store.RAGSettings
+	if err := json.NewDecoder(r.Body).Decode(&rag); err != nil {
+		http.Error(w, "invalid settings payload", http.StatusBadRequest)
+		return
+	}
+	if err := store.SaveRAGSettings(h.DB, rag); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, rag)
+}
+
+// ClearConversations deletes every conversation and message in the
+// workspace. Irreversible — the frontend confirms before calling this.
+func (h *Handler) ClearConversations(w http.ResponseWriter, r *http.Request) {
+	if err := store.ClearConversations(h.DB, defaultWorkspace); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ClearKnowledgeBase deletes every indexed document and chunk, in both
+// SQLite and the in-memory vector index. Irreversible — the frontend
+// confirms before calling this.
+func (h *Handler) ClearKnowledgeBase(w http.ResponseWriter, r *http.Request) {
+	if err := store.ClearKnowledgeBase(h.DB, defaultWorkspace); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	h.Vector.Clear()
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // ListDocuments returns every indexed document with its chunk count.
@@ -330,36 +383,102 @@ type uploadRequest struct {
 }
 
 // UploadDocument chunks the provided text, embeds each chunk, and stores
-// it both in SQLite and the in-memory vector index.
+// it both in SQLite and the in-memory vector index. Used for pasted text.
 func (h *Handler) UploadDocument(w http.ResponseWriter, r *http.Request) {
 	var req uploadRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Content) == "" {
 		http.Error(w, "filename and content are required", http.StatusBadRequest)
 		return
 	}
-
-	docID, err := store.SaveDocument(h.DB, defaultWorkspace, req.Filename)
+	n, err := h.indexText(r.Context(), req.Filename, req.Content)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeIndexError(w, err)
+		return
+	}
+	writeJSON(w, map[string]any{"chunks": n})
+}
+
+// maxUploadSize bounds a single uploaded file (post base64/multipart
+// decoding) to guard against pathological memory use from a bad drop.
+const maxUploadSize = 25 << 20 // 25MB
+
+// UploadFile accepts one real file via multipart/form-data (field "file"),
+// extracting text server-side for PDFs and indexing it the same way as
+// pasted text. Used by the file picker and folder/drag-and-drop upload.
+func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
+	if err := r.ParseMultipartForm(maxUploadSize); err != nil {
+		http.Error(w, "file too large or malformed upload", http.StatusBadRequest)
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "file is required", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(file)
+	if err != nil {
+		http.Error(w, "failed to read upload", http.StatusInternalServerError)
 		return
 	}
 
-	chunks := chunkText(req.Content, 800, 100)
-	for _, text := range chunks {
-		embedding, err := h.LLM.Embed(r.Context(), text)
+	var text string
+	if strings.HasSuffix(strings.ToLower(header.Filename), ".pdf") {
+		text, err = extractPDFText(data)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
+			http.Error(w, fmt.Sprintf("could not read PDF: %v", err), http.StatusBadRequest)
 			return
 		}
-		chunkID, err := store.SaveChunk(h.DB, docID, text, embedding)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		h.Vector.Add(vector.Chunk{ID: chunkID, DocumentID: docID, Content: text, Embedding: embedding})
+	} else {
+		text = string(data)
 	}
 
-	writeJSON(w, map[string]any{"document_id": docID, "chunks": len(chunks)})
+	if strings.TrimSpace(text) == "" {
+		http.Error(w, "file has no extractable text", http.StatusBadRequest)
+		return
+	}
+
+	n, err := h.indexText(r.Context(), header.Filename, text)
+	if err != nil {
+		writeIndexError(w, err)
+		return
+	}
+	writeJSON(w, map[string]any{"chunks": n})
+}
+
+// indexText saves a document row, chunks its text per the current RAG
+// settings, embeds each chunk, and stores it in both SQLite and the
+// in-memory vector index. Returns the number of chunks created.
+func (h *Handler) indexText(ctx context.Context, filename, text string) (int, error) {
+	rag, err := store.GetRAGSettings(h.DB)
+	if err != nil {
+		rag = store.DefaultRAGSettings
+	}
+
+	docID, err := store.SaveDocument(h.DB, defaultWorkspace, filename)
+	if err != nil {
+		return 0, err
+	}
+
+	chunks := chunkText(text, rag.ChunkSize, rag.ChunkOverlap)
+	for _, chunkContent := range chunks {
+		embedding, err := h.LLM.Embed(ctx, chunkContent)
+		if err != nil {
+			return 0, err
+		}
+		chunkID, err := store.SaveChunk(h.DB, docID, chunkContent, embedding)
+		if err != nil {
+			return 0, err
+		}
+		h.Vector.Add(vector.Chunk{ID: chunkID, DocumentID: docID, Content: chunkContent, Embedding: embedding})
+	}
+	return len(chunks), nil
+}
+
+func writeIndexError(w http.ResponseWriter, err error) {
+	http.Error(w, err.Error(), http.StatusInternalServerError)
 }
 
 // chunkText splits text into overlapping windows of roughly `size` runes.

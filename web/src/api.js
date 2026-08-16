@@ -63,6 +63,36 @@ export function indexDocument(filename, content) {
   })
 }
 
+// Uploads one real file (used for PDFs and any file coming from a folder
+// drop) via multipart/form-data so the server can extract text itself.
+export function uploadFile(file) {
+  const form = new FormData()
+  form.append('file', file, file.name)
+  return fetch('/api/documents/upload', { method: 'POST', body: form })
+}
+
+export function clearKnowledgeBase() {
+  return fetch('/api/documents', { method: 'DELETE' })
+}
+
+export function clearConversations() {
+  return fetch('/api/conversations', { method: 'DELETE' })
+}
+
+export function fetchRagSettings() {
+  return fetch('/api/settings/rag')
+    .then((r) => r.json())
+    .catch(() => null)
+}
+
+export function saveRagSettings(settings) {
+  return fetch('/api/settings/rag', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settings),
+  })
+}
+
 // Streams a chat response via SSE, invoking the provided callbacks as
 // events arrive. Returns once the stream completes.
 export async function streamChat({ message, model, skillId, conversationId }, callbacks) {

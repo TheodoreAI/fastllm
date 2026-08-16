@@ -4,6 +4,8 @@ export default function KnowledgeBasePanel({
   onUploadDocument,
   fileInputRef,
   onFilePicked,
+  folderInputRef,
+  onFolderPicked,
   docStatus,
   documents,
 }) {
@@ -23,13 +25,25 @@ export default function KnowledgeBasePanel({
       <input
         ref={fileInputRef}
         type="file"
-        accept=".txt,.md,.markdown,.mdx,.json,.yaml,.yml,.csv,.tsv,.log,.go,.js,.jsx,.ts,.tsx,.py,.rb,.java,.c,.cc,.cpp,.h,.hpp,.rs,.sh,.sql,.html,.css,.xml"
+        accept=".txt,.md,.markdown,.mdx,.json,.yaml,.yml,.csv,.tsv,.log,.go,.js,.jsx,.ts,.tsx,.py,.rb,.java,.c,.cc,.cpp,.h,.hpp,.rs,.sh,.sql,.html,.css,.xml,.pdf"
         multiple
         hidden
         onChange={onFilePicked}
       />
       <button type="button" className="btn-secondary" onClick={() => fileInputRef.current?.click()}>
         Upload files…
+      </button>
+
+      <input
+        ref={folderInputRef}
+        type="file"
+        hidden
+        webkitdirectory=""
+        directory=""
+        onChange={onFolderPicked}
+      />
+      <button type="button" className="btn-secondary" onClick={() => folderInputRef.current?.click()}>
+        Upload folder…
       </button>
 
       {docStatus && <p className="status">{docStatus}</p>}

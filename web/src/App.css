@@ -880,3 +880,87 @@ body {
   line-height: 1.4;
   color: var(--text-faint);
 }
+
+.rag-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rag-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.rag-field input {
+  width: 90px;
+  background: var(--bg-panel);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  font-family: inherit;
+  font-size: 13px;
+  text-align: right;
+}
+
+:root[data-theme='light'] .rag-field input {
+  background: var(--bg-window);
+}
+
+.rag-field input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.rag-form .btn-primary {
+  margin-top: 4px;
+}
+
+.danger-zone {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.danger-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  font-size: 13px;
+}
+
+:root[data-theme='light'] .danger-row {
+  background: var(--bg-window);
+  border: 1px solid var(--border);
+}
+
+.danger-row .btn-danger {
+  width: auto;
+  padding: 5px 12px;
+  font-size: 12.5px;
+}
+
+.danger-confirm {
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: rgba(229, 72, 77, 0.1);
+  border: 1px solid rgba(229, 72, 77, 0.3);
+}
+
+.danger-confirm p {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.danger-confirm .modal-actions {
+  margin: 0;
+}
