@@ -991,6 +991,19 @@ body {
   gap: 6px;
 }
 
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.settings-field .model-select {
+  background: color-mix(in srgb, var(--bg-panel), var(--text) 6%);
+}
+
 .theme-option {
   flex: 1;
   padding: 8px 10px;

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useEscapeKey } from '../useEscapeKey'
+import { FONT_OPTIONS } from '../useFontFamily'
 
 // __APP_VERSION__ / __BUILD_TIME__ are baked in at build time by
 // vite.config.js from package.json + the build clock — see there for why.
@@ -15,6 +16,8 @@ function formatBuildTime(iso) {
 export default function SettingsModal({
   theme,
   onThemeChange,
+  fontFamily,
+  onFontFamilyChange,
   settings,
   ragSettings,
   onSaveRagSettings,
@@ -91,6 +94,25 @@ export default function SettingsModal({
               Dark
             </button>
           </div>
+
+          <label className="settings-field">
+            <span>Font</span>
+            <select
+              className="model-select"
+              value={fontFamily}
+              onChange={(e) => onFontFamilyChange(e.target.value)}
+            >
+              {FONT_OPTIONS.map((group) => (
+                <optgroup key={group.group} label={group.group}>
+                  {group.choices.map((choice) => (
+                    <option key={choice.label} value={choice.value}>
+                      {choice.label}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          </label>
         </div>
 
         <div className="settings-section">

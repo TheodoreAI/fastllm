@@ -9,6 +9,7 @@ import ConfirmDeleteModal from './components/ConfirmDeleteModal'
 import SettingsModal from './components/SettingsModal'
 import DraggableSection from './components/DraggableSection'
 import { useTheme } from './useTheme'
+import { useFontFamily } from './useFontFamily'
 import { useSectionOrder } from './useSectionOrder'
 import {
   fetchConversations,
@@ -64,6 +65,7 @@ export default function App() {
   const [serverStopped, setServerStopped] = useState(false)
   const [ragSettings, setRagSettings] = useState(null)
   const [theme, setTheme] = useTheme()
+  const [fontFamily, setFontFamily] = useFontFamily()
   const [sectionOrder, moveSection] = useSectionOrder(DEFAULT_SECTION_ORDER)
   const bottomRef = useRef(null)
   const fileInputRef = useRef(null)
@@ -482,6 +484,8 @@ export default function App() {
         <SettingsModal
           theme={theme}
           onThemeChange={setTheme}
+          fontFamily={fontFamily}
+          onFontFamilyChange={setFontFamily}
           settings={settings}
           ragSettings={ragSettings}
           onSaveRagSettings={handleSaveRagSettings}
