@@ -2,7 +2,7 @@ export default function SkillPanel({
   skills,
   skillId,
   onSkillIdChange,
-  onDeleteSkill,
+  onRequestDeleteSkill,
   skillFormOpen,
   onOpenForm,
   onCloseForm,
@@ -11,6 +11,7 @@ export default function SkillPanel({
   skillPrompt,
   onSkillPromptChange,
   onCreateSkill,
+  error,
 }) {
   return (
     <section className="panel">
@@ -33,12 +34,14 @@ export default function SkillPanel({
             type="button"
             className="btn-icon"
             title="Delete this skill"
-            onClick={() => onDeleteSkill(skillId)}
+            onClick={() => onRequestDeleteSkill(Number(skillId))}
           >
             ×
           </button>
         )}
       </div>
+
+      {error && <p className="status status-error">{error}</p>}
 
       {skillFormOpen ? (
         <form onSubmit={onCreateSkill} className="skill-form">

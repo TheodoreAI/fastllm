@@ -1,13 +1,27 @@
+// Parses a fetch response as JSON, but only if the request actually
+// succeeded — calling r.json() on a non-OK response (which the backend
+// sends as a plain-text error body, not JSON) throws an opaque
+// SyntaxError that masks the real error message. Logs the real failure
+// so it's at least visible in devtools instead of being fully silent.
+async function okJson(res, context) {
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText)
+    console.error(`${context} failed (${res.status}): ${text}`)
+    throw new Error(text || `request failed with ${res.status}`)
+  }
+  return res.json()
+}
+
 export function fetchConversations() {
   return fetch('/api/conversations')
-    .then((r) => r.json())
+    .then((r) => okJson(r, 'fetchConversations'))
     .then((data) => data ?? [])
     .catch(() => [])
 }
 
 export function fetchMessages(conversationId) {
   return fetch(`/api/messages?conversation_id=${conversationId}`)
-    .then((r) => r.json())
+    .then((r) => okJson(r, 'fetchMessages'))
     .then((data) => data ?? [])
     .catch(() => [])
 }
@@ -18,28 +32,28 @@ export function deleteConversation(id) {
 
 export function fetchDocuments() {
   return fetch('/api/documents')
-    .then((r) => r.json())
+    .then((r) => okJson(r, 'fetchDocuments'))
     .then((data) => data ?? [])
     .catch(() => [])
 }
 
 export function fetchSkills() {
   return fetch('/api/skills')
-    .then((r) => r.json())
+    .then((r) => okJson(r, 'fetchSkills'))
     .then((data) => data ?? [])
     .catch(() => [])
 }
 
 export function fetchModels() {
   return fetch('/api/models')
-    .then((r) => r.json())
+    .then((r) => okJson(r, 'fetchModels'))
     .then((data) => data ?? [])
     .catch(() => [])
 }
 
 export function fetchSettings() {
   return fetch('/api/settings')
-    .then((r) => r.json())
+    .then((r) => okJson(r, 'fetchSettings'))
     .catch(() => null)
 }
 
@@ -81,7 +95,7 @@ export function clearConversations() {
 
 export function fetchRagSettings() {
   return fetch('/api/settings/rag')
-    .then((r) => r.json())
+    .then((r) => okJson(r, 'fetchRagSettings'))
     .catch(() => null)
 }
 
@@ -132,6 +146,8 @@ export async function streamChat({ message, model, skillId, conversationId }, ca
         callbacks.onConversation?.(payload.conversation_id)
       } else if (eventType === 'sources' && payload.sources) {
         callbacks.onSources?.(payload.sources)
+      } else if (eventType === 'error') {
+        callbacks.onError?.(payload.error || 'The model backend returned an error.')
       } else if (payload.token) {
         callbacks.onToken?.(payload.token)
       }
