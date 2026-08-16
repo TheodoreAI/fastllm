@@ -157,6 +157,23 @@ body {
   opacity: 0.5;
 }
 
+.skill-select-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.skill-select-row .model-select {
+  flex: 1;
+  min-width: 0;
+}
+
+.skill-select-row .btn-icon {
+  width: 22px;
+  height: 22px;
+  font-size: 16px;
+}
+
 .sidebar textarea {
   width: 100%;
   background: var(--bg-panel);

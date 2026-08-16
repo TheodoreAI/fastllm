@@ -238,31 +238,30 @@ export default function App() {
 
           <section className="panel">
             <h2>Skill</h2>
-            <select
-              className="model-select"
-              value={skillId}
-              onChange={(e) => setSkillId(e.target.value)}
-            >
-              <option value="">General assistant</option>
-              {skills.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-
-            {skills.length > 0 && (
-              <ul className="doc-list">
+            <div className="skill-select-row">
+              <select
+                className="model-select"
+                value={skillId}
+                onChange={(e) => setSkillId(e.target.value)}
+              >
+                <option value="">General assistant</option>
                 {skills.map((s) => (
-                  <li key={s.id} className="doc-item">
-                    <span className="doc-name">{s.name}</span>
-                    <button type="button" className="btn-icon" title="Delete skill" onClick={() => deleteSkill(s.id)}>
-                      ×
-                    </button>
-                  </li>
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
                 ))}
-              </ul>
-            )}
+              </select>
+              {skillId && (
+                <button
+                  type="button"
+                  className="btn-icon"
+                  title="Delete this skill"
+                  onClick={() => deleteSkill(skillId)}
+                >
+                  ×
+                </button>
+              )}
+            </div>
 
             {skillFormOpen ? (
               <form onSubmit={createSkill} className="skill-form">
