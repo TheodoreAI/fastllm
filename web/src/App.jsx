@@ -10,6 +10,7 @@ import SettingsModal from './components/SettingsModal'
 import DraggableSection from './components/DraggableSection'
 import { useTheme } from './useTheme'
 import { useFontFamily } from './useFontFamily'
+import { useFontScale } from './useFontScale'
 import { useSectionOrder } from './useSectionOrder'
 import {
   fetchConversations,
@@ -66,6 +67,7 @@ export default function App() {
   const [ragSettings, setRagSettings] = useState(null)
   const [theme, setTheme] = useTheme()
   const [fontFamily, setFontFamily] = useFontFamily()
+  const [fontScale, setFontScale] = useFontScale()
   const [sectionOrder, moveSection] = useSectionOrder(DEFAULT_SECTION_ORDER)
   const bottomRef = useRef(null)
   const fileInputRef = useRef(null)
@@ -486,6 +488,8 @@ export default function App() {
           onThemeChange={setTheme}
           fontFamily={fontFamily}
           onFontFamilyChange={setFontFamily}
+          fontScale={fontScale}
+          onFontScaleChange={setFontScale}
           settings={settings}
           ragSettings={ragSettings}
           onSaveRagSettings={handleSaveRagSettings}
