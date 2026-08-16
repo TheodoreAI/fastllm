@@ -326,6 +326,10 @@ body {
   color: var(--text-dim);
 }
 
+.status-error {
+  color: #e5484d;
+}
+
 .doc-list {
   list-style: none;
   margin: 10px 0 0;
@@ -508,6 +512,13 @@ body {
   gap: 14px;
 }
 
+.messages-loading {
+  align-self: center;
+  margin-top: 40px;
+  font-size: 13px;
+  color: var(--text-faint);
+}
+
 .message {
   max-width: 640px;
   padding: 10px 14px;
@@ -526,6 +537,15 @@ body {
 .message.assistant {
   align-self: flex-start;
   border-bottom-left-radius: 4px;
+}
+
+.message.is-error {
+  background: rgba(229, 72, 77, 0.12);
+  border: 1px solid rgba(229, 72, 77, 0.35);
+}
+
+.message.is-error .role {
+  color: #e5484d;
 }
 
 .message .role {

@@ -5,7 +5,7 @@ import ModelPicker from './components/ModelPicker'
 import SkillPanel from './components/SkillPanel'
 import KnowledgeBasePanel from './components/KnowledgeBasePanel'
 import ChatPanel from './components/ChatPanel'
-import DeleteConversationModal from './components/DeleteConversationModal'
+import ConfirmDeleteModal from './components/ConfirmDeleteModal'
 import SettingsModal from './components/SettingsModal'
 import { useTheme } from './useTheme'
 import {
@@ -33,6 +33,7 @@ const UPLOAD_FILE_PATTERN = /\.(txt|md|markdown|mdx|json|ya?ml|csv|tsv|log|go|js
 
 export default function App() {
   const [messages, setMessages] = useState([])
+  const [messagesLoading, setMessagesLoading] = useState(false)
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
   const [docText, setDocText] = useState('')
@@ -45,9 +46,12 @@ export default function App() {
   const [skillFormOpen, setSkillFormOpen] = useState(false)
   const [skillName, setSkillName] = useState('')
   const [skillPrompt, setSkillPrompt] = useState('')
+  const [skillToDelete, setSkillToDelete] = useState(null)
+  const [skillError, setSkillError] = useState('')
   const [conversations, setConversations] = useState([])
   const [conversationId, setConversationId] = useState(null)
   const [conversationToDelete, setConversationToDelete] = useState(null)
+  const [conversationError, setConversationError] = useState('')
   const [settings, setSettings] = useState(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [ragSettings, setRagSettings] = useState(null)
@@ -83,25 +87,41 @@ export default function App() {
 
   function openConversation(id) {
     setConversationId(id)
-    fetchMessages(id).then(setMessages)
+    setMessages([])
+    setMessagesLoading(true)
+    fetchMessages(id).then((msgs) => {
+      // Guard against out-of-order responses: if the user switched to a
+      // different conversation again before this fetch resolved, don't
+      // stomp on the newer selection with stale data.
+      setConversationId((current) => {
+        if (String(current) === String(id)) {
+          setMessages(msgs)
+          setMessagesLoading(false)
+        }
+        return current
+      })
+    })
   }
 
   function startNewChat() {
     setConversationId(null)
     setMessages([])
+    setMessagesLoading(false)
   }
 
   async function confirmDeleteConversation() {
     const id = conversationToDelete
     setConversationToDelete(null)
     if (id == null) return
+    setConversationError('')
     try {
-      await deleteConversation(id)
+      const res = await deleteConversation(id)
+      if (!res.ok) throw new Error(await res.text())
       if (String(conversationId) === String(id)) startNewChat()
       const list = await refreshConversations()
       if (String(conversationId) === String(id) && list.length > 0) openConversation(list[0].id)
-    } catch {
-      // ignore
+    } catch (err) {
+      setConversationError(`Couldn't delete this conversation: ${err.message}`)
     }
   }
 
@@ -147,10 +167,21 @@ export default function App() {
               return next
             })
           },
+          onError: (message) => {
+            setMessages((prev) => {
+              const next = [...prev]
+              next[next.length - 1] = {
+                ...next[next.length - 1],
+                content: `⚠️ The model backend couldn't complete this response.\n\n${message}`,
+                isError: true,
+              }
+              return next
+            })
+          },
         }
       )
     } catch (err) {
-      setMessages((prev) => [...prev, { role: 'assistant', content: `Error: ${err.message}` }])
+      setMessages((prev) => [...prev, { role: 'assistant', content: `⚠️ ${err.message}`, isError: true }])
     } finally {
       setStreaming(false)
       refreshConversations()
@@ -219,16 +250,22 @@ export default function App() {
 
   async function handleClearKnowledgeBase() {
     try {
-      await clearKnowledgeBase()
+      const res = await clearKnowledgeBase()
+      if (!res.ok) throw new Error(await res.text())
       setDocStatus('Knowledge base cleared.')
       refreshDocuments()
     } catch (err) {
       setDocStatus(`Error clearing knowledge base: ${err.message}`)
+      throw err
     }
   }
 
   async function handleClearConversations() {
-    await clearConversations()
+    const res = await clearConversations()
+    if (!res.ok) {
+      setConversationError(`Couldn't clear conversations: ${await res.text()}`)
+      throw new Error('clear conversations failed')
+    }
     await refreshConversations()
     startNewChat()
   }
@@ -255,13 +292,18 @@ export default function App() {
     }
   }
 
-  async function deleteSkill(id) {
+  async function confirmDeleteSkill() {
+    const id = skillToDelete
+    setSkillToDelete(null)
+    if (id == null) return
+    setSkillError('')
     try {
-      await deleteSkillById(id)
+      const res = await deleteSkillById(id)
+      if (!res.ok) throw new Error(await res.text())
       if (String(skillId) === String(id)) setSkillId('')
       refreshSkills()
-    } catch {
-      // ignore
+    } catch (err) {
+      setSkillError(`Couldn't delete this skill: ${err.message}`)
     }
   }
 
@@ -294,6 +336,7 @@ export default function App() {
             onNewChat={startNewChat}
             onOpen={openConversation}
             onRequestDelete={setConversationToDelete}
+            error={conversationError}
           />
 
           <ModelPicker models={models} model={model} onChange={setModel} />
@@ -302,7 +345,7 @@ export default function App() {
             skills={skills}
             skillId={skillId}
             onSkillIdChange={setSkillId}
-            onDeleteSkill={deleteSkill}
+            onRequestDeleteSkill={setSkillToDelete}
             skillFormOpen={skillFormOpen}
             onOpenForm={() => setSkillFormOpen(true)}
             onCloseForm={() => setSkillFormOpen(false)}
@@ -311,6 +354,7 @@ export default function App() {
             skillPrompt={skillPrompt}
             onSkillPromptChange={setSkillPrompt}
             onCreateSkill={createSkill}
+            error={skillError}
           />
 
           <KnowledgeBasePanel
@@ -328,6 +372,7 @@ export default function App() {
 
         <ChatPanel
           messages={messages}
+          messagesLoading={messagesLoading}
           bottomRef={bottomRef}
           input={input}
           onInputChange={setInput}
@@ -337,10 +382,22 @@ export default function App() {
       </div>
 
       {conversationToDelete != null && (
-        <DeleteConversationModal
-          title={conversations.find((c) => c.id === conversationToDelete)?.title ?? 'this conversation'}
+        <ConfirmDeleteModal
+          heading="Delete conversation?"
+          description={`This deletes "${conversations.find((c) => c.id === conversationToDelete)?.title ?? 'this conversation'}" and all its messages. This can't be undone.`}
+          confirmLabel="Delete"
           onCancel={() => setConversationToDelete(null)}
           onConfirm={confirmDeleteConversation}
+        />
+      )}
+
+      {skillToDelete != null && (
+        <ConfirmDeleteModal
+          heading="Delete skill?"
+          description={`This deletes "${skills.find((s) => s.id === skillToDelete)?.name ?? 'this skill'}". This can't be undone.`}
+          confirmLabel="Delete"
+          onCancel={() => setSkillToDelete(null)}
+          onConfirm={confirmDeleteSkill}
         />
       )}
 

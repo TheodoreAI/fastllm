@@ -4,6 +4,7 @@ export default function ConversationList({
   onNewChat,
   onOpen,
   onRequestDelete,
+  error,
 }) {
   return (
     <section className="panel">
@@ -11,6 +12,8 @@ export default function ConversationList({
       <button type="button" className="btn-secondary" onClick={onNewChat}>
         + New chat
       </button>
+
+      {error && <p className="status status-error">{error}</p>}
 
       <ul className="conversation-list">
         {conversations.length === 0 && (

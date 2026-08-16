@@ -2,6 +2,7 @@ import MessageContent from './MessageContent'
 
 export default function ChatPanel({
   messages,
+  messagesLoading,
   bottomRef,
   input,
   onInputChange,
@@ -11,8 +12,9 @@ export default function ChatPanel({
   return (
     <main className="chat">
       <div className="messages">
-        {messages.map((m, i) => (
-          <div key={i} className={`message ${m.role}`}>
+        {messagesLoading && <div className="messages-loading">Loading…</div>}
+        {!messagesLoading && messages.map((m, i) => (
+          <div key={i} className={`message ${m.role} ${m.isError ? 'is-error' : ''}`}>
             <span className="role">{m.role}</span>
             <MessageContent content={m.content} />
             {m.sources && m.sources.length > 0 && (

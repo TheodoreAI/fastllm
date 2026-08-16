@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useEscapeKey } from '../useEscapeKey'
 
 export default function SettingsModal({
   theme,
@@ -13,10 +14,21 @@ export default function SettingsModal({
   const [ragForm, setRagForm] = useState(ragSettings)
   const [ragStatus, setRagStatus] = useState('')
   const [confirming, setConfirming] = useState(null) // 'kb' | 'conversations' | null
+  const [dataStatus, setDataStatus] = useState('')
 
   useEffect(() => {
     setRagForm(ragSettings)
   }, [ragSettings])
+
+  // Escape cancels an open danger-zone confirm first; a second press (or
+  // pressing it when nothing's confirming) closes the whole modal.
+  useEscapeKey(() => {
+    if (confirming !== null) {
+      setConfirming(null)
+    } else {
+      onClose()
+    }
+  })
 
   async function handleSaveRag(e) {
     e.preventDefault()
@@ -35,8 +47,14 @@ export default function SettingsModal({
 
   async function runConfirmed(action) {
     setConfirming(null)
-    if (action === 'kb') await onClearKnowledgeBase()
-    if (action === 'conversations') await onClearConversations()
+    setDataStatus('Clearing…')
+    try {
+      if (action === 'kb') await onClearKnowledgeBase()
+      if (action === 'conversations') await onClearConversations()
+      setDataStatus('Done.')
+    } catch (err) {
+      setDataStatus(`Error: ${err.message}`)
+    }
   }
 
   return (
@@ -178,6 +196,8 @@ export default function SettingsModal({
               </div>
             </div>
           )}
+
+          {dataStatus && <p className="status">{dataStatus}</p>}
         </div>
 
         <div className="modal-actions">
