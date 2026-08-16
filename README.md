@@ -66,9 +66,19 @@ go run github.com/tc-hib/go-winres@latest simply --icon icon/fastllm.ico
 ## Launching like a regular app (Windows)
 
 Double-click `start-fastllm.vbs` (or the Desktop shortcut it's used to create)
-to start the server with no console window and auto-open the browser. It
-detects an already-running instance instead of starting a duplicate. See
-`start.bat` for the underlying logic.
+to start the server with no console window and auto-open the browser. It:
+
+- detects an already-running instance and just opens the browser instead of
+  starting a duplicate
+- otherwise checks whether Go/frontend source is newer than the last build
+  (comparing file timestamps) and rebuilds only what's stale — a pull with
+  backend changes rebuilds `fastllm.exe`; frontend changes rebuild
+  `web/dist` too (and then the backend, since it embeds `web/dist`); no
+  changes means it skips straight to launch, no build overhead
+- if a rebuild fails, it prints the build output and pauses instead of
+  launching a stale/missing binary
+
+See `start.bat` for the underlying logic.
 
 ## Configuration (env vars)
 
