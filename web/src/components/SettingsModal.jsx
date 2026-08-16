@@ -1,6 +1,17 @@
 import { useEffect, useState } from 'react'
 import { useEscapeKey } from '../useEscapeKey'
 
+// __APP_VERSION__ / __BUILD_TIME__ are baked in at build time by
+// vite.config.js from package.json + the build clock — see there for why.
+function formatBuildTime(iso) {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return d.toLocaleString(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  })
+}
+
 export default function SettingsModal({
   theme,
   onThemeChange,
@@ -198,6 +209,18 @@ export default function SettingsModal({
           )}
 
           {dataStatus && <p className="status">{dataStatus}</p>}
+        </div>
+
+        <div className="settings-section">
+          <p className="settings-label">About</p>
+          <div className="settings-row">
+            <span className="settings-row-key">Version</span>
+            <span className="settings-row-value">{__APP_VERSION__}</span>
+          </div>
+          <div className="settings-row">
+            <span className="settings-row-key">Built</span>
+            <span className="settings-row-value" title={__BUILD_TIME__}>{formatBuildTime(__BUILD_TIME__)}</span>
+          </div>
         </div>
 
         <div className="modal-actions">
