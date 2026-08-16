@@ -378,6 +378,7 @@ export default function App() {
           onInputChange={setInput}
           streaming={streaming}
           onSendMessage={sendMessage}
+          userDisplayName={settings?.username}
         />
       </div>
 
