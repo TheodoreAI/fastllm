@@ -23,6 +23,17 @@ export default function ChatPanel({
                 <p>{m.reasoning}</p>
               </details>
             )}
+            {m.toolCalls && m.toolCalls.length > 0 && (
+              <ul className="tool-calls">
+                {m.toolCalls.map((call, ci) => (
+                  <li key={ci} className={call.error ? 'is-error' : ''}>
+                    📄 Read <code>{call.path}</code>
+                    {call.truncated && ' (truncated)'}
+                    {call.error && `: ${call.error}`}
+                  </li>
+                ))}
+              </ul>
+            )}
             <MessageContent content={m.content} />
             {m.sources && m.sources.length > 0 && (
               <details className="sources">

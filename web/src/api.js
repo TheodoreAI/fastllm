@@ -152,6 +152,8 @@ export async function streamChat({ message, model, skillId, conversationId }, ca
         callbacks.onSources?.(payload.sources)
       } else if (eventType === 'reasoning' && payload.reasoning) {
         callbacks.onReasoning?.(payload.reasoning)
+      } else if (eventType === 'tool_call') {
+        callbacks.onToolCall?.(payload)
       } else if (eventType === 'error') {
         callbacks.onError?.(payload.error || 'The model backend returned an error.')
       } else if (payload.token) {

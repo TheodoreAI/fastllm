@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"fastllm/internal/files"
 	"fastllm/internal/llm"
 	"fastllm/internal/store"
 	"fastllm/internal/vector"
@@ -24,14 +25,35 @@ const systemPrompt = `You are a helpful assistant. Use the provided context to a
 the user's question when it's relevant. If the context doesn't contain the
 answer, say so and answer from general knowledge instead.`
 
+// readFileTool is the schema advertised to the model when file access is
+// enabled. Read-only, sandboxed to Handler.Files.Root — see internal/files.
+var readFileTool = llm.Tool{
+	Type: "function",
+	Function: llm.ToolFunction{
+		Name:        "read_file",
+		Description: "Read the contents of a text file from the local project directory. Path is relative to the project root.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]any{
+					"type":        "string",
+					"description": "Path to the file, relative to the project root (e.g. \"README.md\" or \"src/main.go\").",
+				},
+			},
+			"required": []string{"path"},
+		},
+	},
+}
+
 type Handler struct {
 	DB     *sql.DB
 	LLM    *llm.Client
 	Vector *vector.Store
+	Files  *files.Reader
 }
 
-func New(db *sql.DB, llmClient *llm.Client, vec *vector.Store) *Handler {
-	return &Handler{DB: db, LLM: llmClient, Vector: vec}
+func New(db *sql.DB, llmClient *llm.Client, vec *vector.Store, fileReader *files.Reader) *Handler {
+	return &Handler{DB: db, LLM: llmClient, Vector: vec, Files: fileReader}
 }
 
 type chatRequest struct {
@@ -93,6 +115,15 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		payload, _ := json.Marshal(map[string]any{"sources": sources})
 		fmt.Fprintf(w, "event: sources\ndata: %s\n\n", payload)
 		flusher.Flush()
+	}
+
+	if h.Files.Enabled() {
+		fileReads := h.runFileTools(ctx, req.Model, &messages)
+		for _, fr := range fileReads {
+			payload, _ := json.Marshal(fr)
+			fmt.Fprintf(w, "event: tool_call\ndata: %s\n\n", payload)
+			flusher.Flush()
+		}
 	}
 
 	var full strings.Builder
@@ -193,6 +224,65 @@ func (h *Handler) buildPrompt(ctx context.Context, conversationID int64, questio
 	}
 
 	return messages, sources
+}
+
+// fileRead reports one file the model read via the read_file tool, for
+// display in the UI.
+type fileRead struct {
+	Path      string `json:"path"`
+	Truncated bool   `json:"truncated"`
+	Error     string `json:"error,omitempty"`
+}
+
+// runFileTools makes a single non-streaming pre-flight request with the
+// read_file tool declared. If the model requests one or more reads, each
+// is executed against h.Files (sandboxed to its configured root) and the
+// results are appended to *messages as a tool round-trip (the assistant's
+// tool-call message, followed by one tool-result message per call) so the
+// subsequent streamed answer can see file contents. Models without tool
+// support, or that choose not to call the tool, leave messages untouched.
+// Errors reading a file (not found, outside sandbox, etc.) are reported
+// back to the model as the tool result rather than failing the request,
+// so it can tell the user what went wrong.
+func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]llm.Message) []fileRead {
+	reply, err := h.LLM.Chat(ctx, model, *messages, []llm.Tool{readFileTool})
+	if err != nil || len(reply.ToolCalls) == 0 {
+		return nil
+	}
+
+	*messages = append(*messages, reply)
+
+	var reads []fileRead
+	for _, call := range reply.ToolCalls {
+		if call.Function.Name != "read_file" {
+			continue
+		}
+		var args struct {
+			Path string `json:"path"`
+		}
+		_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+
+		var result string
+		fr := fileRead{Path: args.Path}
+		content, truncated, readErr := h.Files.Read(args.Path)
+		if readErr != nil {
+			fr.Error = readErr.Error()
+			result = "Error reading file: " + readErr.Error()
+		} else {
+			fr.Truncated = truncated
+			result = content
+			if truncated {
+				result += "\n\n[truncated]"
+			}
+		}
+		reads = append(reads, fr)
+		*messages = append(*messages, llm.Message{
+			Role:       "tool",
+			ToolCallID: call.ID,
+			Content:    result,
+		})
+	}
+	return reads
 }
 
 // ListModels returns the chat-capable models available on the LLM backend.
