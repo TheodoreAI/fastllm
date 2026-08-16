@@ -54,6 +54,22 @@ go build -o fastllm.exe ./cmd/server
 
 Visit http://localhost:8080.
 
+`cmd/server/rsrc_windows_*.syso` embed the app icon (`cmd/server/icon/fastllm.ico`)
+into `fastllm.exe` on Windows builds — `go build` picks them up automatically,
+nothing extra to run. Regenerate them after changing the icon with:
+
+```
+cd cmd/server
+go run github.com/tc-hib/go-winres@latest simply --icon icon/fastllm.ico
+```
+
+## Launching like a regular app (Windows)
+
+Double-click `start-fastllm.vbs` (or the Desktop shortcut it's used to create)
+to start the server with no console window and auto-open the browser. It
+detects an already-running instance instead of starting a duplicate. See
+`start.bat` for the underlying logic.
+
 ## Configuration (env vars)
 
 | Var | Default | Purpose |
