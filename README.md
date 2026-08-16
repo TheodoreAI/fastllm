@@ -4,6 +4,11 @@ A minimal, fast AnythingLLM-style chat app: Go backend (streaming chat + RAG),
 React frontend, SQLite storage, in-memory vector search. Ships as a single
 binary with the frontend embedded.
 
+Features: model selection (auto-discovered from Ollama), retrieval-augmented
+chat with per-answer source attribution, pasted-text and file indexing,
+saved skills (named system-prompt presets), and Markdown/LaTeX/syntax-
+highlighted chat rendering.
+
 ## Architecture
 
 - `cmd/server` — entry point, wires everything together

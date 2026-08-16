@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"fastllm/internal/llm"
@@ -34,6 +35,7 @@ func New(db *sql.DB, llmClient *llm.Client, vec *vector.Store) *Handler {
 type chatRequest struct {
 	Message string `json:"message"`
 	Model   string `json:"model"`
+	SkillID int64  `json:"skill_id"`
 }
 
 // Chat streams the assistant's reply back to the client as Server-Sent
@@ -52,7 +54,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	messages, sources := h.buildPrompt(ctx, req.Message)
+	messages, sources := h.buildPrompt(ctx, req.Message, req.SkillID)
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -99,9 +101,17 @@ type source struct {
 
 // buildPrompt embeds the user's question, retrieves the most relevant
 // chunks from the vector store, and assembles the full message list. It
-// also returns the chunks that were retrieved, for display in the UI.
-func (h *Handler) buildPrompt(ctx context.Context, question string) ([]llm.Message, []source) {
-	messages := []llm.Message{{Role: "system", Content: systemPrompt}}
+// also returns the chunks that were retrieved, for display in the UI. If
+// skillID is non-zero and resolves to a saved skill, that skill's prompt
+// replaces the default system prompt.
+func (h *Handler) buildPrompt(ctx context.Context, question string, skillID int64) ([]llm.Message, []source) {
+	prompt := systemPrompt
+	if skillID != 0 {
+		if s, err := store.GetSkill(h.DB, defaultWorkspace, skillID); err == nil {
+			prompt = s.Prompt
+		}
+	}
+	messages := []llm.Message{{Role: "system", Content: prompt}}
 	var sources []source
 
 	if h.LLM.EmbedModel != "" {
@@ -158,6 +168,52 @@ func (h *Handler) ListDocuments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, docs)
+}
+
+type skillRequest struct {
+	Name   string `json:"name"`
+	Prompt string `json:"prompt"`
+}
+
+// ListSkills returns every saved skill (named system-prompt preset).
+func (h *Handler) ListSkills(w http.ResponseWriter, r *http.Request) {
+	skills, err := store.ListSkills(h.DB, defaultWorkspace)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, skills)
+}
+
+// CreateSkill saves a new named system-prompt preset.
+func (h *Handler) CreateSkill(w http.ResponseWriter, r *http.Request) {
+	var req skillRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil ||
+		strings.TrimSpace(req.Name) == "" || strings.TrimSpace(req.Prompt) == "" {
+		http.Error(w, "name and prompt are required", http.StatusBadRequest)
+		return
+	}
+
+	id, err := store.SaveSkill(h.DB, defaultWorkspace, req.Name, req.Prompt)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"id": id})
+}
+
+// DeleteSkill removes a saved skill by ID.
+func (h *Handler) DeleteSkill(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid skill id", http.StatusBadRequest)
+		return
+	}
+	if err := store.DeleteSkill(h.DB, defaultWorkspace, id); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) ListMessages(w http.ResponseWriter, r *http.Request) {

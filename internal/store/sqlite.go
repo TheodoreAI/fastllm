@@ -34,6 +34,14 @@ CREATE TABLE IF NOT EXISTS chunks (
 	content TEXT NOT NULL,
 	embedding TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS skills (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	workspace_id TEXT NOT NULL,
+	name TEXT NOT NULL,
+	prompt TEXT NOT NULL,
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 `
 
 type Message struct {
@@ -129,6 +137,52 @@ func ListDocuments(db *sql.DB, workspaceID string) ([]Document, error) {
 		out = append(out, d)
 	}
 	return out, rows.Err()
+}
+
+// Skill is a saved, reusable system prompt.
+type Skill struct {
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	Prompt    string `json:"prompt"`
+	CreatedAt string `json:"created_at"`
+}
+
+func SaveSkill(db *sql.DB, workspaceID, name, prompt string) (int64, error) {
+	res, err := db.Exec(`INSERT INTO skills (workspace_id, name, prompt) VALUES (?, ?, ?)`, workspaceID, name, prompt)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+func ListSkills(db *sql.DB, workspaceID string) ([]Skill, error) {
+	rows, err := db.Query(`SELECT id, name, prompt, created_at FROM skills WHERE workspace_id = ? ORDER BY id ASC`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []Skill{}
+	for rows.Next() {
+		var s Skill
+		if err := rows.Scan(&s.ID, &s.Name, &s.Prompt, &s.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+func GetSkill(db *sql.DB, workspaceID string, id int64) (Skill, error) {
+	var s Skill
+	err := db.QueryRow(`SELECT id, name, prompt, created_at FROM skills WHERE workspace_id = ? AND id = ?`, workspaceID, id).
+		Scan(&s.ID, &s.Name, &s.Prompt, &s.CreatedAt)
+	return s, err
+}
+
+func DeleteSkill(db *sql.DB, workspaceID string, id int64) error {
+	_, err := db.Exec(`DELETE FROM skills WHERE workspace_id = ? AND id = ?`, workspaceID, id)
+	return err
 }
 
 // LoadAllChunks reads every chunk back out, used to repopulate the
