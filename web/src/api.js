@@ -105,6 +105,15 @@ export function fetchFileAccessSettings() {
     .catch(() => ({ root: '', read_enabled: false, write_enabled: false }))
 }
 
+// Opens a native OS folder-picker dialog on the machine running the
+// server (not the browser) and resolves with the chosen absolute path.
+// The request blocks server-side until the user picks a folder or
+// cancels the dialog, so this can take a while — that's expected.
+export function browseForFolder() {
+  return fetch('/api/settings/files/browse', { method: 'POST' })
+    .then((r) => okJson(r, 'browseForFolder'))
+}
+
 export function quitServer() {
   return fetch('/api/quit', { method: 'POST' })
 }
@@ -185,6 +194,8 @@ export async function streamChat({ message, model, skillId, conversationId, thin
         callbacks.onToolCall?.(payload)
       } else if (eventType === 'pending_write') {
         callbacks.onPendingWrite?.(payload)
+      } else if (eventType === 'build_check') {
+        callbacks.onBuildCheck?.(payload)
       } else if (eventType === 'error') {
         callbacks.onError?.(payload.error || 'The model backend returned an error.')
       } else if (payload.token) {
