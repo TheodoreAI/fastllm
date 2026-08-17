@@ -8,6 +8,7 @@ import ChatPanel from './components/ChatPanel'
 import EditorView from './components/EditorView'
 import ConfirmDeleteModal from './components/ConfirmDeleteModal'
 import SettingsModal from './components/SettingsModal'
+import ScreenshotPreviewModal from './components/ScreenshotPreviewModal'
 import DraggableSection from './components/DraggableSection'
 import SectionIcon from './components/SectionIcon'
 import { useTheme } from './useTheme'
@@ -38,6 +39,8 @@ import {
   uploadFile,
   streamChat,
   quitServer,
+  isWails,
+  captureScreenshot,
   approveWrite,
   rejectWrite,
 } from './api'
@@ -80,6 +83,8 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [quitConfirmOpen, setQuitConfirmOpen] = useState(false)
   const [quitting, setQuitting] = useState(false)
+  const [screenshotBlob, setScreenshotBlob] = useState(null)
+  const [capturingScreenshot, setCapturingScreenshot] = useState(false)
   const [serverStopped, setServerStopped] = useState(false)
   const [ragSettings, setRagSettings] = useState(null)
   const [fileAccessSettings, setFileAccessSettings] = useState({ root: '', read_enabled: false, write_enabled: false })
@@ -455,6 +460,20 @@ export default function App() {
     setServerStopped(true)
   }
 
+  async function handleScreenshot() {
+    setCapturingScreenshot(true)
+    try {
+      const blob = await captureScreenshot()
+      setScreenshotBlob(blob)
+    } catch {
+      // Nothing to recover into beyond leaving the preview modal unopened
+      // — mirrors this codebase's other fetch-failure handling (e.g.
+      // confirmQuit above), no separate error UI for a capture failure.
+    } finally {
+      setCapturingScreenshot(false)
+    }
+  }
+
   async function confirmDeleteSkill() {
     const id = skillToDelete
     setSkillToDelete(null)
@@ -544,6 +563,17 @@ export default function App() {
           </button>
         </div>
         <div className="titlebar-actions">
+          {isWails() && (
+            <button
+              type="button"
+              className="titlebar-btn"
+              title="Screenshot"
+              disabled={capturingScreenshot}
+              onClick={handleScreenshot}
+            >
+              📷
+            </button>
+          )}
           <button
             type="button"
             className="titlebar-btn"
@@ -741,6 +771,10 @@ export default function App() {
           onClearConversations={handleClearConversations}
           onClose={() => setSettingsOpen(false)}
         />
+      )}
+
+      {screenshotBlob && (
+        <ScreenshotPreviewModal blob={screenshotBlob} onClose={() => setScreenshotBlob(null)} />
       )}
     </div>
   )

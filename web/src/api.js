@@ -126,7 +126,7 @@ export function browseForFolder() {
 // both the plain-browser build (cmd/server) and the desktop build
 // (cmd/desktop) without adding a new frontend dependency, mirroring how
 // the old Tauri branch detected window.__TAURI__ for the same purpose.
-function isWails() {
+export function isWails() {
   return typeof window !== 'undefined' && typeof window.runtime?.Quit === 'function'
 }
 
@@ -141,6 +141,17 @@ export function quitServer() {
     return Promise.resolve()
   }
   return fetch('/api/quit', { method: 'POST' })
+}
+
+// GET /api/screenshot only exists on cmd/desktop's mux (see
+// cmd/desktop/main.go's screenshotHandler) — a plain browser tab has no
+// OS window to capture, so this is only ever called from behind an
+// isWails() check.
+export function captureScreenshot() {
+  return fetch('/api/screenshot').then((r) => {
+    if (!r.ok) throw new Error(`captureScreenshot failed: ${r.status}`)
+    return r.blob()
+  })
 }
 
 export function fetchEditorTree() {

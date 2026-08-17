@@ -924,7 +924,8 @@ body {
 }
 
 .modal-actions .btn-secondary,
-.modal-actions .btn-danger {
+.modal-actions .btn-danger,
+.modal-actions .btn-primary {
   width: auto;
   margin-top: 0;
   padding: 7px 14px;
@@ -943,6 +944,27 @@ body {
 
 .btn-danger:hover {
   filter: brightness(1.1);
+}
+
+/* ---------- screenshot ---------- */
+
+.screenshot-preview-modal {
+  width: min(720px, calc(100vw - 40px));
+}
+
+.screenshot-preview-frame {
+  max-height: min(520px, calc(100vh - 220px));
+  overflow: auto;
+  margin-bottom: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-chat);
+}
+
+.screenshot-preview-frame img {
+  display: block;
+  width: 100%;
+  height: auto;
 }
 
 /* ---------- chat ---------- */

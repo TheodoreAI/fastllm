@@ -11,8 +11,10 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 
 	"fastllm/internal/appserver"
+	"fastllm/internal/screenshot"
 	"fastllm/internal/terminal"
 
 	"github.com/wailsapp/wails/v2"
@@ -25,6 +27,11 @@ import (
 // specifically — Wails' lock is a named OS mutex, so this just needs to
 // be unique to fastllm, not globally unique in any stronger sense.
 const singleInstanceID = "fastllm-desktop-9f1e6b2a"
+
+// appTitle is the native window's title — used both to set it via Wails'
+// options.App and to find the window again for screenshot.CaptureWindow,
+// so the two can never drift apart.
+const appTitle = "fastllm"
 
 func main() {
 	cfg, err := appserver.ConfigFromEnv()
@@ -48,10 +55,16 @@ func main() {
 	}
 	defer built.DB.Close()
 
+	// Registered directly here rather than in internal/appserver — real
+	// window capture only means something for this Wails-native
+	// entrypoint, so it shouldn't be threaded through the shared package
+	// cmd/server also calls.
+	built.Mux.HandleFunc("GET /api/screenshot", screenshotHandler)
+
 	app := &desktopApp{registry: built.TerminalRegistry}
 
 	err = wails.Run(&options.App{
-		Title:  "fastllm",
+		Title:  appTitle,
 		Width:  1280,
 		Height: 860,
 		AssetServer: &assetserver.Options{
@@ -115,4 +128,19 @@ func (a *desktopApp) beforeClose(ctx context.Context) (prevent bool) {
 // whole process dies before this even runs.
 func (a *desktopApp) shutdown(ctx context.Context) {
 	a.registry.CloseAll()
+}
+
+// screenshotHandler captures fastllm's own native window (see
+// internal/screenshot) and returns it as a PNG. Only meaningful here —
+// cmd/server's browser tab has no OS window handle to capture, which is
+// why this route only exists on the desktop mux, not the shared one
+// internal/appserver builds.
+func screenshotHandler(w http.ResponseWriter, r *http.Request) {
+	png, err := screenshot.CaptureWindow(appTitle)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Write(png)
 }
