@@ -51,7 +51,11 @@ mtime_of() {
 # held by something else entirely, leave it alone.
 PORT_PID="$(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | head -n1)"
 if [ -n "$PORT_PID" ]; then
-    PROC_PATH="$(lsof -p "$PORT_PID" 2>/dev/null | awk -v p="$PORT_PID" '$2==p && $NF ~ /fastllm$/ {print $NF; exit}')"
+    # The "txt" fd row is the process's own executable — lsof -p's other
+    # rows (open sockets, cwd, etc.) don't carry a filesystem path in NAME
+    # at all, so matching on any row ending in "fastllm" would either
+    # miss the real path or match the wrong row.
+    PROC_PATH="$(lsof -p "$PORT_PID" 2>/dev/null | awk '$4=="txt" {print $NF; exit}')"
     OUR_EXE_REAL="$(cd "$APPDIR" && [ -f fastllm ] && pwd)/fastllm"
     if [ -z "$PROC_PATH" ] || [ "$PROC_PATH" != "$OUR_EXE_REAL" ]; then
         echo "Port $PORT is in use by something other than fastllm — opening it as-is."
