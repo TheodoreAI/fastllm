@@ -177,7 +177,7 @@ export default function App() {
 
     setInput('')
     setStreaming(true)
-    setMessages((prev) => [...prev, { role: 'user', content: text }, { role: 'assistant', content: '', sources: [], reasoning: '', toolCalls: [], pendingWrites: [] }])
+    setMessages((prev) => [...prev, { role: 'user', content: text }, { role: 'assistant', content: '', sources: [], reasoning: '', toolCalls: [], pendingWrites: [], buildChecks: [] }])
 
     const controller = new AbortController()
     abortControllerRef.current = controller
@@ -235,6 +235,17 @@ export default function App() {
               next[next.length - 1] = {
                 ...last,
                 pendingWrites: [...(last.pendingWrites || []), { ...write, status: 'pending' }],
+              }
+              return next
+            })
+          },
+          onBuildCheck: (check) => {
+            setMessages((prev) => {
+              const next = [...prev]
+              const last = next[next.length - 1]
+              next[next.length - 1] = {
+                ...last,
+                buildChecks: [...(last.buildChecks || []), check],
               }
               return next
             })

@@ -194,6 +194,8 @@ export async function streamChat({ message, model, skillId, conversationId, thin
         callbacks.onToolCall?.(payload)
       } else if (eventType === 'pending_write') {
         callbacks.onPendingWrite?.(payload)
+      } else if (eventType === 'build_check') {
+        callbacks.onBuildCheck?.(payload)
       } else if (eventType === 'error') {
         callbacks.onError?.(payload.error || 'The model backend returned an error.')
       } else if (payload.token) {

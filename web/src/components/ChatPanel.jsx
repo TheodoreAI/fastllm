@@ -91,6 +91,18 @@ export default function ChatPanel({
                 ))}
               </ul>
             )}
+            {m.buildChecks && m.buildChecks.length > 0 && (
+              <ul className="tool-calls build-checks">
+                {m.buildChecks.map((check, bi) => (
+                  <li key={bi} className={check.passed ? 'is-ok' : 'is-error'}>
+                    <details>
+                      <summary>{check.passed ? '✅ Build check passed' : '❌ Build check failed'}</summary>
+                      <pre className="build-check-output">{check.output || '(no output)'}</pre>
+                    </details>
+                  </li>
+                ))}
+              </ul>
+            )}
             <MessageContent content={m.content} />
             {m.pendingWrites && m.pendingWrites.length > 0 && (
               <div className="pending-writes">

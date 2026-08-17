@@ -936,6 +936,36 @@ body {
   font-size: 0.95em;
 }
 
+.build-checks li {
+  display: block;
+}
+
+.build-checks li.is-ok summary {
+  color: var(--success);
+}
+
+.build-checks li.is-error summary {
+  color: var(--danger);
+}
+
+.build-checks summary {
+  cursor: pointer;
+}
+
+.build-check-output {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  font-family: ui-monospace, 'SF Mono', Consolas, 'Cascadia Code', monospace;
+  font-size: 0.85em;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
 .pending-writes {
   margin: 0 0 10px;
   display: flex;

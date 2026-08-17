@@ -12,17 +12,27 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"os/user"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 
+	"fastllm/internal/buildcheck"
 	"fastllm/internal/files"
 	"fastllm/internal/folderpicker"
 	"fastllm/internal/llm"
 	"fastllm/internal/store"
 	"fastllm/internal/vector"
 )
+
+// maxToolRounds caps how many tool round-trips (propose write, run_build,
+// see failure, propose a corrected write, ...) a single chat turn gets
+// before whatever the model has produced is shown as-is. Bounds worst-case
+// turn latency on local hardware to a handful of non-streaming Chat calls
+// plus build time, rather than letting a model loop indefinitely.
+const maxToolRounds = 4
 
 const defaultWorkspace = "default"
 
@@ -72,6 +82,24 @@ var writeFileTool = llm.Tool{
 				},
 			},
 			"required": []string{"path", "content"},
+		},
+	},
+}
+
+// runBuildTool lets the model verify its own proposed (not yet approved)
+// writes before finishing its turn. Only advertised once at least one
+// write_file call has been made this turn — see runFileTools — since
+// there's nothing to check otherwise. Runs against a throwaway copy of
+// the project with pending writes overlaid; never touches the real
+// sandbox root (see internal/buildcheck).
+var runBuildTool = llm.Tool{
+	Type: "function",
+	Function: llm.ToolFunction{
+		Name:        "run_build",
+		Description: "Run \"go build ./...\" against the project with your proposed (not yet approved) file writes applied, to check they compile before finishing. Only available for Go projects, and only after you've proposed at least one write_file change. Returns the build output. Does not affect real files.",
+		Parameters: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
 		},
 	},
 }
@@ -184,7 +212,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		effectiveModel = h.LLM.ChatModel
 	}
 	if h.Files.Enabled() && llm.SupportsTools(effectiveModel) {
-		reads, writes := h.runFileTools(ctx, req.Model, &messages, normalizeThinkLevel(req.ThinkLevel))
+		reads, writes, buildChecks := h.runFileTools(ctx, req.Model, &messages, normalizeThinkLevel(req.ThinkLevel))
 		for _, fr := range reads {
 			payload, _ := json.Marshal(fr)
 			fmt.Fprintf(w, "event: tool_call\ndata: %s\n\n", payload)
@@ -193,6 +221,11 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		for _, pw := range writes {
 			payload, _ := json.Marshal(pw)
 			fmt.Fprintf(w, "event: pending_write\ndata: %s\n\n", payload)
+			flusher.Flush()
+		}
+		for _, bc := range buildChecks {
+			payload, _ := json.Marshal(bc)
+			fmt.Fprintf(w, "event: build_check\ndata: %s\n\n", payload)
 			flusher.Flush()
 		}
 	}
@@ -311,98 +344,142 @@ type fileRead struct {
 	Error     string `json:"error,omitempty"`
 }
 
-// runFileTools makes a single non-streaming pre-flight request with the
-// read_file (and, if enabled, write_file) tools declared. If the model
-// requests one or more calls, each is resolved and the results are
-// appended to *messages as a tool round-trip (the assistant's tool-call
-// message, followed by one tool-result message per call) so the
-// subsequent streamed answer can see the outcome. Models without tool
-// support, or that choose not to call a tool, leave messages untouched.
+// buildCheckReport reports one run_build call the model made against its
+// own pending writes, for display in the UI.
+type buildCheckReport struct {
+	Passed bool   `json:"passed"`
+	Output string `json:"output"`
+}
+
+// runFileTools makes repeated non-streaming pre-flight requests (up to
+// maxToolRounds) with the read_file (and, if enabled, write_file and
+// run_build) tools declared, appending each round's tool-call and
+// tool-result messages to *messages so the subsequent streamed answer can
+// see the outcome. Models without tool support, or that choose not to
+// call a tool, leave messages untouched after the first round.
 //
 // read_file is executed immediately (read-only, low risk). write_file is
 // never executed here — it's recorded as a PendingWrite awaiting human
 // approval via the /api/writes endpoints, and the model is told exactly
 // that in its tool result, so its final answer can honestly say the
 // change is pending review rather than claiming it already happened.
-func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]llm.Message, thinkLevel string) ([]fileRead, []*PendingWrite) {
+// run_build lets the model check its own proposed writes compile before
+// finishing — it runs against a throwaway copy of the project with this
+// turn's pending writes overlaid (see internal/buildcheck), never the
+// real sandbox, so it's safe to offer without a separate approval step.
+func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]llm.Message, thinkLevel string) ([]fileRead, []*PendingWrite, []buildCheckReport) {
 	// Snapshot once so every check below (which tools to advertise, whether
 	// writes are allowed, which root a proposed write is validated/diffed
-	// against) agrees with itself for this one request, even if a
+	// against) agrees with itself for this whole turn, even if a
 	// concurrent PUT /api/settings/files changes config mid-flight.
 	root, writesEnabled := h.Files.Snapshot()
-
-	tools := []llm.Tool{readFileTool}
-	if writesEnabled {
-		tools = append(tools, writeFileTool)
-	}
-
-	reply, err := h.LLM.Chat(ctx, model, *messages, tools, thinkLevel)
-	if err != nil || len(reply.ToolCalls) == 0 {
-		return nil, nil
-	}
-
-	*messages = append(*messages, reply)
+	_, statErr := os.Stat(filepath.Join(root, "go.mod"))
+	hasGoModule := statErr == nil
 
 	var reads []fileRead
 	var pending []*PendingWrite
-	for _, call := range reply.ToolCalls {
-		switch call.Function.Name {
-		case "read_file":
-			var args struct {
-				Path string `json:"path"`
-			}
-			_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+	var buildChecks []buildCheckReport
+	// pendingByPath tracks the latest proposed content per path this turn
+	// (a later write_file call for the same path supersedes an earlier
+	// one), used to build the run_build overlay.
+	pendingByPath := map[string]string{}
 
-			var result string
-			fr := fileRead{Path: args.Path}
-			content, truncated, readErr := h.Files.Read(args.Path)
-			if readErr != nil {
-				fr.Error = readErr.Error()
-				result = "Error reading file: " + readErr.Error()
-			} else {
-				fr.Truncated = truncated
-				result = content
-				if truncated {
-					result += "\n\n[truncated]"
+	for round := 0; round < maxToolRounds; round++ {
+		tools := []llm.Tool{readFileTool}
+		if writesEnabled {
+			tools = append(tools, writeFileTool)
+			if hasGoModule && len(pendingByPath) > 0 {
+				tools = append(tools, runBuildTool)
+			}
+		}
+
+		reply, err := h.LLM.Chat(ctx, model, *messages, tools, thinkLevel)
+		if err != nil || len(reply.ToolCalls) == 0 {
+			return reads, pending, buildChecks
+		}
+
+		*messages = append(*messages, reply)
+
+		for _, call := range reply.ToolCalls {
+			switch call.Function.Name {
+			case "read_file":
+				var args struct {
+					Path string `json:"path"`
 				}
-			}
-			reads = append(reads, fr)
-			*messages = append(*messages, llm.Message{Role: "tool", ToolCallID: call.ID, Content: result})
+				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
 
-		case "write_file":
-			var args struct {
-				Path    string `json:"path"`
-				Content string `json:"content"`
-			}
-			_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
-
-			var result string
-			if !writesEnabled {
-				result = "Error: file writes are not enabled."
-			} else if len(args.Content) > files.MaxWriteBytes {
-				result = fmt.Sprintf("Error: proposed content is too large (%d bytes, max %d).", len(args.Content), files.MaxWriteBytes)
-			} else if _, err := h.Files.ResolveForWrite(args.Path); err != nil {
-				result = "Error: " + err.Error()
-			} else {
-				existing, exists, _ := h.Files.ExistingContent(args.Path)
-				pw := &PendingWrite{
-					ID:              newWriteID(),
-					Path:            args.Path,
-					NewContent:      args.Content,
-					ExistingContent: existing,
-					FileExists:      exists,
-					root:            root,
+				var result string
+				fr := fileRead{Path: args.Path}
+				content, truncated, readErr := h.Files.Read(args.Path)
+				if readErr != nil {
+					fr.Error = readErr.Error()
+					result = "Error reading file: " + readErr.Error()
+				} else {
+					fr.Truncated = truncated
+					result = content
+					if truncated {
+						result += "\n\n[truncated]"
+					}
 				}
-				h.writesMu.Lock()
-				h.writes[pw.ID] = pw
-				h.writesMu.Unlock()
-				pending = append(pending, pw)
-				result = fmt.Sprintf("Change to %q proposed and awaiting human approval (id: %s). Do not tell the user it has been written yet — it is pending review.", args.Path, pw.ID)
+				reads = append(reads, fr)
+				*messages = append(*messages, llm.Message{Role: "tool", ToolCallID: call.ID, Content: result})
+
+			case "write_file":
+				var args struct {
+					Path    string `json:"path"`
+					Content string `json:"content"`
+				}
+				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+
+				var result string
+				if !writesEnabled {
+					result = "Error: file writes are not enabled."
+				} else if len(args.Content) > files.MaxWriteBytes {
+					result = fmt.Sprintf("Error: proposed content is too large (%d bytes, max %d).", len(args.Content), files.MaxWriteBytes)
+				} else if _, err := h.Files.ResolveForWrite(args.Path); err != nil {
+					result = "Error: " + err.Error()
+				} else {
+					existing, exists, _ := h.Files.ExistingContent(args.Path)
+					pw := &PendingWrite{
+						ID:              newWriteID(),
+						Path:            args.Path,
+						NewContent:      args.Content,
+						ExistingContent: existing,
+						FileExists:      exists,
+						root:            root,
+					}
+					h.writesMu.Lock()
+					h.writes[pw.ID] = pw
+					h.writesMu.Unlock()
+					pending = append(pending, pw)
+					pendingByPath[args.Path] = args.Content
+					result = fmt.Sprintf("Change to %q proposed and awaiting human approval (id: %s). Do not tell the user it has been written yet — it is pending review. You can call run_build to check it compiles before finishing.", args.Path, pw.ID)
+				}
+				*messages = append(*messages, llm.Message{Role: "tool", ToolCallID: call.ID, Content: result})
+
+			case "run_build":
+				var overlays []buildcheck.Overlay
+				for path, content := range pendingByPath {
+					overlays = append(overlays, buildcheck.Overlay{Path: path, Content: content})
+				}
+				result, err := buildcheck.Run(ctx, root, overlays)
+				var text string
+				switch {
+				case err != nil:
+					text = "Error running build check: " + err.Error()
+					buildChecks = append(buildChecks, buildCheckReport{Passed: false, Output: text})
+				case result.Passed:
+					text = "Build passed.\n\n" + result.Output
+					buildChecks = append(buildChecks, buildCheckReport{Passed: true, Output: result.Output})
+				default:
+					text = "Build failed:\n\n" + result.Output
+					buildChecks = append(buildChecks, buildCheckReport{Passed: false, Output: result.Output})
+				}
+				*messages = append(*messages, llm.Message{Role: "tool", ToolCallID: call.ID, Content: text})
 			}
-			*messages = append(*messages, llm.Message{Role: "tool", ToolCallID: call.ID, Content: result})
 		}
 	}
-	return reads, pending
+	return reads, pending, buildChecks
 }
 
 // takePendingWrite removes and returns a pending write by ID, or nil if
