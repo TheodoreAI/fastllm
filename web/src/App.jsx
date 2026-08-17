@@ -5,6 +5,7 @@ import ModelPicker from './components/ModelPicker'
 import SkillPanel from './components/SkillPanel'
 import KnowledgeBasePanel from './components/KnowledgeBasePanel'
 import ChatPanel from './components/ChatPanel'
+import EditorView from './components/EditorView'
 import ConfirmDeleteModal from './components/ConfirmDeleteModal'
 import SettingsModal from './components/SettingsModal'
 import DraggableSection from './components/DraggableSection'
@@ -14,6 +15,7 @@ import { useFontFamily } from './useFontFamily'
 import { useFontScale } from './useFontScale'
 import { useSectionOrder } from './useSectionOrder'
 import { useSidebarCollapsed } from './useSidebarCollapsed'
+import { useSplitWidth } from './useSplitWidth'
 import {
   fetchConversations,
   fetchMessages,
@@ -85,6 +87,9 @@ export default function App() {
   const [fontScale, setFontScale] = useFontScale()
   const [sectionOrder, moveSection] = useSectionOrder(DEFAULT_SECTION_ORDER)
   const [sidebarCollapsed, setSidebarCollapsed] = useSidebarCollapsed()
+  const [activeView, setActiveView] = useState('chat')
+  const [splitWidth, setSplitWidth] = useSplitWidth()
+  const splitContainerRef = useRef(null)
   const bottomRef = useRef(null)
   const fileInputRef = useRef(null)
   const folderInputRef = useRef(null)
@@ -144,6 +149,37 @@ export default function App() {
 
   function stopStreaming() {
     abortControllerRef.current?.abort()
+  }
+
+  // Drags the Chat|Editor split divider. Tracks mouse position directly
+  // against the split container's own bounding box rather than delta
+  // movement, so a fast drag can't desync from the cursor. Clamped to
+  // 20-80% so neither pane can be dragged down to nothing.
+  function handleSplitDragStart(e) {
+    e.preventDefault()
+    const container = splitContainerRef.current
+    if (!container) return
+
+    // Belt-and-suspenders alongside preventDefault: without this, a fast
+    // drag can still start a text-selection drag across the rest of the
+    // page (the mousedown target is a thin 5px divider, easy to graze
+    // rather than hit squarely) — force it off for the duration of the
+    // drag, then restore whatever the page's own default was.
+    const previousUserSelect = document.body.style.userSelect
+    document.body.style.userSelect = 'none'
+
+    function handleMove(moveEvent) {
+      const rect = container.getBoundingClientRect()
+      const fraction = (moveEvent.clientX - rect.left) / rect.width
+      setSplitWidth(Math.min(0.8, Math.max(0.2, fraction)))
+    }
+    function handleUp() {
+      window.removeEventListener('mousemove', handleMove)
+      window.removeEventListener('mouseup', handleUp)
+      document.body.style.userSelect = previousUserSelect
+    }
+    window.addEventListener('mousemove', handleMove)
+    window.addEventListener('mouseup', handleUp)
   }
 
   async function confirmDeleteConversation() {
@@ -482,6 +518,29 @@ export default function App() {
           <span className="dot green" />
         </div>
         <span className="titlebar-title">fastllm</span>
+        <div className="titlebar-tabs">
+          <button
+            type="button"
+            className={activeView === 'chat' ? 'is-active' : ''}
+            onClick={() => setActiveView('chat')}
+          >
+            Chat
+          </button>
+          <button
+            type="button"
+            className={activeView === 'editor' ? 'is-active' : ''}
+            onClick={() => setActiveView('editor')}
+          >
+            Editor
+          </button>
+          <button
+            type="button"
+            className={activeView === 'split' ? 'is-active' : ''}
+            onClick={() => setActiveView('split')}
+          >
+            Split
+          </button>
+        </div>
         <div className="titlebar-actions">
           <button
             type="button"
@@ -502,7 +561,14 @@ export default function App() {
         </div>
       </div>
 
-      <div className="body">
+      <div className="split-container" ref={splitContainerRef}>
+      <div
+        className="body"
+        style={{
+          display: activeView === 'chat' || activeView === 'split' ? undefined : 'none',
+          flex: activeView === 'split' ? `0 0 ${splitWidth * 100}%` : undefined,
+        }}
+      >
         <aside className={`sidebar ${sidebarCollapsed ? 'is-collapsed' : ''}`}>
           <button
             type="button"
@@ -600,6 +666,18 @@ export default function App() {
           onApproveWrite={handleApproveWrite}
           onRejectWrite={handleRejectWrite}
         />
+      </div>
+
+      {activeView === 'split' && (
+        <div className="split-divider" onMouseDown={handleSplitDragStart} />
+      )}
+
+      <div
+        className="editor-pane"
+        style={{ display: activeView === 'editor' || activeView === 'split' ? undefined : 'none' }}
+      >
+        <EditorView fileAccessSettings={fileAccessSettings} theme={theme} />
+      </div>
       </div>
 
       {conversationToDelete != null && (
