@@ -134,8 +134,13 @@ export function saveFileAccessSettings(settings) {
 }
 
 // Streams a chat response via SSE, invoking the provided callbacks as
-// events arrive. Returns once the stream completes.
-export async function streamChat({ message, model, skillId, conversationId, thinkLevel }, callbacks) {
+// events arrive. Returns once the stream completes. Pass `signal` (from
+// an AbortController) to let the caller cancel mid-stream — aborting the
+// fetch closes the underlying connection, which Go's http.Server turns
+// into context cancellation on the server, propagating all the way to
+// the in-flight request to the LLM backend (see llm.Client.StreamChat),
+// so this genuinely stops generation rather than just hiding it.
+export async function streamChat({ message, model, skillId, conversationId, thinkLevel }, callbacks, signal) {
   const res = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -146,6 +151,7 @@ export async function streamChat({ message, model, skillId, conversationId, thin
       conversation_id: conversationId ?? 0,
       think_level: thinkLevel || '',
     }),
+    signal,
   })
   if (!res.ok || !res.body) throw new Error(await res.text())
 

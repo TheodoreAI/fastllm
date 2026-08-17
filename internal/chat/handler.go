@@ -202,7 +202,13 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "event: reasoning\ndata: %s\n\n", payload)
 		flusher.Flush()
 	})
-	if err != nil {
+	// A client-initiated stop (the Stop button) cancels ctx, which surfaces
+	// here as a context-canceled error from StreamChat — that's an
+	// intentional stop, not a failure, so still save whatever partial
+	// answer was generated (same as a normal completion) instead of
+	// discarding it. Writing an SSE event at this point is a harmless
+	// no-op: the client already closed its end of the connection.
+	if err != nil && ctx.Err() == nil {
 		payload, _ := json.Marshal(map[string]string{"error": err.Error()})
 		fmt.Fprintf(w, "event: error\ndata: %s\n\n", payload)
 		flusher.Flush()

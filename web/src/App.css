@@ -196,6 +196,60 @@ body {
   display: flex;
   flex-direction: column;
   gap: 18px;
+  position: relative;
+  transition: width 0.15s ease, min-width 0.15s ease, padding 0.15s ease;
+}
+
+.sidebar.is-collapsed {
+  width: 56px;
+  min-width: 56px;
+  padding: 14px 8px;
+  align-items: center;
+  overflow-x: hidden;
+}
+
+.sidebar-collapse-toggle {
+  align-self: flex-end;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sidebar.is-collapsed .sidebar-collapse-toggle {
+  align-self: center;
+}
+
+.sidebar-collapse-toggle:hover {
+  background: rgba(128, 128, 128, 0.18);
+  color: var(--text);
+}
+
+.sidebar-icon-btn {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sidebar-icon-btn:hover {
+  background: color-mix(in srgb, var(--bg-panel), var(--text) 6%);
+  border-color: var(--border-strong);
 }
 
 /* ---------- draggable sidebar sections ---------- */
@@ -281,6 +335,43 @@ body {
 
 .model-select:disabled {
   opacity: 0.5;
+}
+
+.file-access-status {
+  margin-top: 8px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 0.6875rem;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.file-access-status:hover {
+  background: color-mix(in srgb, var(--bg-panel), var(--text) 6%);
+  color: var(--text-dim);
+}
+
+.file-access-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.file-access-dot.is-on {
+  background: var(--success);
+}
+
+.file-access-dot.is-off {
+  background: var(--text-faint);
 }
 
 .skill-select-row {
@@ -991,6 +1082,14 @@ body {
   padding: 9px 18px;
   border-radius: 999px;
   white-space: nowrap;
+}
+
+.composer .btn-stop {
+  background: var(--danger);
+}
+
+.composer .btn-stop:hover {
+  filter: brightness(1.1);
 }
 
 /* ---------- scrollbars (Linux/GTK + macOS overlay feel) ---------- */
