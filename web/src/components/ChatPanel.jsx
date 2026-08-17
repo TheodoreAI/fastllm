@@ -9,6 +9,7 @@ export default function ChatPanel({
   onInputChange,
   streaming,
   onSendMessage,
+  onStop,
   userDisplayName,
   onApproveWrite,
   onRejectWrite,
@@ -67,9 +68,15 @@ export default function ChatPanel({
           placeholder="Ask something…"
           disabled={streaming}
         />
-        <button type="submit" className="btn-primary" disabled={streaming || !input.trim()}>
-          {streaming ? 'Sending…' : 'Send'}
-        </button>
+        {streaming ? (
+          <button type="button" className="btn-primary btn-stop" onClick={onStop}>
+            ⏹ Stop
+          </button>
+        ) : (
+          <button type="submit" className="btn-primary" disabled={!input.trim()}>
+            Send
+          </button>
+        )}
       </form>
     </main>
   )
