@@ -45,6 +45,13 @@ export default function SettingsModal({
   const [dataStatus, setDataStatus] = useState('')
   const [browsing, setBrowsing] = useState(false)
 
+  // Drives disabling the read/write checkboxes and Save button before an
+  // invalid (checked-but-no-root) state can even be reached, rather than
+  // only rejecting it after the fact — see handleSaveFileAccess's
+  // pre-flight check below for the belt-and-suspenders case where root
+  // gets cleared again after a box was already checked.
+  const fileAccessRootEmpty = !fileAccessForm.root?.trim()
+
   useEffect(() => {
     setRagForm(ragSettings)
   }, [ragSettings])
@@ -111,6 +118,15 @@ export default function SettingsModal({
       }
       if (next.write_enabled && !next.read_enabled) {
         throw new Error('Write access requires read access to stay enabled.')
+      }
+      // Catch this before it ever reaches the server — the backend
+      // rejects the same condition, but only with a terse "root is
+      // required" message that doesn't say what to do about it. The
+      // checkboxes are also disabled while root is empty (see below), so
+      // this mainly guards someone re-clearing the field after checking
+      // a box.
+      if ((next.read_enabled || next.write_enabled) && !next.root) {
+        throw new Error('Choose a folder or type a path before enabling read/write access.')
       }
       await onSaveFileAccessSettings(next)
       setFileAccessStatus('Saved. File access updates apply immediately without a server restart.')
@@ -236,7 +252,20 @@ export default function SettingsModal({
                   type="text"
                   value={fileAccessForm.root ?? ''}
                   placeholder="Leave blank to disable"
-                  onChange={(e) => setFileAccessForm({ ...fileAccessForm, root: e.target.value })}
+                  onChange={(e) => {
+                    const root = e.target.value
+                    // Clearing the root also clears read/write, so the
+                    // visible state is never "checked but disabled" —
+                    // matches this field's own "Leave blank to disable"
+                    // placeholder text literally.
+                    const cleared = !root.trim()
+                    setFileAccessForm((prev) => ({
+                      ...prev,
+                      root,
+                      read_enabled: cleared ? false : prev.read_enabled,
+                      write_enabled: cleared ? false : prev.write_enabled,
+                    }))
+                  }}
                 />
                 <button type="button" className="btn-secondary" onClick={handleBrowseForFolder} disabled={browsing}>
                   {browsing ? 'Waiting for dialog…' : 'Choose folder'}
@@ -246,24 +275,37 @@ export default function SettingsModal({
             <p className="settings-hint">
               "Choose folder" opens a native folder picker on this machine (fastllm's server and browser tab run on the same computer), so the path it fills in is real and ready to use. You can also type or paste a path directly.
             </p>
-            <label className="settings-field checkbox-field settings-check-row">
+            <label
+              className="settings-field checkbox-field settings-check-row"
+              title={fileAccessRootEmpty ? 'Choose a folder or type a path first' : ''}
+            >
               <input
                 type="checkbox"
                 checked={!!fileAccessForm.read_enabled}
+                disabled={fileAccessRootEmpty}
                 onChange={(e) => setFileAccessForm({ ...fileAccessForm, read_enabled: e.target.checked, write_enabled: e.target.checked ? fileAccessForm.write_enabled : false })}
               />
               <span>Allow reading files</span>
             </label>
-            <label className="settings-field checkbox-field settings-check-row">
+            <label
+              className="settings-field checkbox-field settings-check-row"
+              title={fileAccessRootEmpty ? 'Choose a folder or type a path first' : ''}
+            >
               <input
                 type="checkbox"
                 checked={!!fileAccessForm.write_enabled}
-                disabled={!fileAccessForm.read_enabled}
+                disabled={fileAccessRootEmpty || !fileAccessForm.read_enabled}
                 onChange={(e) => setFileAccessForm({ ...fileAccessForm, write_enabled: e.target.checked })}
               />
               <span>Allow writing files</span>
             </label>
-            <button type="submit" className="btn-primary">Save file access</button>
+            <button
+              type="submit"
+              className="btn-primary"
+              disabled={(!!fileAccessForm.read_enabled || !!fileAccessForm.write_enabled) && fileAccessRootEmpty}
+            >
+              Save file access
+            </button>
             {fileAccessStatus && <p className="status">{fileAccessStatus}</p>}
           </form>
         </div>

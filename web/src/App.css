@@ -2455,6 +2455,23 @@ body {
   margin: 0;
 }
 
+.settings-check-row input[type='checkbox']:disabled {
+  /* accent-color alone doesn't reliably dim a disabled checkbox across
+     browsers/WebView2 — without this it can look identical to an
+     enabled one, which is exactly what made the file-access checkboxes
+     read as clickable when they weren't. */
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.settings-check-row:has(input:disabled) {
+  cursor: not-allowed;
+}
+
+.settings-check-row:has(input:disabled) span {
+  color: var(--text-dim);
+}
+
 .settings-check-row span {
   color: var(--text);
   font-size: 0.95rem;
