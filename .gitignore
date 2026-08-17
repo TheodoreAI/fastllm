@@ -6,3 +6,9 @@ web/node_modules/
 web/dist/
 .env
 fastllm_terminal_test.exe
+
+# Wails desktop build output and generated bindings (regenerate via
+# `wails build` / `wails dev` in cmd/desktop — see internal/appserver)
+cmd/desktop/build/bin/
+web/wailsjs/
+web/package.json.md5
