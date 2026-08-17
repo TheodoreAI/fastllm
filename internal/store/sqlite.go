@@ -529,6 +529,72 @@ func SaveFileAccessSettings(db *sql.DB, s FileAccessSettings) error {
 	return err
 }
 
+// TerminalSettings controls whether the interactive PowerShell terminal
+// panel is reachable at all. Unlike file access there's no sandbox for a
+// shell to be confined to — enabling it grants full command execution as
+// whatever OS user runs the server — so this is a single deliberate
+// on/off switch, not a set of scoped permissions.
+type TerminalSettings struct {
+	Enabled bool `json:"enabled"`
+}
+
+var DefaultTerminalSettings = TerminalSettings{}
+
+const settingTerminal = "terminal"
+
+// GetTerminalSettings loads the persisted terminal-enabled flag, or the
+// zero-value default (disabled) when no saved config exists yet.
+func GetTerminalSettings(db *sql.DB) (TerminalSettings, error) {
+	s := DefaultTerminalSettings
+	var value string
+	err := db.QueryRow(`SELECT value FROM settings WHERE key = ?`, settingTerminal).Scan(&value)
+	if err == sql.ErrNoRows {
+		return s, nil
+	}
+	if err != nil {
+		return s, err
+	}
+	if err := json.Unmarshal([]byte(value), &s); err != nil {
+		return s, err
+	}
+	return s, nil
+}
+
+const terminalSeededFlagKey = "seeded_terminal_from_env"
+
+// SeedTerminalSettingsFromEnv writes the FASTLLM_TERMINAL_ENABLED env var
+// into the persisted terminal settings exactly once, the first time the
+// server ever starts with this database — mirrors
+// SeedFileAccessSettingsFromEnv's "seeded once, then the UI wins" idiom so
+// a later in-UI disable isn't silently overwritten by the env var again on
+// the next restart.
+func SeedTerminalSettingsFromEnv(db *sql.DB, enabled bool) error {
+	var done string
+	err := db.QueryRow(`SELECT value FROM meta WHERE key = ?`, terminalSeededFlagKey).Scan(&done)
+	if err == nil {
+		return nil // already seeded (or explicitly saved since) — leave it alone
+	}
+	if err != sql.ErrNoRows {
+		return err
+	}
+
+	if err := SaveTerminalSettings(db, TerminalSettings{Enabled: enabled}); err != nil {
+		return err
+	}
+	_, err = db.Exec(`INSERT INTO meta (key, value) VALUES (?, '1')`, terminalSeededFlagKey)
+	return err
+}
+
+// SaveTerminalSettings persists the live terminal-enabled flag.
+func SaveTerminalSettings(db *sql.DB, s TerminalSettings) error {
+	payload, err := json.Marshal(s)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, settingTerminal, string(payload))
+	return err
+}
+
 // SaveRAGSettings persists the given RAG settings, validating that they're
 // sane (positive sizes, overlap smaller than the chunk itself).
 func SaveRAGSettings(db *sql.DB, s RAGSettings) error {

@@ -71,7 +71,21 @@ func main() {
 	if fileReader.WritesEnabled() {
 		log.Printf("file-write tool enabled (manual approval required for every write)")
 	}
-	handler := chat.New(db, llmClient, vecStore, fileReader)
+
+	if err := store.SeedTerminalSettingsFromEnv(db, terminalEnabled); err != nil {
+		log.Printf("seed terminal settings from env: %v", err)
+	}
+	terminalSettings, err := store.GetTerminalSettings(db)
+	if err != nil {
+		log.Printf("load terminal settings: %v", err)
+		terminalSettings = store.DefaultTerminalSettings
+	}
+	terminalGate := terminal.NewGate(terminalSettings.Enabled)
+	if terminalGate.Enabled() {
+		log.Printf("terminal enabled — /api/terminal/ws will spawn an interactive PowerShell session for any loopback connection")
+	}
+
+	handler := chat.New(db, llmClient, vecStore, fileReader, terminalGate)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/chat", handler.Chat)
@@ -86,6 +100,8 @@ func main() {
 	mux.HandleFunc("PUT /api/settings/rag", handler.UpdateRAGSettings)
 	mux.HandleFunc("GET /api/settings/files", handler.GetFileAccessSettings)
 	mux.HandleFunc("PUT /api/settings/files", handler.UpdateFileAccessSettings)
+	mux.HandleFunc("GET /api/settings/terminal", handler.GetTerminalSettings)
+	mux.HandleFunc("PUT /api/settings/terminal", handler.UpdateTerminalSettings)
 	mux.HandleFunc("POST /api/settings/files/browse", handler.BrowseForFolder)
 	mux.HandleFunc("DELETE /api/conversations", handler.ClearConversations)
 	mux.HandleFunc("GET /api/skills", handler.ListSkills)
@@ -112,10 +128,7 @@ func main() {
 	mux.HandleFunc("POST /api/editor/git/branch", handler.EditorGitCreateBranch)
 
 	terminalRegistry := terminal.NewRegistry()
-	if terminalEnabled {
-		mux.HandleFunc("GET /api/terminal/ws", terminal.NewHandler(terminalRegistry))
-		log.Printf("terminal enabled (FASTLLM_TERMINAL_ENABLED set) — /api/terminal/ws will spawn an interactive PowerShell session for any loopback connection")
-	}
+	mux.HandleFunc("GET /api/terminal/ws", terminal.NewHandler(terminalRegistry, terminalGate))
 
 	server := &http.Server{Addr: addr, Handler: mux}
 	mux.HandleFunc("POST /api/quit", quitHandler(server, terminalRegistry))

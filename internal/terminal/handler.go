@@ -24,18 +24,25 @@ type controlMessage struct {
 	Rows int    `json:"rows"`
 }
 
-// NewHandler returns the /api/terminal/ws handler. Registering it at all
-// is the caller's responsibility, gated on FASTLLM_TERMINAL_ENABLED — this
-// function does not check that env var itself, since by the time a request
-// reaches here the route either exists or doesn't.
+// NewHandler returns the /api/terminal/ws handler. The route is always
+// registered (net/http.ServeMux can't un-register a route once the server
+// is running), so gate.Enabled() — backed by the live-toggleable Settings
+// UI value — is the actual enforcement point for whether the feature is
+// on at all. Disabled looks identical to "this route doesn't exist" (404)
+// rather than a 403, revealing nothing about the feature's existence.
 //
-// What this handler does enforce, independently of that gate: the request
-// must originate from loopback. FASTLLM_ADDR can bind to all interfaces
-// (its default, ":8080", does exactly that) with no enforcement anywhere
-// else in this app that the caller is local — a shell endpoint is the one
-// place that gap can't be inherited silently.
-func NewHandler(registry *Registry) http.HandlerFunc {
+// Independently of that gate, every request must also originate from
+// loopback. FASTLLM_ADDR can bind to all interfaces (its default, ":8080",
+// does exactly that) with no enforcement anywhere else in this app that
+// the caller is local — a shell endpoint is the one place that gap can't
+// be inherited silently. Both checks must pass; neither substitutes for
+// the other.
+func NewHandler(registry *Registry, gate *Gate) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !gate.Enabled() {
+			http.NotFound(w, r)
+			return
+		}
 		if !isLoopback(r.RemoteAddr) {
 			http.Error(w, "terminal is only reachable from localhost", http.StatusForbidden)
 			return

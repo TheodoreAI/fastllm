@@ -63,13 +63,27 @@ export default function TerminalView({ theme }) {
 
     connect(term, fitAddon)
 
+    // Deferred via requestAnimationFrame rather than called directly from
+    // the observer callback: fitAddon.fit() resizes the terminal's own
+    // canvas inside the observed container, which can itself trigger
+    // another ResizeObserver notification in the same frame — without
+    // deferring, this becomes a same-frame observe -> mutate -> observe
+    // loop that Chromium detects and kills the tab for ("ResizeObserver
+    // loop completed with undelivered notifications"), confirmed by
+    // reproducing a page crash without this guard.
+    let rafId = null
     const resizeObserver = new ResizeObserver(() => {
-      fitAddon.fit()
-      sendResize(term)
+      if (rafId != null) return
+      rafId = requestAnimationFrame(() => {
+        rafId = null
+        fitAddon.fit()
+        sendResize(term)
+      })
     })
     resizeObserver.observe(containerRef.current)
 
     return () => {
+      if (rafId != null) cancelAnimationFrame(rafId)
       resizeObserver.disconnect()
       socketRef.current?.close()
       term.dispose()

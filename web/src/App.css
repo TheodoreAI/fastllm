@@ -304,17 +304,6 @@ body {
   min-width: 0;
 }
 
-.editor-column {
-  flex-direction: column;
-}
-
-.editor-column-main {
-  flex: 1;
-  display: flex;
-  min-height: 0;
-  min-width: 0;
-}
-
 .terminal-panel-divider {
   flex: 0 0 5px;
   cursor: row-resize;
@@ -403,6 +392,18 @@ body {
   min-height: 0;
   min-width: 0;
   background: var(--bg-chat);
+}
+
+.terminal-disabled-state {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+  font-size: 0.8125rem;
+  background: var(--bg-chat);
+  text-align: center;
+  padding: 20px;
 }
 
 .terminal-surface {
@@ -2115,6 +2116,14 @@ body {
 }
 
 .editor-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.editor-main-content {
   flex: 1;
   display: flex;
   flex-direction: column;

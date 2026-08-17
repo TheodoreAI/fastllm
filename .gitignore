@@ -5,3 +5,4 @@ fastllm.log
 web/node_modules/
 web/dist/
 .env
+fastllm_terminal_test.exe
