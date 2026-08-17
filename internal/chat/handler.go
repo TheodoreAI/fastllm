@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"sync"
 
 	"fastllm/internal/files"
+	"fastllm/internal/folderpicker"
 	"fastllm/internal/llm"
 	"fastllm/internal/store"
 	"fastllm/internal/vector"
@@ -177,7 +179,11 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 	}
 
-	if h.Files.Enabled() {
+	effectiveModel := req.Model
+	if effectiveModel == "" {
+		effectiveModel = h.LLM.ChatModel
+	}
+	if h.Files.Enabled() && llm.SupportsTools(effectiveModel) {
 		reads, writes := h.runFileTools(ctx, req.Model, &messages, normalizeThinkLevel(req.ThinkLevel))
 		for _, fr := range reads {
 			payload, _ := json.Marshal(fr)
@@ -535,6 +541,28 @@ func (h *Handler) UpdateFileAccessSettings(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, settings)
+}
+
+// BrowseForFolder shows a native OS folder-picker dialog on the machine
+// running the server and returns the chosen absolute path. This exists
+// because a browser's own folder input can't expose a real filesystem
+// path (see internal/folderpicker) — only meaningful for a locally-run
+// server like this one, since the dialog appears on the server's own
+// desktop session, not the browser's.
+func (h *Handler) BrowseForFolder(w http.ResponseWriter, r *http.Request) {
+	path, err := folderpicker.Choose(r.Context())
+	if err != nil {
+		switch {
+		case errors.Is(err, folderpicker.ErrCancelled):
+			writeJSON(w, map[string]any{"cancelled": true})
+		case errors.Is(err, folderpicker.ErrUnsupported):
+			http.Error(w, "folder picker is only available when running fastllm on Windows", http.StatusNotImplemented)
+		default:
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+	writeJSON(w, map[string]any{"path": path})
 }
 
 // UpdateRAGSettings saves new chunking/retrieval settings. Chunk size and

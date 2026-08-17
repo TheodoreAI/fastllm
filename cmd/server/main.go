@@ -84,6 +84,7 @@ func main() {
 	mux.HandleFunc("PUT /api/settings/rag", handler.UpdateRAGSettings)
 	mux.HandleFunc("GET /api/settings/files", handler.GetFileAccessSettings)
 	mux.HandleFunc("PUT /api/settings/files", handler.UpdateFileAccessSettings)
+	mux.HandleFunc("POST /api/settings/files/browse", handler.BrowseForFolder)
 	mux.HandleFunc("DELETE /api/conversations", handler.ClearConversations)
 	mux.HandleFunc("GET /api/skills", handler.ListSkills)
 	mux.HandleFunc("POST /api/skills", handler.CreateSkill)

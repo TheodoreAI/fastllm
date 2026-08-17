@@ -1,6 +1,15 @@
 export default function ModelPicker({ models, model, onChange, fileAccessSettings, onOpenSettings }) {
   const readOn = !!fileAccessSettings?.read_enabled
   const writeOn = !!fileAccessSettings?.write_enabled
+  const selected = models.find((m) => m.name === model)
+  const modelSupportsFileTools = selected ? !!selected.supports_file_tools : true
+
+  let statusLabel = 'File access off'
+  if (readOn && !modelSupportsFileTools) {
+    statusLabel = 'Not supported by this model'
+  } else if (readOn) {
+    statusLabel = writeOn ? 'File read + write on' : 'File read only'
+  }
 
   return (
     <section className="panel">
@@ -20,8 +29,8 @@ export default function ModelPicker({ models, model, onChange, fileAccessSetting
       </select>
 
       <button type="button" className="file-access-status" onClick={onOpenSettings}>
-        <span className={`file-access-dot ${readOn ? 'is-on' : 'is-off'}`} />
-        {readOn ? (writeOn ? 'File read + write on' : 'File read only') : 'File access off'}
+        <span className={`file-access-dot ${readOn && modelSupportsFileTools ? 'is-on' : 'is-off'}`} />
+        {statusLabel}
       </button>
     </section>
   )

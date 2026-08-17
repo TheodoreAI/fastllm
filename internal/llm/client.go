@@ -72,8 +72,9 @@ type chatRequest struct {
 
 // Model describes one chat-capable model available on the backend.
 type Model struct {
-	Name         string   `json:"name"`
-	Capabilities []string `json:"capabilities,omitempty"`
+	Name              string   `json:"name"`
+	Capabilities      []string `json:"capabilities,omitempty"`
+	SupportsFileTools bool     `json:"supports_file_tools"`
 }
 
 type tagsResponse struct {
@@ -117,7 +118,7 @@ func (c *Client) ListModels(ctx context.Context) ([]Model, error) {
 		if containsString(m.Capabilities, "embedding") && !containsString(m.Capabilities, "completion") {
 			continue // embedding-only model, not usable for chat
 		}
-		out = append(out, Model{Name: m.Name, Capabilities: m.Capabilities})
+		out = append(out, Model{Name: m.Name, Capabilities: m.Capabilities, SupportsFileTools: SupportsTools(m.Name)})
 	}
 	return out, nil
 }
@@ -125,6 +126,31 @@ func (c *Client) ListModels(ctx context.Context) ([]Model, error) {
 func containsString(list []string, s string) bool {
 	for _, v := range list {
 		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+// toolCapableModelPrefixes lists the model families confirmed (by hand)
+// to reliably populate Ollama's tool_calls field rather than writing tool
+// invocations as plain-text JSON content. Ollama's own "tools" capability
+// flag is not sufficient evidence: qwen2.5-coder:7b advertises "tools" in
+// /api/tags but consistently ignores tool_calls in practice (see
+// parseFallbackToolCall) — so file read/write access is only offered to
+// models on this allowlist, matched by name prefix (e.g. "gemma4" matches
+// "gemma4:12b").
+var toolCapableModelPrefixes = []string{
+	"gemma4",
+	"gpt-oss",
+}
+
+// SupportsTools reports whether model is on the allowlist of models
+// confirmed to reliably use tool_calls, so callers can decide whether to
+// offer file read/write tools at all.
+func SupportsTools(model string) bool {
+	for _, prefix := range toolCapableModelPrefixes {
+		if strings.HasPrefix(model, prefix) {
 			return true
 		}
 	}
@@ -250,7 +276,66 @@ func (c *Client) Chat(ctx context.Context, model string, messages []Message, too
 	if len(cr.Choices) == 0 {
 		return Message{}, fmt.Errorf("llm: empty response")
 	}
-	return cr.Choices[0].Message, nil
+
+	reply := cr.Choices[0].Message
+	if len(reply.ToolCalls) == 0 && len(tools) > 0 {
+		if call, ok := parseFallbackToolCall(reply.Content, tools); ok {
+			reply.ToolCalls = []ToolCall{call}
+			reply.Content = ""
+		}
+	}
+	return reply, nil
+}
+
+// parseFallbackToolCall recovers a tool call from models that don't
+// support Ollama's tool_calls field and instead write the call out as
+// plain message content — e.g. qwen2.5-coder:7b reliably does this
+// despite advertising the "tools" capability. Deliberately strict to
+// avoid misfiring on a model legitimately discussing JSON in an answer:
+// the ENTIRE trimmed content (nothing before or after, no prose, no code
+// fences) must parse as exactly {"name": "...", "arguments": {...}},
+// and name must match one of the tools actually offered in this request.
+func parseFallbackToolCall(content string, tools []Tool) (ToolCall, bool) {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" || trimmed[0] != '{' {
+		return ToolCall{}, false
+	}
+
+	var parsed struct {
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	dec := json.NewDecoder(strings.NewReader(trimmed))
+	if err := dec.Decode(&parsed); err != nil || parsed.Name == "" || len(parsed.Arguments) == 0 {
+		return ToolCall{}, false
+	}
+	// Reject trailing content after the JSON object — a model just
+	// mentioning a tool-call-shaped example mid-explanation would still
+	// fail this because real answers practically never end with nothing
+	// but a bare JSON object and no closing remarks.
+	if dec.More() {
+		return ToolCall{}, false
+	}
+
+	known := false
+	for _, t := range tools {
+		if t.Function.Name == parsed.Name {
+			known = true
+			break
+		}
+	}
+	if !known {
+		return ToolCall{}, false
+	}
+
+	return ToolCall{
+		ID:   "fallback_" + parsed.Name,
+		Type: "function",
+		Function: struct {
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+		}{Name: parsed.Name, Arguments: string(parsed.Arguments)},
+	}, true
 }
 
 type embedRequest struct {

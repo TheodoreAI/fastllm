@@ -8,6 +8,7 @@ import ChatPanel from './components/ChatPanel'
 import ConfirmDeleteModal from './components/ConfirmDeleteModal'
 import SettingsModal from './components/SettingsModal'
 import DraggableSection from './components/DraggableSection'
+import SectionIcon from './components/SectionIcon'
 import { useTheme } from './useTheme'
 import { useFontFamily } from './useFontFamily'
 import { useFontScale } from './useFontScale'
@@ -43,11 +44,11 @@ const UPLOAD_FILE_PATTERN = /\.(txt|md|markdown|mdx|json|ya?ml|csv|tsv|log|go|js
 
 const DEFAULT_SECTION_ORDER = ['conversations', 'model', 'skills', 'knowledge']
 
-const SECTION_ICONS = {
-  conversations: { icon: '💬', label: 'Conversations' },
-  model: { icon: '🧠', label: 'Model' },
-  skills: { icon: '🪄', label: 'Skills' },
-  knowledge: { icon: '📚', label: 'Knowledge base' },
+const SECTION_LABELS = {
+  conversations: 'Conversations',
+  model: 'Model',
+  skills: 'Skills',
+  knowledge: 'Knowledge base',
 }
 
 export default function App() {
@@ -119,6 +120,7 @@ export default function App() {
     setConversationId(id)
     setMessages([])
     setMessagesLoading(true)
+    setInput('')
     fetchMessages(id).then((msgs) => {
       // Guard against out-of-order responses: if the user switched to a
       // different conversation again before this fetch resolved, don't
@@ -137,6 +139,7 @@ export default function App() {
     setConversationId(null)
     setMessages([])
     setMessagesLoading(false)
+    setInput('')
   }
 
   function stopStreaming() {
@@ -505,10 +508,10 @@ export default function App() {
                   key={key}
                   type="button"
                   className="sidebar-icon-btn"
-                  title={SECTION_ICONS[key].label}
+                  title={SECTION_LABELS[key]}
                   onClick={() => setSidebarCollapsed(false)}
                 >
-                  <span aria-hidden="true">{SECTION_ICONS[key].icon}</span>
+                  <SectionIcon name={key} />
                 </button>
               ))
             : sectionOrder.map((key, index) => {
@@ -575,6 +578,7 @@ export default function App() {
         <ChatPanel
           messages={messages}
           messagesLoading={messagesLoading}
+          conversationId={conversationId}
           bottomRef={bottomRef}
           input={input}
           onInputChange={setInput}
