@@ -10,6 +10,7 @@ export default function DraggableSection({ sectionKey, index, onReorder, childre
   return (
     <div
       className={`draggable-section ${dragging ? 'is-dragging' : ''} ${dragOver ? 'is-drag-over' : ''}`}
+      data-section={sectionKey}
       onDragOver={(e) => {
         e.preventDefault()
         setDragOver(true)

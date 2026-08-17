@@ -58,10 +58,19 @@ func NewHandler(registry *Registry, gate *Gate, fileReader *files.Reader) http.H
 		}
 
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-			// The default (no OriginPatterns) already restricts to the
-			// request's own host, which is correct here — this frontend
-			// and this API are always same-origin. Left unset deliberately
-			// rather than opting into cross-origin.
+			// cmd/server's browser build is always same-origin (no
+			// OriginPatterns needed there). cmd/desktop's Wails webview is
+			// a genuine exception: its pages load from the virtual host
+			// http://wails.localhost (see internal/frontend/desktop/windows
+			// in the wails module), while this handler is reached through
+			// a real loopback TCP listener on 127.0.0.1 — a different host
+			// by definition, since the whole reason that listener exists
+			// is that the webview's own in-process bridge can't do a
+			// WebSocket upgrade at all (see cmd/desktop/main.go). Without
+			// this, websocket.Accept's default same-origin check rejects
+			// every connection from the desktop app with "Origin ... is
+			// not a valid URL with a host" / a mismatched-host error.
+			OriginPatterns: []string{"wails.localhost", "localhost", "localhost:*", "127.0.0.1:*"},
 		})
 		if err != nil {
 			log.Printf("terminal: websocket accept failed: %v", err)

@@ -11,6 +11,7 @@ package main
 import (
 	"context"
 	"log"
+	"net"
 	"net/http"
 
 	"fastllm/internal/appserver"
@@ -61,6 +62,29 @@ func main() {
 	// cmd/server also calls.
 	built.Mux.HandleFunc("GET /api/screenshot", screenshotHandler)
 
+	// The terminal's WebSocket route can't work over Wails' in-process
+	// AssetServer bridge: websocket.Accept needs a real http.Hijacker, and
+	// the handler's loopback check (net/terminal/handler.go) needs a real
+	// r.RemoteAddr — neither exists on that in-process bridge, since it's
+	// not backed by an actual TCP connection. Every other route is fine
+	// in-process; only /api/terminal/ws needs a real socket, so this opens
+	// one extra loopback-only listener serving the exact same mux
+	// (identical routes, identical settings) purely so that one route has
+	// somewhere real to upgrade from. The frontend learns the port via the
+	// bound terminalBridge below and only uses it for the WS connection —
+	// every other request still goes through the in-process bridge.
+	termListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		log.Fatalf("listen for terminal bridge: %v", err)
+	}
+	defer termListener.Close()
+	go func() {
+		if err := http.Serve(termListener, built.Mux); err != nil {
+			log.Printf("terminal bridge server stopped: %v", err)
+		}
+	}()
+	bridge := &terminalBridge{port: termListener.Addr().(*net.TCPAddr).Port}
+
 	app := &desktopApp{registry: built.TerminalRegistry}
 
 	err = wails.Run(&options.App{
@@ -71,6 +95,7 @@ func main() {
 			Handler: built.Mux,
 		},
 		BackgroundColour: &options.RGBA{R: 30, G: 30, B: 30, A: 1},
+		Bind:             []interface{}{bridge},
 		OnStartup:        app.startup,
 		OnBeforeClose:    app.beforeClose,
 		OnShutdown:       app.shutdown,
@@ -89,6 +114,19 @@ func main() {
 	if err != nil {
 		log.Fatalf("wails run: %v", err)
 	}
+}
+
+// terminalBridge is bound into the webview (options.App.Bind) so the
+// frontend can look up, via window.go.main.TerminalBridge.TerminalPort(),
+// the loopback port serving the same mux as a real TCP listener — see the
+// comment above termListener in main() for why the terminal WebSocket
+// specifically needs this instead of the normal in-process route.
+type terminalBridge struct {
+	port int
+}
+
+func (b *terminalBridge) TerminalPort() int {
+	return b.port
 }
 
 // desktopApp holds the state the Wails lifecycle hooks need to clean up —

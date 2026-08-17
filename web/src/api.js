@@ -130,6 +130,21 @@ export function isWails() {
   return typeof window !== 'undefined' && typeof window.runtime?.Quit === 'function'
 }
 
+// The terminal WebSocket can't go through Wails' normal in-process bridge
+// (see cmd/desktop/main.go's termListener comment for why) — it needs the
+// real loopback TCP listener cmd/desktop opens alongside it, whose port is
+// exposed via a bound Go method rather than a fixed/predictable one, since
+// a fixed port could collide with another local process. Falls back to
+// window.location.host for the plain-browser build, which has no such
+// bridge to route around.
+export async function terminalWSHost() {
+  if (isWails() && window.go?.main?.terminalBridge?.TerminalPort) {
+    const port = await window.go.main.terminalBridge.TerminalPort()
+    return `127.0.0.1:${port}`
+  }
+  return window.location.host
+}
+
 export function quitServer() {
   if (isWails()) {
     // cmd/desktop's OnShutdown hook (see cmd/desktop/main.go) does the

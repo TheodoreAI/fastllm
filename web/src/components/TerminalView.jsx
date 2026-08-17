@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
+import { terminalWSHost } from '../api'
 
 // Matched to App.css's dark/light CSS custom properties (--bg-chat,
 // --text, --accent, etc.) rather than read at runtime via
@@ -30,9 +31,10 @@ const LIGHT_THEME = {
   brightBlue: '#409cff',
 }
 
-function wsURL() {
+async function wsURL() {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${proto}//${window.location.host}/api/terminal/ws`
+  const host = await terminalWSHost()
+  return `${proto}//${host}/api/terminal/ws`
 }
 
 // Owns one persistent PowerShell session for the lifetime of the mounted
@@ -45,6 +47,7 @@ export default function TerminalView({ theme }) {
   const termRef = useRef(null)
   const fitAddonRef = useRef(null)
   const socketRef = useRef(null)
+  const unmountedRef = useRef(false)
   const [status, setStatus] = useState('connecting') // connecting | connected | disconnected | elevated
 
   useEffect(() => {
@@ -93,6 +96,7 @@ export default function TerminalView({ theme }) {
     resizeObserver.observe(containerRef.current)
 
     return () => {
+      unmountedRef.current = true
       cancelAnimationFrame(initialFitId)
       if (rafId != null) cancelAnimationFrame(rafId)
       resizeObserver.disconnect()
@@ -117,10 +121,15 @@ export default function TerminalView({ theme }) {
     }
   }
 
-  function connect(term, fitAddon) {
+  async function connect(term, fitAddon) {
     setStatus('connecting')
     term.reset()
-    const socket = new WebSocket(wsURL())
+    const url = await wsURL()
+    // The awaited resolution above means the component may have unmounted
+    // before this fires — guard against opening a socket nothing will
+    // ever close via the effect cleanup below.
+    if (unmountedRef.current) return
+    const socket = new WebSocket(url)
     socket.binaryType = 'arraybuffer'
     socketRef.current = socket
 

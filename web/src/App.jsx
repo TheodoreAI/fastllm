@@ -7,7 +7,7 @@ import KnowledgeBasePanel from './components/KnowledgeBasePanel'
 import ChatPanel from './components/ChatPanel'
 import EditorView from './components/EditorView'
 import ConfirmDeleteModal from './components/ConfirmDeleteModal'
-import SettingsModal from './components/SettingsModal'
+import SettingsPanel from './components/SettingsPanel'
 import ScreenshotPreviewModal from './components/ScreenshotPreviewModal'
 import DraggableSection from './components/DraggableSection'
 import SectionIcon from './components/SectionIcon'
@@ -81,6 +81,10 @@ export default function App() {
   const [conversationError, setConversationError] = useState('')
   const [settings, setSettings] = useState(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // Set (to a sub-section id like 'llmBackend') to force that Settings
+  // sub-section open when the panel is opened — see ModelPicker's
+  // onOpenSettings below.
+  const [settingsExpandRequest, setSettingsExpandRequest] = useState(null)
   const [quitConfirmOpen, setQuitConfirmOpen] = useState(false)
   const [quitting, setQuitting] = useState(false)
   const [screenshotBlob, setScreenshotBlob] = useState(null)
@@ -474,6 +478,11 @@ export default function App() {
     }
   }
 
+  function handleOpenSettings(subSection) {
+    if (subSection) setSettingsExpandRequest(subSection)
+    setSettingsOpen(true)
+  }
+
   async function confirmDeleteSkill() {
     const id = skillToDelete
     setSkillToDelete(null)
@@ -581,7 +590,7 @@ export default function App() {
             type="button"
             className="titlebar-btn"
             title="Settings"
-            onClick={() => setSettingsOpen(true)}
+            onClick={() => handleOpenSettings()}
           >
             ⚙
           </button>
@@ -679,7 +688,7 @@ export default function App() {
                 model={model}
                 onChange={setModel}
                 fileAccessSettings={fileAccessSettings}
-                onOpenSettings={() => setSettingsOpen(true)}
+                onOpenSettings={() => handleOpenSettings('llmBackend')}
               />
             ),
                 skills: (
@@ -753,8 +762,12 @@ export default function App() {
         />
       )}
 
+      {screenshotBlob && (
+        <ScreenshotPreviewModal blob={screenshotBlob} onClose={() => setScreenshotBlob(null)} />
+      )}
+
       {settingsOpen && (
-        <SettingsModal
+        <SettingsPanel
           theme={theme}
           onThemeChange={setTheme}
           fontFamily={fontFamily}
@@ -772,12 +785,9 @@ export default function App() {
           onThinkLevelChange={setThinkLevel}
           onClearKnowledgeBase={handleClearKnowledgeBase}
           onClearConversations={handleClearConversations}
+          expandSection={settingsExpandRequest}
           onClose={() => setSettingsOpen(false)}
         />
-      )}
-
-      {screenshotBlob && (
-        <ScreenshotPreviewModal blob={screenshotBlob} onClose={() => setScreenshotBlob(null)} />
       )}
     </div>
   )
