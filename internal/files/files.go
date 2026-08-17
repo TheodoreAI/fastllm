@@ -24,6 +24,13 @@ const MaxReadBytes = 64 * 1024
 // review this in a diff, so it stays well below MaxReadBytes.
 const MaxWriteBytes = 32 * 1024
 
+// MaxEditorReadBytes caps how large a file the text editor (a human
+// directly opening a file, not the chat model) will open — much larger
+// than MaxReadBytes since there's no prompt/context-window reason to
+// keep it small, but still bounded so opening an accidental multi-GB
+// file doesn't try to load it all into memory and the browser tab.
+const MaxEditorReadBytes = 5 * 1024 * 1024
+
 var ErrOutsideRoot = errors.New("path is outside the allowed directory")
 
 // Reader resolves paths against a fixed root and reads/writes files from
@@ -234,6 +241,41 @@ func (r *Reader) Read(requested string) (content string, truncated bool, err err
 	}
 	if n > MaxReadBytes {
 		return string(buf[:MaxReadBytes]), true, nil
+	}
+	return string(buf[:n]), false, nil
+}
+
+// ReadFull resolves and reads a file for the text editor, up to
+// MaxEditorReadBytes. Unlike Read (sized for what's reasonable to hand a
+// chat model), this is sized for what's reasonable to open in a browser
+// editor tab — larger, but still bounded.
+func (r *Reader) ReadFull(requested string) (content string, truncated bool, err error) {
+	path, err := r.Resolve(requested)
+	if err != nil {
+		return "", false, err
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", false, err
+	}
+	if info.IsDir() {
+		return "", false, fmt.Errorf("%q is a directory, not a file", requested)
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return "", false, err
+	}
+	defer f.Close()
+
+	buf := make([]byte, MaxEditorReadBytes+1)
+	n, err := io.ReadFull(f, buf)
+	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+		return "", false, err
+	}
+	if n > MaxEditorReadBytes {
+		return string(buf[:MaxEditorReadBytes]), true, nil
 	}
 	return string(buf[:n]), false, nil
 }

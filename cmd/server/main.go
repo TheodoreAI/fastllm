@@ -93,6 +93,16 @@ func main() {
 	mux.HandleFunc("DELETE /api/conversations/{id}", handler.DeleteConversation)
 	mux.HandleFunc("POST /api/writes/{id}/approve", handler.ApproveWrite)
 	mux.HandleFunc("POST /api/writes/{id}/reject", handler.RejectWrite)
+	mux.HandleFunc("GET /api/editor/tree", handler.EditorTree)
+	mux.HandleFunc("GET /api/editor/file", handler.EditorReadFile)
+	mux.HandleFunc("PUT /api/editor/file", handler.EditorSaveFile)
+	mux.HandleFunc("GET /api/editor/search", handler.EditorSearch)
+	mux.HandleFunc("GET /api/editor/git/status", handler.EditorGitStatus)
+	mux.HandleFunc("GET /api/editor/git/diff", handler.EditorGitDiff)
+	mux.HandleFunc("POST /api/editor/git/stage", handler.EditorGitStage)
+	mux.HandleFunc("POST /api/editor/git/unstage", handler.EditorGitUnstage)
+	mux.HandleFunc("POST /api/editor/git/commit", handler.EditorGitCommit)
+	mux.HandleFunc("POST /api/editor/git/push", handler.EditorGitPush)
 
 	server := &http.Server{Addr: addr, Handler: mux}
 	mux.HandleFunc("POST /api/quit", quitHandler(server))

@@ -1,0 +1,254 @@
+// Text editor endpoints: file tree, open/save, cross-file search, and a
+// git panel (status/diff/stage/unstage/commit). These operate directly
+// on disk — unlike write_file (the chat model's tool), there's no
+// PendingWrite approval step here, since a human typing into the editor
+// and clicking Save is already the human-in-the-loop step. Everything
+// still goes through h.Files' sandboxed root, so the editor can never
+// reach outside the same directory the model's file tools are confined
+// to (see internal/files).
+package chat
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+
+	"fastllm/internal/gitrepo"
+)
+
+// editorTreeEntry is one file in the editor's file tree, relative to the
+// sandbox root.
+type editorTreeEntry struct {
+	Path string `json:"path"`
+}
+
+// EditorTree lists every file the editor's tree/search should show:
+// tracked and untracked-but-not-ignored files in a git repo, so build
+// output, node_modules, and .git internals are excluded automatically.
+// Requires the sandbox root to be a git repository — see gitrepo.
+func (h *Handler) EditorTree(w http.ResponseWriter, r *http.Request) {
+	root, ok := h.editorRoot(w)
+	if !ok {
+		return
+	}
+	files, err := gitrepo.ListFiles(r.Context(), root)
+	if err != nil {
+		h.writeGitError(w, err)
+		return
+	}
+	entries := make([]editorTreeEntry, len(files))
+	for i, f := range files {
+		entries[i] = editorTreeEntry{Path: f}
+	}
+	writeJSON(w, entries)
+}
+
+// EditorReadFile returns one file's full content for the editor to open.
+func (h *Handler) EditorReadFile(w http.ResponseWriter, r *http.Request) {
+	if !h.Files.Enabled() {
+		http.Error(w, "file access is not enabled", http.StatusForbidden)
+		return
+	}
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		http.Error(w, "path is required", http.StatusBadRequest)
+		return
+	}
+	content, truncated, err := h.Files.ReadFull(path)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, map[string]any{"path": path, "content": content, "truncated": truncated})
+}
+
+type editorSaveRequest struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
+// EditorSaveFile writes a file's full content directly to disk — the
+// human editing and clicking Save is the approval step, unlike the
+// model's write_file which always goes through PendingWrite.
+func (h *Handler) EditorSaveFile(w http.ResponseWriter, r *http.Request) {
+	if !h.Files.WritesEnabled() {
+		http.Error(w, "file writes are not enabled", http.StatusForbidden)
+		return
+	}
+	var req editorSaveRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Path == "" {
+		http.Error(w, "path and content are required", http.StatusBadRequest)
+		return
+	}
+	if err := h.Files.Write(req.Path, req.Content); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, map[string]any{"path": req.Path, "saved": true})
+}
+
+// EditorSearch searches file contents across the project via `git grep`.
+func (h *Handler) EditorSearch(w http.ResponseWriter, r *http.Request) {
+	root, ok := h.editorRoot(w)
+	if !ok {
+		return
+	}
+	query := r.URL.Query().Get("q")
+	if query == "" {
+		writeJSON(w, []gitrepo.SearchMatch{})
+		return
+	}
+	matches, err := gitrepo.Search(r.Context(), root, query)
+	if err != nil {
+		h.writeGitError(w, err)
+		return
+	}
+	if matches == nil {
+		matches = []gitrepo.SearchMatch{}
+	}
+	writeJSON(w, matches)
+}
+
+// EditorGitStatus returns the working tree's current git status.
+func (h *Handler) EditorGitStatus(w http.ResponseWriter, r *http.Request) {
+	root, ok := h.editorRoot(w)
+	if !ok {
+		return
+	}
+	statuses, err := gitrepo.Status(r.Context(), root)
+	if err != nil {
+		h.writeGitError(w, err)
+		return
+	}
+	if statuses == nil {
+		statuses = []gitrepo.FileStatus{}
+	}
+	writeJSON(w, statuses)
+}
+
+// EditorGitDiff returns the diff for one file — worktree-vs-index by
+// default, or index-vs-HEAD if ?staged=1 is set.
+func (h *Handler) EditorGitDiff(w http.ResponseWriter, r *http.Request) {
+	root, ok := h.editorRoot(w)
+	if !ok {
+		return
+	}
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		http.Error(w, "path is required", http.StatusBadRequest)
+		return
+	}
+	staged := r.URL.Query().Get("staged") == "1"
+	diff, err := gitrepo.Diff(r.Context(), root, path, staged)
+	if err != nil {
+		h.writeGitError(w, err)
+		return
+	}
+	writeJSON(w, map[string]string{"diff": diff})
+}
+
+type editorGitPathsRequest struct {
+	Paths []string `json:"paths"`
+}
+
+// EditorGitStage stages one or more paths.
+func (h *Handler) EditorGitStage(w http.ResponseWriter, r *http.Request) {
+	root, ok := h.editorRoot(w)
+	if !ok {
+		return
+	}
+	var req editorGitPathsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req.Paths) == 0 {
+		http.Error(w, "paths is required", http.StatusBadRequest)
+		return
+	}
+	if err := gitrepo.Stage(r.Context(), root, req.Paths); err != nil {
+		h.writeGitError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// EditorGitUnstage unstages one or more paths.
+func (h *Handler) EditorGitUnstage(w http.ResponseWriter, r *http.Request) {
+	root, ok := h.editorRoot(w)
+	if !ok {
+		return
+	}
+	var req editorGitPathsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req.Paths) == 0 {
+		http.Error(w, "paths is required", http.StatusBadRequest)
+		return
+	}
+	if err := gitrepo.Unstage(r.Context(), root, req.Paths); err != nil {
+		h.writeGitError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type editorGitCommitRequest struct {
+	Message string `json:"message"`
+}
+
+// EditorGitCommit commits whatever is currently staged. Never stages
+// anything itself — see gitrepo.Commit. Committing and pushing are
+// separate, explicit actions in the UI (see EditorGitPush) — this
+// endpoint never pushes.
+func (h *Handler) EditorGitCommit(w http.ResponseWriter, r *http.Request) {
+	root, ok := h.editorRoot(w)
+	if !ok {
+		return
+	}
+	var req editorGitCommitRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if err := gitrepo.Commit(r.Context(), root, req.Message); err != nil {
+		h.writeGitError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// EditorGitPush pushes the current branch to its configured upstream —
+// a plain `git push`, never a force-push. If the remote has diverged
+// (or there's no upstream configured), this fails and the git error is
+// returned as-is; the caller decides what to do next rather than this
+// endpoint resolving it automatically. A separate, explicit action from
+// EditorGitCommit — the UI only ever calls this from its own "Push"
+// button, never automatically after a commit.
+func (h *Handler) EditorGitPush(w http.ResponseWriter, r *http.Request) {
+	root, ok := h.editorRoot(w)
+	if !ok {
+		return
+	}
+	output, err := gitrepo.Push(r.Context(), root)
+	if err != nil {
+		h.writeGitError(w, err)
+		return
+	}
+	writeJSON(w, map[string]string{"output": output})
+}
+
+// editorRoot resolves the sandbox root for editor/git endpoints,
+// writing an error response and returning ok=false if file access isn't
+// enabled. All editor and git-panel operations share the same root the
+// model's file tools use (see internal/files) — one project folder
+// setting for the whole app.
+func (h *Handler) editorRoot(w http.ResponseWriter) (root string, ok bool) {
+	if !h.Files.Enabled() {
+		http.Error(w, "file access is not enabled", http.StatusForbidden)
+		return "", false
+	}
+	return h.Files.GetRoot(), true
+}
+
+func (h *Handler) writeGitError(w http.ResponseWriter, err error) {
+	if errors.Is(err, gitrepo.ErrNotARepo) {
+		http.Error(w, "the configured project folder is not a git repository", http.StatusConflict)
+		return
+	}
+	http.Error(w, err.Error(), http.StatusInternalServerError)
+}

@@ -5,6 +5,7 @@ import ModelPicker from './components/ModelPicker'
 import SkillPanel from './components/SkillPanel'
 import KnowledgeBasePanel from './components/KnowledgeBasePanel'
 import ChatPanel from './components/ChatPanel'
+import EditorView from './components/EditorView'
 import ConfirmDeleteModal from './components/ConfirmDeleteModal'
 import SettingsModal from './components/SettingsModal'
 import DraggableSection from './components/DraggableSection'
@@ -85,6 +86,7 @@ export default function App() {
   const [fontScale, setFontScale] = useFontScale()
   const [sectionOrder, moveSection] = useSectionOrder(DEFAULT_SECTION_ORDER)
   const [sidebarCollapsed, setSidebarCollapsed] = useSidebarCollapsed()
+  const [activeView, setActiveView] = useState('chat')
   const bottomRef = useRef(null)
   const fileInputRef = useRef(null)
   const folderInputRef = useRef(null)
@@ -482,6 +484,22 @@ export default function App() {
           <span className="dot green" />
         </div>
         <span className="titlebar-title">fastllm</span>
+        <div className="titlebar-tabs">
+          <button
+            type="button"
+            className={activeView === 'chat' ? 'is-active' : ''}
+            onClick={() => setActiveView('chat')}
+          >
+            Chat
+          </button>
+          <button
+            type="button"
+            className={activeView === 'editor' ? 'is-active' : ''}
+            onClick={() => setActiveView('editor')}
+          >
+            Editor
+          </button>
+        </div>
         <div className="titlebar-actions">
           <button
             type="button"
@@ -502,7 +520,7 @@ export default function App() {
         </div>
       </div>
 
-      <div className="body">
+      <div className="body" style={{ display: activeView === 'chat' ? undefined : 'none' }}>
         <aside className={`sidebar ${sidebarCollapsed ? 'is-collapsed' : ''}`}>
           <button
             type="button"
@@ -601,6 +619,8 @@ export default function App() {
           onRejectWrite={handleRejectWrite}
         />
       </div>
+
+      {activeView === 'editor' && <EditorView fileAccessSettings={fileAccessSettings} theme={theme} />}
 
       {conversationToDelete != null && (
         <ConfirmDeleteModal
