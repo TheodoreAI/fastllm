@@ -22,6 +22,8 @@ import {
   fetchSettings,
   fetchRagSettings,
   saveRagSettings,
+  fetchFileAccessSettings,
+  saveFileAccessSettings,
   clearKnowledgeBase,
   clearConversations,
   createSkill as apiCreateSkill,
@@ -67,6 +69,8 @@ export default function App() {
   const [quitting, setQuitting] = useState(false)
   const [serverStopped, setServerStopped] = useState(false)
   const [ragSettings, setRagSettings] = useState(null)
+  const [fileAccessSettings, setFileAccessSettings] = useState({ root: '', read_enabled: false, write_enabled: false })
+  const [thinkLevel, setThinkLevel] = useState('medium')
   const [theme, setTheme] = useTheme()
   const [fontFamily, setFontFamily] = useFontFamily()
   const [fontScale, setFontScale] = useFontScale()
@@ -87,6 +91,7 @@ export default function App() {
     })
     fetchSettings().then(setSettings)
     fetchRagSettings().then(setRagSettings)
+    fetchFileAccessSettings().then((settings) => setFileAccessSettings(settings ?? { root: '', read_enabled: false, write_enabled: false }))
   }, [])
 
   useEffect(() => {
@@ -159,7 +164,7 @@ export default function App() {
 
     try {
       await streamChat(
-        { message: text, model, skillId, conversationId },
+        { message: text, model, skillId, conversationId, thinkLevel },
         {
           onConversation: (id) => {
             setConversationId(id)
@@ -322,6 +327,14 @@ export default function App() {
     if (!res.ok) throw new Error(await res.text())
     const saved = await res.json()
     setRagSettings(saved)
+  }
+
+  async function handleSaveFileAccessSettings(next) {
+    const res = await saveFileAccessSettings(next)
+    if (!res.ok) throw new Error(await res.text())
+    const saved = await res.json()
+    setFileAccessSettings(saved)
+    return saved
   }
 
   async function createSkill(e) {
@@ -561,6 +574,10 @@ export default function App() {
           settings={settings}
           ragSettings={ragSettings}
           onSaveRagSettings={handleSaveRagSettings}
+          fileAccessSettings={fileAccessSettings}
+          onSaveFileAccessSettings={handleSaveFileAccessSettings}
+          thinkLevel={thinkLevel}
+          onThinkLevelChange={setThinkLevel}
           onClearKnowledgeBase={handleClearKnowledgeBase}
           onClearConversations={handleClearConversations}
           onClose={() => setSettingsOpen(false)}

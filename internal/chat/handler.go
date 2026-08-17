@@ -110,6 +110,7 @@ type chatRequest struct {
 	Model          string `json:"model"`
 	SkillID        int64  `json:"skill_id"`
 	ConversationID int64  `json:"conversation_id"`
+	ThinkLevel     string `json:"think_level"`
 }
 
 // Chat streams the assistant's reply back to the client as Server-Sent
@@ -167,7 +168,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.Files.Enabled() {
-		reads, writes := h.runFileTools(ctx, req.Model, &messages)
+		reads, writes := h.runFileTools(ctx, req.Model, &messages, normalizeThinkLevel(req.ThinkLevel))
 		for _, fr := range reads {
 			payload, _ := json.Marshal(fr)
 			fmt.Fprintf(w, "event: tool_call\ndata: %s\n\n", payload)
@@ -181,7 +182,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var full strings.Builder
-	err := h.LLM.StreamChat(ctx, req.Model, messages, func(token string) {
+	err := h.LLM.StreamChat(ctx, req.Model, messages, normalizeThinkLevel(req.ThinkLevel), func(token string) {
 		full.WriteString(token)
 		payload, _ := json.Marshal(map[string]string{"token": token})
 		fmt.Fprintf(w, "data: %s\n\n", payload)
@@ -301,13 +302,13 @@ type fileRead struct {
 // approval via the /api/writes endpoints, and the model is told exactly
 // that in its tool result, so its final answer can honestly say the
 // change is pending review rather than claiming it already happened.
-func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]llm.Message) ([]fileRead, []*PendingWrite) {
+func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]llm.Message, thinkLevel string) ([]fileRead, []*PendingWrite) {
 	tools := []llm.Tool{readFileTool}
 	if h.Files.WritesEnabled() {
 		tools = append(tools, writeFileTool)
 	}
 
-	reply, err := h.LLM.Chat(ctx, model, *messages, tools)
+	reply, err := h.LLM.Chat(ctx, model, *messages, tools, thinkLevel)
 	if err != nil || len(reply.ToolCalls) == 0 {
 		return nil, nil
 	}
@@ -467,6 +468,41 @@ func (h *Handler) GetRAGSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, rag)
+}
+
+func normalizeThinkLevel(level string) string {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "low", "medium", "high":
+		return strings.ToLower(strings.TrimSpace(level))
+	default:
+		return ""
+	}
+}
+
+func (h *Handler) GetFileAccessSettings(w http.ResponseWriter, r *http.Request) {
+	settings, err := store.GetFileAccessSettings(h.DB)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, settings)
+}
+
+func (h *Handler) UpdateFileAccessSettings(w http.ResponseWriter, r *http.Request) {
+	var settings store.FileAccessSettings
+	if err := json.NewDecoder(r.Body).Decode(&settings); err != nil {
+		http.Error(w, "invalid file access settings payload", http.StatusBadRequest)
+		return
+	}
+	if err := store.SaveFileAccessSettings(h.DB, settings); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := h.Files.SetConfig(settings.Root, settings.ReadEnabled, settings.WriteEnabled); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, settings)
 }
 
 // UpdateRAGSettings saves new chunking/retrieval settings. Chunk size and

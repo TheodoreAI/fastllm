@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 // MaxReadBytes caps how much of a file is returned to the model — large
@@ -30,6 +31,7 @@ var ErrOutsideRoot = errors.New("path is outside the allowed directory")
 // callers should check Enabled() before registering the read_file tool,
 // and WritesEnabled() before registering write_file.
 type Reader struct {
+	mu          sync.RWMutex
 	Root        string
 	AllowWrites bool
 }
@@ -49,22 +51,55 @@ func New(root string, allowWrites bool) *Reader {
 	return &Reader{Root: abs, AllowWrites: allowWrites}
 }
 
+func (r *Reader) SetRoot(root string, allowWrites bool) error {
+	return r.SetConfig(root, root != "", allowWrites)
+}
+
+func (r *Reader) SetConfig(root string, readEnabled, writeEnabled bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !readEnabled {
+		r.Root = ""
+		r.AllowWrites = false
+		return nil
+	}
+	if root == "" {
+		r.Root = ""
+		r.AllowWrites = false
+		return nil
+	}
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return err
+	}
+	r.Root = abs
+	r.AllowWrites = writeEnabled
+	return nil
+}
+
 func (r *Reader) Enabled() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.Root != ""
 }
 
 func (r *Reader) WritesEnabled() bool {
-	return r.Enabled() && r.AllowWrites
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.Root != "" && r.AllowWrites
 }
 
 // Resolve joins the requested path onto Root and confirms the result is
 // still inside Root — rejecting absolute paths, ".." traversal, and
 // symlinks that escape the sandbox. The target must already exist.
 func (r *Reader) Resolve(requested string) (string, error) {
-	if !r.Enabled() {
+	r.mu.RLock()
+	root := r.Root
+	r.mu.RUnlock()
+	if root == "" {
 		return "", errors.New("file access is not enabled")
 	}
-	joined, err := r.resolveWithinRoot(requested)
+	joined, err := resolveWithinRoot(root, requested)
 	if err != nil {
 		return "", err
 	}
@@ -73,7 +108,7 @@ func (r *Reader) Resolve(requested string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return r.confirmWithinRoot(resolved)
+	return confirmWithinRoot(root, resolved)
 }
 
 // ResolveForWrite is like Resolve but tolerates a target that doesn't
@@ -81,10 +116,14 @@ func (r *Reader) Resolve(requested string) (string, error) {
 // ancestor directory instead so a symlinked parent still can't be used to
 // escape the sandbox.
 func (r *Reader) ResolveForWrite(requested string) (string, error) {
-	if !r.WritesEnabled() {
+	r.mu.RLock()
+	root := r.Root
+	allowWrites := r.AllowWrites
+	r.mu.RUnlock()
+	if root == "" || !allowWrites {
 		return "", errors.New("file writes are not enabled")
 	}
-	joined, err := r.resolveWithinRoot(requested)
+	joined, err := resolveWithinRoot(root, requested)
 	if err != nil {
 		return "", err
 	}
@@ -125,23 +164,23 @@ func (r *Reader) ResolveForWrite(requested string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if _, err := r.confirmWithinRoot(resolvedDir); err != nil {
+	if _, err := confirmWithinRoot(root, resolvedDir); err != nil {
 		return "", err
 	}
 	return joined, nil
 }
 
-func (r *Reader) resolveWithinRoot(requested string) (string, error) {
-	joined := filepath.Join(r.Root, requested)
-	rel, err := filepath.Rel(r.Root, joined)
+func resolveWithinRoot(root, requested string) (string, error) {
+	joined := filepath.Join(root, requested)
+	rel, err := filepath.Rel(root, joined)
 	if err != nil || rel == ".." || (len(rel) >= 3 && rel[:3] == ".."+string(filepath.Separator)) {
 		return "", ErrOutsideRoot
 	}
 	return joined, nil
 }
 
-func (r *Reader) confirmWithinRoot(resolved string) (string, error) {
-	realRoot, err := filepath.EvalSymlinks(r.Root)
+func confirmWithinRoot(root, resolved string) (string, error) {
+	realRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return "", err
 	}

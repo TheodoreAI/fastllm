@@ -99,6 +99,12 @@ export function fetchRagSettings() {
     .catch(() => null)
 }
 
+export function fetchFileAccessSettings() {
+  return fetch('/api/settings/files')
+    .then((r) => okJson(r, 'fetchFileAccessSettings'))
+    .catch(() => ({ root: '', read_enabled: false, write_enabled: false }))
+}
+
 export function quitServer() {
   return fetch('/api/quit', { method: 'POST' })
 }
@@ -119,9 +125,17 @@ export function saveRagSettings(settings) {
   })
 }
 
+export function saveFileAccessSettings(settings) {
+  return fetch('/api/settings/files', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settings),
+  })
+}
+
 // Streams a chat response via SSE, invoking the provided callbacks as
 // events arrive. Returns once the stream completes.
-export async function streamChat({ message, model, skillId, conversationId }, callbacks) {
+export async function streamChat({ message, model, skillId, conversationId, thinkLevel }, callbacks) {
   const res = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -130,6 +144,7 @@ export async function streamChat({ message, model, skillId, conversationId }, ca
       model,
       skill_id: skillId ? Number(skillId) : 0,
       conversation_id: conversationId ?? 0,
+      think_level: thinkLevel || '',
     }),
   })
   if (!res.ok || !res.body) throw new Error(await res.text())

@@ -218,6 +218,31 @@ func TestWriteRejectsSymlinkEscape(t *testing.T) {
 	}
 }
 
+func TestReaderCanUpdateRootAndWriteState(t *testing.T) {
+	root := setupRoot(t)
+	r := New(root, false)
+
+	if err := r.SetRoot(root, true); err != nil {
+		t.Fatalf("SetRoot returned unexpected error: %v", err)
+	}
+	if !r.Enabled() {
+		t.Fatal("reader should remain enabled after a live config update")
+	}
+	if !r.WritesEnabled() {
+		t.Fatal("writes should be enabled after SetRoot")
+	}
+
+	if err := r.SetRoot("", false); err != nil {
+		t.Fatalf("SetRoot with empty root returned unexpected error: %v", err)
+	}
+	if r.Enabled() {
+		t.Fatal("empty root should disable the reader")
+	}
+	if r.WritesEnabled() {
+		t.Fatal("empty root should disable writes")
+	}
+}
+
 func TestExistingContentForNewFile(t *testing.T) {
 	root := setupRoot(t)
 	r := New(root, true)

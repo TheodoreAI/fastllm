@@ -439,6 +439,62 @@ func GetRAGSettings(db *sql.DB) (RAGSettings, error) {
 	return s, rows.Err()
 }
 
+// FileAccessSettings controls whether the model can read or write files,
+// sandboxed to a fixed root directory. Values are persisted in the same
+// settings table as the RAG knobs so the browser can save them live.
+type FileAccessSettings struct {
+	Root        string `json:"root"`
+	ReadEnabled bool   `json:"read_enabled"`
+	WriteEnabled bool  `json:"write_enabled"`
+}
+
+var DefaultFileAccessSettings = FileAccessSettings{}
+
+const settingFileAccess = "file_access"
+
+// GetFileAccessSettings loads the persisted file-access config or the
+// zero-value defaults when no saved config exists yet.
+func GetFileAccessSettings(db *sql.DB) (FileAccessSettings, error) {
+	s := DefaultFileAccessSettings
+	var value string
+	err := db.QueryRow(`SELECT value FROM settings WHERE key = ?`, settingFileAccess).Scan(&value)
+	if err == sql.ErrNoRows {
+		return s, nil
+	}
+	if err != nil {
+		return s, err
+	}
+	if err := json.Unmarshal([]byte(value), &s); err != nil {
+		return s, err
+	}
+	if !s.ReadEnabled {
+		s.WriteEnabled = false
+	}
+	return s, nil
+}
+
+// SaveFileAccessSettings persists the live file-access config, validating
+// the write flag can't be enabled without read access.
+func SaveFileAccessSettings(db *sql.DB, s FileAccessSettings) error {
+	if s.Root == "" {
+		s.ReadEnabled = false
+		s.WriteEnabled = false
+	}
+	if !s.ReadEnabled {
+		s.WriteEnabled = false
+	}
+	if s.WriteEnabled && !s.ReadEnabled {
+		return fmt.Errorf("write access requires read access to be enabled")
+	}
+
+	payload, err := json.Marshal(s)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, settingFileAccess, string(payload))
+	return err
+}
+
 // SaveRAGSettings persists the given RAG settings, validating that they're
 // sane (positive sizes, overlap smaller than the chunk itself).
 func SaveRAGSettings(db *sql.DB, s RAGSettings) error {

@@ -52,6 +52,20 @@ func main() {
 
 	llmClient := llm.New(baseURL, apiKey, chatModel, embedModel)
 	fileReader := files.New(filesRoot, filesWrite)
+	fileSettings, err := store.GetFileAccessSettings(db)
+	if err != nil {
+		log.Printf("load file access settings: %v", err)
+		fileSettings = store.DefaultFileAccessSettings
+	}
+	if fileSettings.Root == "" && fileSettings.ReadEnabled == false && fileSettings.WriteEnabled == false {
+		fileSettings = store.FileAccessSettings{Root: filesRoot, ReadEnabled: filesRoot != "", WriteEnabled: filesWrite && filesRoot != ""}
+		if err := store.SaveFileAccessSettings(db, fileSettings); err != nil {
+			log.Printf("seed default file access settings: %v", err)
+		}
+	}
+	if err := fileReader.SetConfig(fileSettings.Root, fileSettings.ReadEnabled, fileSettings.WriteEnabled); err != nil {
+		log.Printf("apply file access settings: %v", err)
+	}
 	if fileReader.Enabled() {
 		log.Printf("file-read tool enabled, sandboxed to %s", fileReader.Root)
 	}
@@ -71,6 +85,8 @@ func main() {
 	mux.HandleFunc("GET /api/settings", handler.Settings)
 	mux.HandleFunc("GET /api/settings/rag", handler.GetRAGSettings)
 	mux.HandleFunc("PUT /api/settings/rag", handler.UpdateRAGSettings)
+	mux.HandleFunc("GET /api/settings/files", handler.GetFileAccessSettings)
+	mux.HandleFunc("PUT /api/settings/files", handler.UpdateFileAccessSettings)
 	mux.HandleFunc("DELETE /api/conversations", handler.ClearConversations)
 	mux.HandleFunc("GET /api/skills", handler.ListSkills)
 	mux.HandleFunc("POST /api/skills", handler.CreateSkill)
