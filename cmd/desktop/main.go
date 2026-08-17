@@ -18,7 +18,13 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
+
+// singleInstanceID scopes the Windows single-instance lock to this app
+// specifically — Wails' lock is a named OS mutex, so this just needs to
+// be unique to fastllm, not globally unique in any stronger sense.
+const singleInstanceID = "fastllm-desktop-9f1e6b2a"
 
 func main() {
 	cfg, err := appserver.ConfigFromEnv()
@@ -52,8 +58,20 @@ func main() {
 			Handler: built.Mux,
 		},
 		BackgroundColour: &options.RGBA{R: 30, G: 30, B: 30, A: 1},
+		OnStartup:        app.startup,
 		OnBeforeClose:    app.beforeClose,
 		OnShutdown:       app.shutdown,
+		// Without this, double-clicking the pinned shortcut while the app
+		// is already open would spawn a second process — a second SQLite
+		// connection and a second terminal registry against the same DB
+		// file — rather than just surfacing the window that's already
+		// running. OnSecondInstanceLaunch fires in the *first* (already
+		// running) instance; the second process's own wails.Run exits
+		// immediately without ever reaching this options.App at all.
+		SingleInstanceLock: &options.SingleInstanceLock{
+			UniqueId:               singleInstanceID,
+			OnSecondInstanceLaunch: app.onSecondInstance,
+		},
 	})
 	if err != nil {
 		log.Fatalf("wails run: %v", err)
@@ -64,7 +82,21 @@ func main() {
 // mirrors what cmd/server's quitHandler does on POST /api/quit, since
 // there's no HTTP request driving shutdown here, just the window closing.
 type desktopApp struct {
+	ctx      context.Context
 	registry *terminal.Registry
+}
+
+func (a *desktopApp) startup(ctx context.Context) {
+	a.ctx = ctx
+}
+
+// onSecondInstance runs in the already-open instance when the user
+// launches the app again (e.g. double-clicking the Start Menu pin) —
+// bring the existing window to the front instead of leaving the new
+// launch attempt looking like it silently did nothing.
+func (a *desktopApp) onSecondInstance(_ options.SecondInstanceData) {
+	wailsruntime.WindowUnminimise(a.ctx)
+	wailsruntime.Show(a.ctx)
 }
 
 // beforeClose runs when the user closes the window (X button, Alt+F4, or
