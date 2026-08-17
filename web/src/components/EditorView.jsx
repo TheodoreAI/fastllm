@@ -506,7 +506,7 @@ export default function EditorView({ fileAccessSettings, onFileAccessSettingsCha
               {fileStatus && <span className="editor-file-status">{fileStatus}</span>}
               <button
                 type="button"
-                className="btn-primary"
+                className="editor-save-button"
                 onClick={handleSave}
                 disabled={!canWrite || !dirty || saving}
                 title={canWrite ? '' : 'File writes are disabled in Settings → File access'}

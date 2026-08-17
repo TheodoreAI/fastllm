@@ -1802,6 +1802,32 @@ body {
   color: var(--text-dim);
 }
 
+.editor-save-button {
+  flex: 0 0 auto;
+  padding: 5px 14px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: var(--accent);
+  color: white;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: filter 0.1s ease;
+}
+
+.editor-save-button:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.editor-save-button:active:not(:disabled) {
+  filter: brightness(0.95);
+}
+
+.editor-save-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .editor-codemirror {
   flex: 1;
   min-height: 0;
