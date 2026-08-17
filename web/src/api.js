@@ -118,6 +118,105 @@ export function quitServer() {
   return fetch('/api/quit', { method: 'POST' })
 }
 
+export function fetchEditorTree() {
+  return fetch('/api/editor/tree')
+    .then((r) => okJson(r, 'fetchEditorTree'))
+    .then((data) => data ?? [])
+    .catch(() => [])
+}
+
+export function fetchEditorFile(path) {
+  return fetch(`/api/editor/file?path=${encodeURIComponent(path)}`)
+    .then((r) => okJson(r, 'fetchEditorFile'))
+}
+
+export function saveEditorFile(path, content) {
+  return fetch('/api/editor/file', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path, content }),
+  })
+}
+
+export function searchEditor(query) {
+  return fetch(`/api/editor/search?q=${encodeURIComponent(query)}`)
+    .then((r) => okJson(r, 'searchEditor'))
+    .then((data) => data ?? [])
+    .catch(() => [])
+}
+
+export function fetchGitStatus() {
+  return fetch('/api/editor/git/status')
+    .then((r) => okJson(r, 'fetchGitStatus'))
+    .then((data) => data ?? [])
+    .catch(() => [])
+}
+
+export function fetchGitDiff(path, staged) {
+  return fetch(`/api/editor/git/diff?path=${encodeURIComponent(path)}${staged ? '&staged=1' : ''}`)
+    .then((r) => okJson(r, 'fetchGitDiff'))
+}
+
+export function stageGitPaths(paths) {
+  return fetch('/api/editor/git/stage', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ paths }),
+  })
+}
+
+export function unstageGitPaths(paths) {
+  return fetch('/api/editor/git/unstage', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ paths }),
+  })
+}
+
+export function commitGit(message) {
+  return fetch('/api/editor/git/commit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message }),
+  })
+}
+
+// Pushes the current branch to its configured upstream — a plain `git
+// push`, never a force-push. If the remote has diverged (or there's no
+// upstream configured), the request fails and the caller shows git's
+// own error as-is rather than resolving it automatically.
+export function pushGit() {
+  return fetch('/api/editor/git/push', { method: 'POST' })
+}
+
+export function fetchGitBranches() {
+  return fetch('/api/editor/git/branches')
+    .then((r) => okJson(r, 'fetchGitBranches'))
+    .then((data) => data ?? [])
+    .catch(() => [])
+}
+
+// Switches to an existing local branch. If uncommitted changes would be
+// overwritten by the target branch, this fails (a 500/error response)
+// rather than discarding or auto-stashing them.
+export function switchGitBranch(name) {
+  return fetch('/api/editor/git/switch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+}
+
+// Creates a new branch from the current HEAD and switches to it. Fails
+// if a branch with that name already exists.
+export function createGitBranch(name) {
+  return fetch('/api/editor/git/branch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+}
+
 export function approveWrite(id) {
   return fetch(`/api/writes/${id}/approve`, { method: 'POST' })
 }
