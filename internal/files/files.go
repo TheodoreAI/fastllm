@@ -328,3 +328,60 @@ func (r *Reader) Write(requested, content string) error {
 	}
 	return os.WriteFile(path, []byte(content), 0o644)
 }
+
+// Delete removes a file (not a directory — the editor only ever deletes
+// single files, never recursively) from within the sandbox. Requires
+// write access, same as Write.
+func (r *Reader) Delete(requested string) error {
+	path, err := r.Resolve(requested)
+	if err != nil {
+		return err
+	}
+	_, allowWrites := r.Snapshot()
+	if !allowWrites {
+		return errors.New("file writes are not enabled")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return fmt.Errorf("%q is a directory, not a file", requested)
+	}
+	return os.Remove(path)
+}
+
+// Rename moves a file from one sandboxed path to another — used for both
+// renaming in place and moving to a different folder within the root.
+// The destination must not already exist (no silent overwrite) and its
+// parent directories are created as needed, same as Write.
+func (r *Reader) Rename(fromRequested, toRequested string) error {
+	from, err := r.Resolve(fromRequested)
+	if err != nil {
+		return err
+	}
+	_, allowWrites := r.Snapshot()
+	if !allowWrites {
+		return errors.New("file writes are not enabled")
+	}
+	info, err := os.Stat(from)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return fmt.Errorf("%q is a directory, not a file", fromRequested)
+	}
+	to, err := r.ResolveForWrite(toRequested)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(to); err == nil {
+		return fmt.Errorf("%q already exists", toRequested)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(to), 0o755); err != nil {
+		return err
+	}
+	return os.Rename(from, to)
+}

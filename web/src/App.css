@@ -1003,13 +1003,43 @@ body {
   font-size: 0.88em;
 }
 
-.markdown pre {
+.code-block {
+  position: relative;
   margin: 0 0 0.6em;
+}
+
+.markdown pre {
+  margin: 0;
   padding: 12px 14px;
   border-radius: var(--radius-sm);
   background: #16171c;
   border: 1px solid var(--border);
   overflow-x: auto;
+}
+
+.code-copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 3px 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, #16171c 80%, transparent);
+  color: var(--text-dim);
+  font-size: 0.6875rem;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s ease, color 0.1s ease, border-color 0.1s ease;
+}
+
+.code-block:hover .code-copy-btn,
+.code-copy-btn:focus-visible {
+  opacity: 1;
+}
+
+.code-copy-btn:hover {
+  color: var(--text);
+  border-color: var(--text-faint);
 }
 
 .markdown pre code {
@@ -1413,6 +1443,38 @@ body {
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border);
   overflow: hidden;
+  transition: width 0.15s ease, min-width 0.15s ease;
+}
+
+.editor-sidebar.is-collapsed {
+  width: 44px;
+  min-width: 44px;
+}
+
+.editor-sidebar-collapse-toggle {
+  flex: 0 0 auto;
+  align-self: flex-end;
+  width: 22px;
+  height: 22px;
+  margin: 6px 6px 0;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.editor-sidebar.is-collapsed .editor-sidebar-collapse-toggle {
+  align-self: center;
+}
+
+.editor-sidebar-collapse-toggle:hover {
+  background: rgba(128, 128, 128, 0.18);
+  color: var(--text);
 }
 
 .editor-folder-row {
@@ -1548,12 +1610,33 @@ body {
   color: var(--accent);
 }
 
+.tree-container {
+  position: relative;
+  min-height: 100%;
+}
+
 .tree-row {
   display: flex;
   align-items: center;
   gap: 4px;
+  width: 100%;
   padding-top: 3px;
   padding-bottom: 3px;
+  padding-right: 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--text);
+  font-size: 0.75rem;
+  font-family: ui-monospace, 'SF Mono', Consolas, 'Cascadia Code', monospace;
+}
+
+.tree-row:hover {
+  background: rgba(128, 128, 128, 0.14);
+}
+
+.tree-row.is-active {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
 }
 
 .tree-chevron {
@@ -1578,6 +1661,7 @@ body {
 }
 
 .tree-label {
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1585,6 +1669,114 @@ body {
 
 .tree-file:not(.is-active) .tree-icon {
   color: var(--text-faint);
+}
+
+.tree-row-actions {
+  flex: 0 0 auto;
+  display: none;
+  gap: 2px;
+}
+
+.tree-row:hover .tree-row-actions {
+  display: flex;
+}
+
+.tree-row-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.tree-row-action:hover {
+  background: rgba(128, 128, 128, 0.25);
+  color: var(--text);
+}
+
+.tree-row-action-danger:hover {
+  background: color-mix(in srgb, var(--danger) 20%, transparent);
+  color: var(--danger);
+}
+
+.tree-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tree-toolbar-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 0.6875rem;
+  cursor: pointer;
+}
+
+.tree-toolbar-btn:hover {
+  background: rgba(128, 128, 128, 0.18);
+  color: var(--text);
+}
+
+.tree-rename-input {
+  flex: 1;
+  min-width: 0;
+  padding: 1px 4px;
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  background: var(--bg-input);
+  color: var(--text);
+  font-size: 0.75rem;
+  font-family: inherit;
+}
+
+.tree-rename-input:focus {
+  outline: none;
+}
+
+.tree-context-menu {
+  position: fixed;
+  z-index: 50;
+  min-width: 140px;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+
+.tree-context-menu button {
+  width: 100%;
+  text-align: left;
+  padding: 5px 8px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.tree-context-menu button:hover {
+  background: rgba(128, 128, 128, 0.18);
+}
+
+.tree-context-menu .tree-context-danger {
+  color: var(--danger);
 }
 
 .editor-search-form {
@@ -1889,6 +2081,14 @@ body {
   flex: 1;
   min-height: 0;
   overflow: hidden;
+}
+
+/* @uiw/react-codemirror wraps the actual .cm-editor in its own
+   `.cm-theme` div with no height of its own — a `height: 100%` further
+   down the chain can't resolve against an auto-height ancestor, so this
+   link has to be pinned explicitly too, not just the ends. */
+.editor-codemirror .cm-theme {
+  height: 100%;
 }
 
 .editor-codemirror .cm-editor {
