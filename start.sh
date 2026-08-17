@@ -20,15 +20,16 @@ open_browser() {
 
 # BSD stat (macOS) takes "-f <format>"; GNU stat (Linux) takes "-c
 # <format>" and treats -f as an unrelated "show filesystem info" flag
-# that exits 0 with the wrong output instead of erroring — so detecting
-# the flavor by trying one and falling back to the other on failure
-# doesn't work reliably. Detect once, explicitly, by checking which flag
-# actually understands %m as BSD would.
-if stat -f %m . >/dev/null 2>&1 && [ "$(stat -f %m . 2>/dev/null)" -eq "$(stat -f %m . 2>/dev/null)" ] 2>/dev/null; then
-    STAT_FLAVOR=bsd
-else
-    STAT_FLAVOR=gnu
-fi
+# that exits 0 with the wrong (multi-line) output instead of erroring —
+# so detecting the flavor by exit code alone doesn't work. Detect once by
+# checking the output actually looks like a single timestamp (all
+# digits), which only the correct flag/flavor pairing produces.
+_probe="$(stat -f %m . 2>/dev/null)"
+case "$_probe" in
+    ''|*[!0-9]*) STAT_FLAVOR=gnu ;;
+    *)           STAT_FLAVOR=bsd ;;
+esac
+unset _probe
 
 # mtime_of PATH: prints PATH's modification time as a Unix timestamp, or
 # nothing if it doesn't exist. Used below purely as a boolean/comparison
