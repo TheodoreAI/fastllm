@@ -212,7 +212,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		effectiveModel = h.LLM.ChatModel
 	}
 	if h.Files.Enabled() && llm.SupportsTools(effectiveModel) {
-		reads, writes, buildChecks := h.runFileTools(ctx, req.Model, &messages, normalizeThinkLevel(req.ThinkLevel))
+		reads, writes, buildChecks, budgetExhausted := h.runFileTools(ctx, req.Model, &messages, normalizeThinkLevel(req.ThinkLevel))
 		for _, fr := range reads {
 			payload, _ := json.Marshal(fr)
 			fmt.Fprintf(w, "event: tool_call\ndata: %s\n\n", payload)
@@ -227,6 +227,18 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 			payload, _ := json.Marshal(bc)
 			fmt.Fprintf(w, "event: build_check\ndata: %s\n\n", payload)
 			flusher.Flush()
+		}
+		// The tool loop hit its round cap mid-work — nudge the model to
+		// summarize what it did and where it left off instead of letting
+		// the final streamed answer risk coming back empty (see
+		// runFileTools). Appended as a system message, not shown to the
+		// user directly, so it doesn't read like the model talking to
+		// itself.
+		if budgetExhausted {
+			messages = append(messages, llm.Message{
+				Role:    "system",
+				Content: "You've used all your available tool calls for this turn. Stop calling tools now and reply to the user in plain text: summarize what you changed (if anything), whether it passed your last build check, and what — if anything — still needs to be done.",
+			})
 		}
 	}
 
@@ -367,7 +379,7 @@ type buildCheckReport struct {
 // finishing — it runs against a throwaway copy of the project with this
 // turn's pending writes overlaid (see internal/buildcheck), never the
 // real sandbox, so it's safe to offer without a separate approval step.
-func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]llm.Message, thinkLevel string) ([]fileRead, []*PendingWrite, []buildCheckReport) {
+func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]llm.Message, thinkLevel string) ([]fileRead, []*PendingWrite, []buildCheckReport, bool) {
 	// Snapshot once so every check below (which tools to advertise, whether
 	// writes are allowed, which root a proposed write is validated/diffed
 	// against) agrees with itself for this whole turn, even if a
@@ -395,7 +407,7 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 
 		reply, err := h.LLM.Chat(ctx, model, *messages, tools, thinkLevel)
 		if err != nil || len(reply.ToolCalls) == 0 {
-			return reads, pending, buildChecks
+			return reads, pending, buildChecks, false
 		}
 
 		*messages = append(*messages, reply)
@@ -499,7 +511,16 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 			}
 		}
 	}
-	return reads, pending, buildChecks
+	// The round budget ran out while the model was still actively calling
+	// tools (as opposed to naturally stopping with a text reply) — the
+	// message history now ends on unresolved tool results with no
+	// assistant turn addressing them. Some models (observed with
+	// gemma4:12b) produce an empty completion when asked to continue from
+	// there without an explicit nudge, leaving the user with silence
+	// after e.g. a failed build check. Report this so the caller can
+	// inject a summarize-what-happened instruction before the final
+	// streamed answer.
+	return reads, pending, buildChecks, true
 }
 
 // takePendingWrite removes and returns a pending write by ID, or nil if
