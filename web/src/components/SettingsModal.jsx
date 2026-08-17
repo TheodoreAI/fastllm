@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useEscapeKey } from '../useEscapeKey'
 import { FONT_OPTIONS } from '../useFontFamily'
 import { FONT_SCALE_OPTIONS } from '../useFontScale'

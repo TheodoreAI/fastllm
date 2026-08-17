@@ -146,6 +146,10 @@ export default function App() {
     abortControllerRef.current?.abort()
   }
 
+  function stopStreaming() {
+    abortControllerRef.current?.abort()
+  }
+
   async function confirmDeleteConversation() {
     const id = conversationToDelete
     setConversationToDelete(null)
@@ -178,6 +182,9 @@ export default function App() {
     setInput('')
     setStreaming(true)
     setMessages((prev) => [...prev, { role: 'user', content: text }, { role: 'assistant', content: '', sources: [], reasoning: '', toolCalls: [], pendingWrites: [], buildChecks: [] }])
+
+    const controller = new AbortController()
+    abortControllerRef.current = controller
 
     const controller = new AbortController()
     abortControllerRef.current = controller
