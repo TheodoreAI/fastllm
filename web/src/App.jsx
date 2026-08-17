@@ -15,6 +15,7 @@ import { useFontFamily } from './useFontFamily'
 import { useFontScale } from './useFontScale'
 import { useSectionOrder } from './useSectionOrder'
 import { useSidebarCollapsed } from './useSidebarCollapsed'
+import { useSplitWidth } from './useSplitWidth'
 import {
   fetchConversations,
   fetchMessages,
@@ -87,6 +88,8 @@ export default function App() {
   const [sectionOrder, moveSection] = useSectionOrder(DEFAULT_SECTION_ORDER)
   const [sidebarCollapsed, setSidebarCollapsed] = useSidebarCollapsed()
   const [activeView, setActiveView] = useState('chat')
+  const [splitWidth, setSplitWidth] = useSplitWidth()
+  const splitContainerRef = useRef(null)
   const bottomRef = useRef(null)
   const fileInputRef = useRef(null)
   const folderInputRef = useRef(null)
@@ -146,6 +149,28 @@ export default function App() {
 
   function stopStreaming() {
     abortControllerRef.current?.abort()
+  }
+
+  // Drags the Chat|Editor split divider. Tracks mouse position directly
+  // against the split container's own bounding box rather than delta
+  // movement, so a fast drag can't desync from the cursor. Clamped to
+  // 20-80% so neither pane can be dragged down to nothing.
+  function handleSplitDragStart(e) {
+    e.preventDefault()
+    const container = splitContainerRef.current
+    if (!container) return
+
+    function handleMove(moveEvent) {
+      const rect = container.getBoundingClientRect()
+      const fraction = (moveEvent.clientX - rect.left) / rect.width
+      setSplitWidth(Math.min(0.8, Math.max(0.2, fraction)))
+    }
+    function handleUp() {
+      window.removeEventListener('mousemove', handleMove)
+      window.removeEventListener('mouseup', handleUp)
+    }
+    window.addEventListener('mousemove', handleMove)
+    window.addEventListener('mouseup', handleUp)
   }
 
   async function confirmDeleteConversation() {
@@ -498,6 +523,13 @@ export default function App() {
             onClick={() => setActiveView('editor')}
           >
             Editor
+          </button>
+          <button
+            type="button"
+            className={activeView === 'split' ? 'is-active' : ''}
+            onClick={() => setActiveView('split')}
+          >
+            Split
           </button>
         </div>
         <div className="titlebar-actions">
