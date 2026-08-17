@@ -11,7 +11,10 @@ package chat
 import (
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"net/http"
+	"path/filepath"
+	"sort"
 
 	"fastllm/internal/gitrepo"
 )
@@ -22,16 +25,34 @@ type editorTreeEntry struct {
 	Path string `json:"path"`
 }
 
-// EditorTree lists every file the editor's tree/search should show:
-// tracked and untracked-but-not-ignored files in a git repo, so build
-// output, node_modules, and .git internals are excluded automatically.
-// Requires the sandbox root to be a git repository — see gitrepo.
+// editorTreeIgnoredDirs are skipped when walking a non-git folder, since
+// there's no .gitignore to rely on there — mirrors the most common
+// build/dependency output directories so opening an arbitrary folder
+// doesn't dump thousands of irrelevant entries into the tree.
+var editorTreeIgnoredDirs = map[string]bool{
+	".git":         true,
+	"node_modules": true,
+	"dist":         true,
+	"build":        true,
+	"vendor":       true,
+}
+
+// EditorTree lists every file the editor's tree/search should show. If
+// the sandbox root is a git repository, this is tracked and
+// untracked-but-not-ignored files (see gitrepo.ListFiles) so build
+// output and .git internals are excluded for free. Otherwise it falls
+// back to a plain filesystem walk, so opening a folder that isn't a git
+// repo still populates the tree — search and the git panel still
+// require a real repo, since they have no non-git equivalent.
 func (h *Handler) EditorTree(w http.ResponseWriter, r *http.Request) {
 	root, ok := h.editorRoot(w)
 	if !ok {
 		return
 	}
 	files, err := gitrepo.ListFiles(r.Context(), root)
+	if errors.Is(err, gitrepo.ErrNotARepo) {
+		files, err = walkFiles(root)
+	}
 	if err != nil {
 		h.writeGitError(w, err)
 		return
@@ -41,6 +62,38 @@ func (h *Handler) EditorTree(w http.ResponseWriter, r *http.Request) {
 		entries[i] = editorTreeEntry{Path: f}
 	}
 	writeJSON(w, entries)
+}
+
+// walkFiles lists every file under root (relative paths, forward
+// slashes) for the non-git-repo fallback, skipping common
+// build/dependency directories that have no .gitignore to exclude them.
+func walkFiles(root string) ([]string, error) {
+	var out []string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if path == root {
+			return nil
+		}
+		if d.IsDir() {
+			if editorTreeIgnoredDirs[d.Name()] {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		out = append(out, filepath.ToSlash(rel))
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // EditorReadFile returns one file's full content for the editor to open.

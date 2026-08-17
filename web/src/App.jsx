@@ -676,7 +676,11 @@ export default function App() {
         className="editor-pane"
         style={{ display: activeView === 'editor' || activeView === 'split' ? undefined : 'none' }}
       >
-        <EditorView fileAccessSettings={fileAccessSettings} theme={theme} />
+        <EditorView
+          fileAccessSettings={fileAccessSettings}
+          onFileAccessSettingsChange={setFileAccessSettings}
+          theme={theme}
+        />
       </div>
       </div>
 

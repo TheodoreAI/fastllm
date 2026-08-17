@@ -15,12 +15,14 @@ import {
   fetchGitBranches,
   switchGitBranch,
   createGitBranch,
+  browseForFolder,
+  saveFileAccessSettings,
 } from '../api'
 import { languageExtensionFor } from '../editorLanguages'
 
 const PANELS = { files: 'Files', search: 'Search', git: 'Git' }
 
-export default function EditorView({ fileAccessSettings, theme }) {
+export default function EditorView({ fileAccessSettings, onFileAccessSettingsChange, theme }) {
   const [panel, setPanel] = useState('files')
   const [tree, setTree] = useState([])
   const [treeStatus, setTreeStatus] = useState('')
@@ -49,6 +51,8 @@ export default function EditorView({ fileAccessSettings, theme }) {
   const [branchError, setBranchError] = useState('')
   const [newBranchOpen, setNewBranchOpen] = useState(false)
   const [newBranchName, setNewBranchName] = useState('')
+  const [openingFolder, setOpeningFolder] = useState(false)
+  const [folderError, setFolderError] = useState('')
 
   const enabled = !!fileAccessSettings?.read_enabled
   const canWrite = !!fileAccessSettings?.write_enabled
@@ -65,7 +69,7 @@ export default function EditorView({ fileAccessSettings, theme }) {
     setTreeStatus('Loading…')
     fetchEditorTree().then((entries) => {
       setTree(entries)
-      setTreeStatus(entries.length === 0 ? 'No files found (project folder may not be a git repository).' : '')
+      setTreeStatus(entries.length === 0 ? 'No files found in this folder.' : '')
     })
   }
 
@@ -116,6 +120,40 @@ export default function EditorView({ fileAccessSettings, theme }) {
       setBranchError(err.message)
     } finally {
       setBranchBusy(false)
+    }
+  }
+
+  // Opens the native OS folder picker and, if a folder is chosen, makes
+  // it the new sandbox root for both the editor and the chat model's
+  // file tools (they share one root — see internal/chat.editorRoot).
+  // Preserves whatever read/write flags were already set; only the root
+  // changes. Everything scoped to the old root (open file, diff, tree,
+  // git status/branches) is stale afterward, so this clears/refreshes
+  // all of it.
+  async function handleOpenFolder() {
+    setOpeningFolder(true)
+    setFolderError('')
+    try {
+      const picked = await browseForFolder()
+      if (picked.cancelled || !picked.path) return
+      if (dirty && !window.confirm(`Discard unsaved changes to ${openPath}?`)) return
+      const res = await saveFileAccessSettings({
+        ...fileAccessSettings,
+        root: picked.path,
+      })
+      if (!res.ok) throw new Error(await res.text())
+      const saved = await res.json()
+      onFileAccessSettingsChange?.(saved)
+      setOpenPath(null)
+      setDiffPath(null)
+      setSearchResults([])
+      refreshTree()
+      refreshGitStatus()
+      refreshBranches()
+    } catch (err) {
+      setFolderError(err.message)
+    } finally {
+      setOpeningFolder(false)
     }
   }
 
@@ -271,6 +309,17 @@ export default function EditorView({ fileAccessSettings, theme }) {
   return (
     <div className="editor-view">
       <aside className="editor-sidebar">
+        <div className="editor-folder-row">
+          <button type="button" onClick={handleOpenFolder} disabled={openingFolder} title={fileAccessSettings?.root}>
+            {openingFolder ? 'Opening…' : 'Open Folder…'}
+          </button>
+          {fileAccessSettings?.root && (
+            <span className="editor-folder-name" title={fileAccessSettings.root}>
+              {fileAccessSettings.root.split(/[/\\]/).filter(Boolean).pop()}
+            </span>
+          )}
+        </div>
+        {folderError && <p className="editor-error">{folderError}</p>}
         <div className="editor-panel-tabs">
           {Object.entries(PANELS).map(([key, label]) => (
             <button
@@ -333,7 +382,11 @@ export default function EditorView({ fileAccessSettings, theme }) {
           </div>
         )}
 
-        {panel === 'git' && (
+        {panel === 'git' && branches.length === 0 ? (
+          <div className="editor-panel-body">
+            <p className="editor-hint">This folder isn't a git repository, so version control isn't available here.</p>
+          </div>
+        ) : panel === 'git' && (
           <div className="editor-panel-body">
             {branchError && <p className="editor-error">{branchError}</p>}
             <div className="editor-branch-row">
