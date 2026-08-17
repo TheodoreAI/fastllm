@@ -1406,6 +1406,38 @@ body {
   overflow: hidden;
 }
 
+.editor-folder-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.editor-folder-row button {
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text);
+  font-size: 0.75rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.editor-folder-row button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.editor-folder-name {
+  color: var(--text-dim);
+  font-size: 0.75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .editor-panel-tabs {
   display: flex;
   border-bottom: 1px solid var(--border);
