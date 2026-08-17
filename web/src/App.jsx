@@ -6,6 +6,7 @@ import SkillPanel from './components/SkillPanel'
 import KnowledgeBasePanel from './components/KnowledgeBasePanel'
 import ChatPanel from './components/ChatPanel'
 import EditorView from './components/EditorView'
+import TerminalView from './components/TerminalView'
 import ConfirmDeleteModal from './components/ConfirmDeleteModal'
 import SettingsModal from './components/SettingsModal'
 import DraggableSection from './components/DraggableSection'
@@ -16,6 +17,8 @@ import { useFontScale } from './useFontScale'
 import { useSectionOrder } from './useSectionOrder'
 import { useSidebarCollapsed } from './useSidebarCollapsed'
 import { useSplitWidth } from './useSplitWidth'
+import { useTerminalPanelHeight } from './useTerminalPanelHeight'
+import { useTerminalCollapsed } from './useTerminalCollapsed'
 import {
   fetchConversations,
   fetchMessages,
@@ -88,8 +91,12 @@ export default function App() {
   const [sectionOrder, moveSection] = useSectionOrder(DEFAULT_SECTION_ORDER)
   const [sidebarCollapsed, setSidebarCollapsed] = useSidebarCollapsed()
   const [activeView, setActiveView] = useState('chat')
+  const [terminalEverShown, setTerminalEverShown] = useState(false)
   const [splitWidth, setSplitWidth] = useSplitWidth()
+  const [terminalPanelHeight, setTerminalPanelHeight] = useTerminalPanelHeight()
+  const [terminalCollapsed, setTerminalCollapsed] = useTerminalCollapsed()
   const splitContainerRef = useRef(null)
+  const editorColumnRef = useRef(null)
   const bottomRef = useRef(null)
   const fileInputRef = useRef(null)
   const folderInputRef = useRef(null)
@@ -172,6 +179,33 @@ export default function App() {
       const rect = container.getBoundingClientRect()
       const fraction = (moveEvent.clientX - rect.left) / rect.width
       setSplitWidth(Math.min(0.8, Math.max(0.2, fraction)))
+    }
+    function handleUp() {
+      window.removeEventListener('mousemove', handleMove)
+      window.removeEventListener('mouseup', handleUp)
+      document.body.style.userSelect = previousUserSelect
+    }
+    window.addEventListener('mousemove', handleMove)
+    window.addEventListener('mouseup', handleUp)
+  }
+
+  // Drags the terminal panel's top divider to resize it vertically.
+  // Tracks the cursor against the editor column's own bottom edge (rather
+  // than delta movement) for the same reason handleSplitDragStart does —
+  // a fast drag can't desync from the cursor. Clamped so the panel can't
+  // be dragged to nothing or to swallow the whole column.
+  function handleTerminalDragStart(e) {
+    e.preventDefault()
+    const container = editorColumnRef.current
+    if (!container) return
+
+    const previousUserSelect = document.body.style.userSelect
+    document.body.style.userSelect = 'none'
+
+    function handleMove(moveEvent) {
+      const rect = container.getBoundingClientRect()
+      const height = rect.bottom - moveEvent.clientY
+      setTerminalPanelHeight(Math.min(rect.height - 120, Math.max(120, height)))
     }
     function handleUp() {
       window.removeEventListener('mousemove', handleMove)
@@ -554,17 +588,52 @@ export default function App() {
       <div className="main-row">
       <div className="split-container" ref={splitContainerRef}>
       <div
-        className="editor-pane"
+        className="editor-pane editor-column"
+        ref={editorColumnRef}
         style={{
           display: activeView === 'editor' || activeView === 'split' ? undefined : 'none',
           flex: activeView === 'split' ? `0 0 ${splitWidth * 100}%` : undefined,
         }}
       >
-        <EditorView
-          fileAccessSettings={fileAccessSettings}
-          onFileAccessSettingsChange={setFileAccessSettings}
-          theme={theme}
-        />
+        <div className="editor-column-main">
+          <EditorView
+            fileAccessSettings={fileAccessSettings}
+            onFileAccessSettingsChange={setFileAccessSettings}
+            theme={theme}
+          />
+        </div>
+
+        {!terminalCollapsed && (
+          <div
+            className="terminal-panel-divider"
+            onMouseDown={handleTerminalDragStart}
+          />
+        )}
+
+        <div
+          className={`terminal-panel ${terminalCollapsed ? 'is-collapsed' : ''}`}
+          style={{ flex: terminalCollapsed ? '0 0 auto' : `0 0 ${terminalPanelHeight}px` }}
+        >
+          <div className="terminal-panel-header">
+            <span className="terminal-panel-title">Terminal</span>
+            <button
+              type="button"
+              className="terminal-panel-collapse-toggle"
+              title={terminalCollapsed ? 'Expand terminal' : 'Collapse terminal'}
+              onClick={() => {
+                setTerminalEverShown(true)
+                setTerminalCollapsed((c) => !c)
+              }}
+            >
+              {terminalCollapsed ? '▲' : '▼'}
+            </button>
+          </div>
+          {!terminalCollapsed && terminalEverShown && (
+            <div className="terminal-panel-body">
+              <TerminalView theme={theme} />
+            </div>
+          )}
+        </div>
       </div>
 
       {activeView === 'split' && (
