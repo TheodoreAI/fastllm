@@ -29,7 +29,8 @@ the user's question when it's relevant. If the context doesn't contain the
 answer, say so and answer from general knowledge instead.`
 
 // readFileTool is the schema advertised to the model when file access is
-// enabled. Read-only, sandboxed to Handler.Files.Root — see internal/files.
+// enabled. Read-only, sandboxed to Handler.Files's configured root — see
+// internal/files.
 var readFileTool = llm.Tool{
 	Type: "function",
 	Function: llm.ToolFunction{
@@ -83,6 +84,15 @@ type PendingWrite struct {
 	ExistingContent string `json:"existing_content"`
 	FileExists      bool   `json:"file_exists"`
 	Resolved        bool   `json:"-"`
+
+	// root is the sandbox root this write was validated and diffed
+	// against when proposed. If the live file-access root has changed by
+	// the time it's approved (via PUT /api/settings/files), applying it
+	// against the new root could silently write somewhere the reviewer
+	// never saw in the diff — ApproveWrite refuses the write instead. Not
+	// exported: this is an internal consistency check, not part of the
+	// API response the frontend renders.
+	root string
 }
 
 type Handler struct {
@@ -110,6 +120,7 @@ type chatRequest struct {
 	Model          string `json:"model"`
 	SkillID        int64  `json:"skill_id"`
 	ConversationID int64  `json:"conversation_id"`
+	ThinkLevel     string `json:"think_level"`
 }
 
 // Chat streams the assistant's reply back to the client as Server-Sent
@@ -167,7 +178,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.Files.Enabled() {
-		reads, writes := h.runFileTools(ctx, req.Model, &messages)
+		reads, writes := h.runFileTools(ctx, req.Model, &messages, normalizeThinkLevel(req.ThinkLevel))
 		for _, fr := range reads {
 			payload, _ := json.Marshal(fr)
 			fmt.Fprintf(w, "event: tool_call\ndata: %s\n\n", payload)
@@ -181,7 +192,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var full strings.Builder
-	err := h.LLM.StreamChat(ctx, req.Model, messages, func(token string) {
+	err := h.LLM.StreamChat(ctx, req.Model, messages, normalizeThinkLevel(req.ThinkLevel), func(token string) {
 		full.WriteString(token)
 		payload, _ := json.Marshal(map[string]string{"token": token})
 		fmt.Fprintf(w, "data: %s\n\n", payload)
@@ -191,7 +202,13 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "event: reasoning\ndata: %s\n\n", payload)
 		flusher.Flush()
 	})
-	if err != nil {
+	// A client-initiated stop (the Stop button) cancels ctx, which surfaces
+	// here as a context-canceled error from StreamChat — that's an
+	// intentional stop, not a failure, so still save whatever partial
+	// answer was generated (same as a normal completion) instead of
+	// discarding it. Writing an SSE event at this point is a harmless
+	// no-op: the client already closed its end of the connection.
+	if err != nil && ctx.Err() == nil {
 		payload, _ := json.Marshal(map[string]string{"error": err.Error()})
 		fmt.Fprintf(w, "event: error\ndata: %s\n\n", payload)
 		flusher.Flush()
@@ -301,13 +318,19 @@ type fileRead struct {
 // approval via the /api/writes endpoints, and the model is told exactly
 // that in its tool result, so its final answer can honestly say the
 // change is pending review rather than claiming it already happened.
-func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]llm.Message) ([]fileRead, []*PendingWrite) {
+func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]llm.Message, thinkLevel string) ([]fileRead, []*PendingWrite) {
+	// Snapshot once so every check below (which tools to advertise, whether
+	// writes are allowed, which root a proposed write is validated/diffed
+	// against) agrees with itself for this one request, even if a
+	// concurrent PUT /api/settings/files changes config mid-flight.
+	root, writesEnabled := h.Files.Snapshot()
+
 	tools := []llm.Tool{readFileTool}
-	if h.Files.WritesEnabled() {
+	if writesEnabled {
 		tools = append(tools, writeFileTool)
 	}
 
-	reply, err := h.LLM.Chat(ctx, model, *messages, tools)
+	reply, err := h.LLM.Chat(ctx, model, *messages, tools, thinkLevel)
 	if err != nil || len(reply.ToolCalls) == 0 {
 		return nil, nil
 	}
@@ -348,7 +371,7 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 			_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
 
 			var result string
-			if !h.Files.WritesEnabled() {
+			if !writesEnabled {
 				result = "Error: file writes are not enabled."
 			} else if len(args.Content) > files.MaxWriteBytes {
 				result = fmt.Sprintf("Error: proposed content is too large (%d bytes, max %d).", len(args.Content), files.MaxWriteBytes)
@@ -362,6 +385,7 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 					NewContent:      args.Content,
 					ExistingContent: existing,
 					FileExists:      exists,
+					root:            root,
 				}
 				h.writesMu.Lock()
 				h.writes[pw.ID] = pw
@@ -398,6 +422,15 @@ func (h *Handler) ApproveWrite(w http.ResponseWriter, r *http.Request) {
 	pw := h.takePendingWrite(id)
 	if pw == nil {
 		http.Error(w, "no such pending write (already resolved or unknown id)", http.StatusNotFound)
+		return
+	}
+	// The sandbox root may have changed (via PUT /api/settings/files)
+	// since this write was proposed and diffed for review — approving it
+	// against a different root than the one shown to the reviewer would
+	// silently write somewhere they never saw. Refuse instead; the model
+	// can re-propose the write against the new root if still wanted.
+	if currentRoot, _ := h.Files.Snapshot(); currentRoot != pw.root {
+		http.Error(w, "file access settings changed since this write was proposed — re-ask the model to make this change so it can be reviewed against the current settings", http.StatusConflict)
 		return
 	}
 	if err := h.Files.Write(pw.Path, pw.NewContent); err != nil {
@@ -467,6 +500,41 @@ func (h *Handler) GetRAGSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, rag)
+}
+
+func normalizeThinkLevel(level string) string {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "low", "medium", "high":
+		return strings.ToLower(strings.TrimSpace(level))
+	default:
+		return ""
+	}
+}
+
+func (h *Handler) GetFileAccessSettings(w http.ResponseWriter, r *http.Request) {
+	settings, err := store.GetFileAccessSettings(h.DB)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, settings)
+}
+
+func (h *Handler) UpdateFileAccessSettings(w http.ResponseWriter, r *http.Request) {
+	var settings store.FileAccessSettings
+	if err := json.NewDecoder(r.Body).Decode(&settings); err != nil {
+		http.Error(w, "invalid file access settings payload", http.StatusBadRequest)
+		return
+	}
+	if err := store.SaveFileAccessSettings(h.DB, settings); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := h.Files.SetConfig(settings.Root, settings.ReadEnabled, settings.WriteEnabled); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, settings)
 }
 
 // UpdateRAGSettings saves new chunking/retrieval settings. Chunk size and

@@ -1,4 +1,7 @@
-export default function ModelPicker({ models, model, onChange }) {
+export default function ModelPicker({ models, model, onChange, fileAccessSettings, onOpenSettings }) {
+  const readOn = !!fileAccessSettings?.read_enabled
+  const writeOn = !!fileAccessSettings?.write_enabled
+
   return (
     <section className="panel">
       <h2>Model</h2>
@@ -15,6 +18,11 @@ export default function ModelPicker({ models, model, onChange }) {
           </option>
         ))}
       </select>
+
+      <button type="button" className="file-access-status" onClick={onOpenSettings}>
+        <span className={`file-access-dot ${readOn ? 'is-on' : 'is-off'}`} />
+        {readOn ? (writeOn ? 'File read + write on' : 'File read only') : 'File access off'}
+      </button>
     </section>
   )
 }

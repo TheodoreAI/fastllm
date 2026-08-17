@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 // MaxReadBytes caps how much of a file is returned to the model — large
@@ -26,12 +27,16 @@ const MaxWriteBytes = 32 * 1024
 var ErrOutsideRoot = errors.New("path is outside the allowed directory")
 
 // Reader resolves paths against a fixed root and reads/writes files from
-// within it. The zero value (empty Root) means the feature is disabled —
+// within it. The zero value (empty root) means the feature is disabled —
 // callers should check Enabled() before registering the read_file tool,
-// and WritesEnabled() before registering write_file.
+// and WritesEnabled() before registering write_file. root/allowWrites are
+// unexported and only ever mutated through SetConfig, so every access
+// goes through mu — see Snapshot for why that matters for callers that
+// need both values to describe the same moment in time.
 type Reader struct {
-	Root        string
-	AllowWrites bool
+	mu          sync.RWMutex
+	root        string
+	allowWrites bool
 }
 
 // New constructs a Reader. root == "" disables the feature entirely
@@ -39,32 +44,72 @@ type Reader struct {
 // gates whether write_file is offered — reads can be enabled without
 // writes, but not the reverse.
 func New(root string, allowWrites bool) *Reader {
-	if root == "" {
-		return &Reader{}
+	r := &Reader{}
+	_ = r.SetConfig(root, root != "", allowWrites)
+	return r
+}
+
+// SetConfig replaces the sandbox root and read/write flags in one atomic
+// update — the live-reconfiguration path used by PUT /api/settings/files
+// (see internal/chat.UpdateFileAccessSettings), applied without a server
+// restart.
+func (r *Reader) SetConfig(root string, readEnabled, writeEnabled bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !readEnabled || root == "" {
+		r.root = ""
+		r.allowWrites = false
+		return nil
 	}
 	abs, err := filepath.Abs(root)
 	if err != nil {
-		return &Reader{}
+		return err
 	}
-	return &Reader{Root: abs, AllowWrites: allowWrites}
+	r.root = abs
+	r.allowWrites = writeEnabled
+	return nil
 }
 
 func (r *Reader) Enabled() bool {
-	return r.Root != ""
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.root != ""
+}
+
+// GetRoot returns the current sandbox root, or "" if disabled — for
+// display/logging only. Use Snapshot instead when a caller needs root and
+// allowWrites to be consistent with each other.
+func (r *Reader) GetRoot() string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.root
+}
+
+// Snapshot returns a consistent {root, allowWrites} pair read under a
+// single lock acquisition — use this instead of separate Enabled()/
+// WritesEnabled()/GetRoot() calls when a caller needs the two values to
+// describe the same moment in time (see runFileTools in internal/chat).
+func (r *Reader) Snapshot() (root string, allowWrites bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.root, r.allowWrites
 }
 
 func (r *Reader) WritesEnabled() bool {
-	return r.Enabled() && r.AllowWrites
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.root != "" && r.allowWrites
 }
 
 // Resolve joins the requested path onto Root and confirms the result is
 // still inside Root — rejecting absolute paths, ".." traversal, and
 // symlinks that escape the sandbox. The target must already exist.
 func (r *Reader) Resolve(requested string) (string, error) {
-	if !r.Enabled() {
+	root, _ := r.Snapshot()
+	if root == "" {
 		return "", errors.New("file access is not enabled")
 	}
-	joined, err := r.resolveWithinRoot(requested)
+	joined, err := resolveWithinRoot(root, requested)
 	if err != nil {
 		return "", err
 	}
@@ -73,7 +118,7 @@ func (r *Reader) Resolve(requested string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return r.confirmWithinRoot(resolved)
+	return confirmWithinRoot(root, resolved)
 }
 
 // ResolveForWrite is like Resolve but tolerates a target that doesn't
@@ -81,10 +126,11 @@ func (r *Reader) Resolve(requested string) (string, error) {
 // ancestor directory instead so a symlinked parent still can't be used to
 // escape the sandbox.
 func (r *Reader) ResolveForWrite(requested string) (string, error) {
-	if !r.WritesEnabled() {
+	root, allowWrites := r.Snapshot()
+	if root == "" || !allowWrites {
 		return "", errors.New("file writes are not enabled")
 	}
-	joined, err := r.resolveWithinRoot(requested)
+	joined, err := resolveWithinRoot(root, requested)
 	if err != nil {
 		return "", err
 	}
@@ -92,9 +138,16 @@ func (r *Reader) ResolveForWrite(requested string) (string, error) {
 	// If the target itself already exists (including as a symlink), it
 	// must resolve within root — this is what catches overwriting through
 	// a symlink that points outside the sandbox, which the ancestor-walk
-	// below would otherwise miss (it only checks directories).
+	// below would otherwise miss (it only checks directories). Resolved
+	// against the root snapshotted above, not re-read via Resolve(), so a
+	// concurrent SetConfig mid-call can't make this check and the caller's
+	// eventual write disagree about which root they're validating against.
 	if _, err := os.Lstat(joined); err == nil {
-		if _, err := r.Resolve(requested); err != nil {
+		resolved, err := filepath.EvalSymlinks(joined)
+		if err != nil {
+			return "", err
+		}
+		if _, err := confirmWithinRoot(root, resolved); err != nil {
 			return "", err
 		}
 		return joined, nil
@@ -125,23 +178,23 @@ func (r *Reader) ResolveForWrite(requested string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if _, err := r.confirmWithinRoot(resolvedDir); err != nil {
+	if _, err := confirmWithinRoot(root, resolvedDir); err != nil {
 		return "", err
 	}
 	return joined, nil
 }
 
-func (r *Reader) resolveWithinRoot(requested string) (string, error) {
-	joined := filepath.Join(r.Root, requested)
-	rel, err := filepath.Rel(r.Root, joined)
+func resolveWithinRoot(root, requested string) (string, error) {
+	joined := filepath.Join(root, requested)
+	rel, err := filepath.Rel(root, joined)
 	if err != nil || rel == ".." || (len(rel) >= 3 && rel[:3] == ".."+string(filepath.Separator)) {
 		return "", ErrOutsideRoot
 	}
 	return joined, nil
 }
 
-func (r *Reader) confirmWithinRoot(resolved string) (string, error) {
-	realRoot, err := filepath.EvalSymlinks(r.Root)
+func confirmWithinRoot(root, resolved string) (string, error) {
+	realRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return "", err
 	}

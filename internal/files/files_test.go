@@ -218,6 +218,50 @@ func TestWriteRejectsSymlinkEscape(t *testing.T) {
 	}
 }
 
+func TestReaderCanUpdateRootAndWriteState(t *testing.T) {
+	root := setupRoot(t)
+	r := New(root, false)
+
+	if err := r.SetConfig(root, true, true); err != nil {
+		t.Fatalf("SetConfig returned unexpected error: %v", err)
+	}
+	if !r.Enabled() {
+		t.Fatal("reader should remain enabled after a live config update")
+	}
+	if !r.WritesEnabled() {
+		t.Fatal("writes should be enabled after SetConfig")
+	}
+
+	if err := r.SetConfig("", false, false); err != nil {
+		t.Fatalf("SetConfig with empty root returned unexpected error: %v", err)
+	}
+	if r.Enabled() {
+		t.Fatal("empty root should disable the reader")
+	}
+	if r.WritesEnabled() {
+		t.Fatal("empty root should disable writes")
+	}
+}
+
+func TestSnapshotIsConsistent(t *testing.T) {
+	root := setupRoot(t)
+	r := New(root, true)
+
+	snapRoot, allowWrites := r.Snapshot()
+	if snapRoot == "" {
+		t.Fatal("expected non-empty root from Snapshot")
+	}
+	if !allowWrites {
+		t.Fatal("expected allowWrites=true from Snapshot")
+	}
+
+	_ = r.SetConfig("", false, false)
+	snapRoot, allowWrites = r.Snapshot()
+	if snapRoot != "" || allowWrites {
+		t.Fatal("Snapshot should reflect the disabled state after SetConfig")
+	}
+}
+
 func TestExistingContentForNewFile(t *testing.T) {
 	root := setupRoot(t)
 	r := New(root, true)

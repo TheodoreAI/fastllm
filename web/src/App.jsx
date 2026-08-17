@@ -12,6 +12,7 @@ import { useTheme } from './useTheme'
 import { useFontFamily } from './useFontFamily'
 import { useFontScale } from './useFontScale'
 import { useSectionOrder } from './useSectionOrder'
+import { useSidebarCollapsed } from './useSidebarCollapsed'
 import {
   fetchConversations,
   fetchMessages,
@@ -22,6 +23,8 @@ import {
   fetchSettings,
   fetchRagSettings,
   saveRagSettings,
+  fetchFileAccessSettings,
+  saveFileAccessSettings,
   clearKnowledgeBase,
   clearConversations,
   createSkill as apiCreateSkill,
@@ -39,6 +42,13 @@ import {
 const UPLOAD_FILE_PATTERN = /\.(txt|md|markdown|mdx|json|ya?ml|csv|tsv|log|go|js|jsx|ts|tsx|py|rb|java|c|cc|cpp|h|hpp|rs|sh|sql|html|css|xml|pdf)$/i
 
 const DEFAULT_SECTION_ORDER = ['conversations', 'model', 'skills', 'knowledge']
+
+const SECTION_ICONS = {
+  conversations: { icon: '💬', label: 'Conversations' },
+  model: { icon: '🧠', label: 'Model' },
+  skills: { icon: '🪄', label: 'Skills' },
+  knowledge: { icon: '📚', label: 'Knowledge base' },
+}
 
 export default function App() {
   const [messages, setMessages] = useState([])
@@ -67,13 +77,17 @@ export default function App() {
   const [quitting, setQuitting] = useState(false)
   const [serverStopped, setServerStopped] = useState(false)
   const [ragSettings, setRagSettings] = useState(null)
+  const [fileAccessSettings, setFileAccessSettings] = useState({ root: '', read_enabled: false, write_enabled: false })
+  const [thinkLevel, setThinkLevel] = useState('medium')
   const [theme, setTheme] = useTheme()
   const [fontFamily, setFontFamily] = useFontFamily()
   const [fontScale, setFontScale] = useFontScale()
   const [sectionOrder, moveSection] = useSectionOrder(DEFAULT_SECTION_ORDER)
+  const [sidebarCollapsed, setSidebarCollapsed] = useSidebarCollapsed()
   const bottomRef = useRef(null)
   const fileInputRef = useRef(null)
   const folderInputRef = useRef(null)
+  const abortControllerRef = useRef(null)
 
   useEffect(() => {
     refreshConversations().then((list) => {
@@ -87,6 +101,7 @@ export default function App() {
     })
     fetchSettings().then(setSettings)
     fetchRagSettings().then(setRagSettings)
+    fetchFileAccessSettings().then((settings) => setFileAccessSettings(settings ?? { root: '', read_enabled: false, write_enabled: false }))
   }, [])
 
   useEffect(() => {
@@ -124,6 +139,10 @@ export default function App() {
     setMessagesLoading(false)
   }
 
+  function stopStreaming() {
+    abortControllerRef.current?.abort()
+  }
+
   async function confirmDeleteConversation() {
     const id = conversationToDelete
     setConversationToDelete(null)
@@ -157,9 +176,12 @@ export default function App() {
     setStreaming(true)
     setMessages((prev) => [...prev, { role: 'user', content: text }, { role: 'assistant', content: '', sources: [], reasoning: '', toolCalls: [], pendingWrites: [] }])
 
+    const controller = new AbortController()
+    abortControllerRef.current = controller
+
     try {
       await streamChat(
-        { message: text, model, skillId, conversationId },
+        { message: text, model, skillId, conversationId, thinkLevel },
         {
           onConversation: (id) => {
             setConversationId(id)
@@ -225,11 +247,18 @@ export default function App() {
               return next
             })
           },
-        }
+        },
+        controller.signal
       )
     } catch (err) {
-      setMessages((prev) => [...prev, { role: 'assistant', content: `⚠️ ${err.message}`, isError: true }])
+      // A deliberate stop click aborts the fetch, which surfaces here as
+      // an AbortError — that's the expected/successful outcome of
+      // stopStreaming, not a failure worth showing as an error bubble.
+      if (err.name !== 'AbortError') {
+        setMessages((prev) => [...prev, { role: 'assistant', content: `⚠️ ${err.message}`, isError: true }])
+      }
     } finally {
+      abortControllerRef.current = null
       setStreaming(false)
       refreshConversations()
     }
@@ -322,6 +351,14 @@ export default function App() {
     if (!res.ok) throw new Error(await res.text())
     const saved = await res.json()
     setRagSettings(saved)
+  }
+
+  async function handleSaveFileAccessSettings(next) {
+    const res = await saveFileAccessSettings(next)
+    if (!res.ok) throw new Error(await res.text())
+    const saved = await res.json()
+    setFileAccessSettings(saved)
+    return saved
   }
 
   async function createSkill(e) {
@@ -452,58 +489,87 @@ export default function App() {
       </div>
 
       <div className="body">
-        <aside className="sidebar">
-          {sectionOrder.map((key, index) => {
-            const section = {
-              conversations: (
-                <ConversationList
-                  conversations={conversations}
-                  conversationId={conversationId}
-                  onNewChat={startNewChat}
-                  onOpen={openConversation}
-                  onRequestDelete={setConversationToDelete}
-                  error={conversationError}
-                />
-              ),
-              model: <ModelPicker models={models} model={model} onChange={setModel} />,
-              skills: (
-                <SkillPanel
-                  skills={skills}
-                  skillId={skillId}
-                  onSkillIdChange={setSkillId}
-                  onRequestDeleteSkill={setSkillToDelete}
-                  skillFormOpen={skillFormOpen}
-                  onOpenForm={() => setSkillFormOpen(true)}
-                  onCloseForm={() => setSkillFormOpen(false)}
-                  skillName={skillName}
-                  onSkillNameChange={setSkillName}
-                  skillPrompt={skillPrompt}
-                  onSkillPromptChange={setSkillPrompt}
-                  onCreateSkill={createSkill}
-                  error={skillError}
-                />
-              ),
-              knowledge: (
-                <KnowledgeBasePanel
-                  docText={docText}
-                  onDocTextChange={setDocText}
-                  onUploadDocument={uploadDocument}
-                  fileInputRef={fileInputRef}
-                  onFilePicked={handleFilePicked}
-                  folderInputRef={folderInputRef}
-                  onFolderPicked={handleFolderPicked}
-                  docStatus={docStatus}
-                  documents={documents}
-                />
-              ),
-            }[key]
+        <aside className={`sidebar ${sidebarCollapsed ? 'is-collapsed' : ''}`}>
+          <button
+            type="button"
+            className="sidebar-collapse-toggle"
+            title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            onClick={() => setSidebarCollapsed((c) => !c)}
+          >
+            {sidebarCollapsed ? '»' : '«'}
+          </button>
 
-            return (
-              <DraggableSection key={key} sectionKey={key} index={index} onReorder={moveSection}>
-                {section}
-              </DraggableSection>
-            )
-          })}
+          {sidebarCollapsed
+            ? sectionOrder.map((key) => (
+                <button
+                  key={key}
+                  type="button"
+                  className="sidebar-icon-btn"
+                  title={SECTION_ICONS[key].label}
+                  onClick={() => setSidebarCollapsed(false)}
+                >
+                  <span aria-hidden="true">{SECTION_ICONS[key].icon}</span>
+                </button>
+              ))
+            : sectionOrder.map((key, index) => {
+                const section = {
+                  conversations: (
+                    <ConversationList
+                      conversations={conversations}
+                      conversationId={conversationId}
+                      onNewChat={startNewChat}
+                      onOpen={openConversation}
+                      onRequestDelete={setConversationToDelete}
+                      error={conversationError}
+                    />
+                  ),
+                  model: (
+                <ModelPicker
+                  models={models}
+                  model={model}
+                  onChange={setModel}
+                  fileAccessSettings={fileAccessSettings}
+                  onOpenSettings={() => setSettingsOpen(true)}
+                />
+              ),
+                  skills: (
+                    <SkillPanel
+                      skills={skills}
+                      skillId={skillId}
+                      onSkillIdChange={setSkillId}
+                      onRequestDeleteSkill={setSkillToDelete}
+                      skillFormOpen={skillFormOpen}
+                      onOpenForm={() => setSkillFormOpen(true)}
+                      onCloseForm={() => setSkillFormOpen(false)}
+                      skillName={skillName}
+                      onSkillNameChange={setSkillName}
+                      skillPrompt={skillPrompt}
+                      onSkillPromptChange={setSkillPrompt}
+                      onCreateSkill={createSkill}
+                      error={skillError}
+                    />
+                  ),
+                  knowledge: (
+                    <KnowledgeBasePanel
+                      docText={docText}
+                      onDocTextChange={setDocText}
+                      onUploadDocument={uploadDocument}
+                      fileInputRef={fileInputRef}
+                      onFilePicked={handleFilePicked}
+                      folderInputRef={folderInputRef}
+                      onFolderPicked={handleFolderPicked}
+                      docStatus={docStatus}
+                      documents={documents}
+                    />
+                  ),
+                }[key]
+
+                return (
+                  <DraggableSection key={key} sectionKey={key} index={index} onReorder={moveSection}>
+                    {section}
+                  </DraggableSection>
+                )
+              })}
         </aside>
 
         <ChatPanel
@@ -514,6 +580,7 @@ export default function App() {
           onInputChange={setInput}
           streaming={streaming}
           onSendMessage={sendMessage}
+          onStop={stopStreaming}
           userDisplayName={settings?.username}
           onApproveWrite={handleApproveWrite}
           onRejectWrite={handleRejectWrite}
@@ -561,6 +628,10 @@ export default function App() {
           settings={settings}
           ragSettings={ragSettings}
           onSaveRagSettings={handleSaveRagSettings}
+          fileAccessSettings={fileAccessSettings}
+          onSaveFileAccessSettings={handleSaveFileAccessSettings}
+          thinkLevel={thinkLevel}
+          onThinkLevelChange={setThinkLevel}
           onClearKnowledgeBase={handleClearKnowledgeBase}
           onClearConversations={handleClearConversations}
           onClose={() => setSettingsOpen(false)}

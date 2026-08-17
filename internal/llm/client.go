@@ -67,6 +67,7 @@ type chatRequest struct {
 	Messages []Message `json:"messages"`
 	Stream   bool      `json:"stream"`
 	Tools    []Tool    `json:"tools,omitempty"`
+	Think    string    `json:"think,omitempty"`
 }
 
 // Model describes one chat-capable model available on the backend.
@@ -146,11 +147,11 @@ type chatStreamChunk struct {
 // sends reasoning as a "reasoning" delta field alongside "content", ahead
 // of and separate from the actual answer; models without thinking support
 // simply never populate it. If model is empty, c.ChatModel is used.
-func (c *Client) StreamChat(ctx context.Context, model string, messages []Message, onToken func(string), onReasoning func(string)) error {
+func (c *Client) StreamChat(ctx context.Context, model string, messages []Message, thinkLevel string, onToken func(string), onReasoning func(string)) error {
 	if model == "" {
 		model = c.ChatModel
 	}
-	body, err := json.Marshal(chatRequest{Model: model, Messages: messages, Stream: true})
+	body, err := json.Marshal(chatRequest{Model: model, Messages: messages, Stream: true, Think: thinkLevel})
 	if err != nil {
 		return err
 	}
@@ -214,11 +215,11 @@ type chatResponse struct {
 // tool calls (which arrive as accumulated JSON, awkward to stream) are
 // resolved before the user-facing streamed answer begins. If model is
 // empty, c.ChatModel is used.
-func (c *Client) Chat(ctx context.Context, model string, messages []Message, tools []Tool) (Message, error) {
+func (c *Client) Chat(ctx context.Context, model string, messages []Message, tools []Tool, thinkLevel string) (Message, error) {
 	if model == "" {
 		model = c.ChatModel
 	}
-	body, err := json.Marshal(chatRequest{Model: model, Messages: messages, Stream: false, Tools: tools})
+	body, err := json.Marshal(chatRequest{Model: model, Messages: messages, Stream: false, Tools: tools, Think: thinkLevel})
 	if err != nil {
 		return Message{}, err
 	}

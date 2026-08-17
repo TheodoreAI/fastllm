@@ -439,6 +439,96 @@ func GetRAGSettings(db *sql.DB) (RAGSettings, error) {
 	return s, rows.Err()
 }
 
+// FileAccessSettings controls whether the model can read or write files,
+// sandboxed to a fixed root directory. Values are persisted in the same
+// settings table as the RAG knobs so the browser can save them live.
+type FileAccessSettings struct {
+	Root         string `json:"root"`
+	ReadEnabled  bool   `json:"read_enabled"`
+	WriteEnabled bool   `json:"write_enabled"`
+}
+
+var DefaultFileAccessSettings = FileAccessSettings{}
+
+const settingFileAccess = "file_access"
+
+// GetFileAccessSettings loads the persisted file-access config or the
+// zero-value defaults when no saved config exists yet.
+func GetFileAccessSettings(db *sql.DB) (FileAccessSettings, error) {
+	s := DefaultFileAccessSettings
+	var value string
+	err := db.QueryRow(`SELECT value FROM settings WHERE key = ?`, settingFileAccess).Scan(&value)
+	if err == sql.ErrNoRows {
+		return s, nil
+	}
+	if err != nil {
+		return s, err
+	}
+	if err := json.Unmarshal([]byte(value), &s); err != nil {
+		return s, err
+	}
+	if !s.ReadEnabled {
+		s.WriteEnabled = false
+	}
+	return s, nil
+}
+
+const fileAccessSeededFlagKey = "seeded_file_access_from_env"
+
+// SeedFileAccessSettingsFromEnv writes the FASTLLM_FILES_ROOT/
+// FASTLLM_FILES_WRITE env vars into the persisted file-access settings
+// exactly once, the first time the server ever starts with this database
+// — tracked via the meta table, the same "seeded once" idiom used by
+// seedDefaultSkills/migrateOrphanMessages. This exists so the env vars
+// remain a working way to configure file access on a fresh install, while
+// still letting the user later disable file access entirely via the
+// Settings UI without that opt-out being silently overwritten by the env
+// vars again on the next restart (a zero-value FileAccessSettings row is
+// indistinguishable from "never configured" — checking for it, as this
+// function used to, can't tell the two apart from data alone).
+func SeedFileAccessSettingsFromEnv(db *sql.DB, root string, write bool) error {
+	var done string
+	err := db.QueryRow(`SELECT value FROM meta WHERE key = ?`, fileAccessSeededFlagKey).Scan(&done)
+	if err == nil {
+		return nil // already seeded (or explicitly saved since) — leave it alone
+	}
+	if err != sql.ErrNoRows {
+		return err
+	}
+
+	if err := SaveFileAccessSettings(db, FileAccessSettings{
+		Root:         root,
+		ReadEnabled:  root != "",
+		WriteEnabled: write && root != "",
+	}); err != nil {
+		return err
+	}
+	_, err = db.Exec(`INSERT INTO meta (key, value) VALUES (?, '1')`, fileAccessSeededFlagKey)
+	return err
+}
+
+// SaveFileAccessSettings persists the live file-access config, rejecting
+// invalid combinations outright rather than silently correcting them —
+// write access without read access is always a caller bug (the UI
+// shouldn't be able to produce it; see SettingsModal's disabled checkbox
+// state), so it's surfaced as an error instead of laundered into a
+// valid-looking state that would mask the bug.
+func SaveFileAccessSettings(db *sql.DB, s FileAccessSettings) error {
+	if s.WriteEnabled && !s.ReadEnabled {
+		return fmt.Errorf("write access requires read access to be enabled")
+	}
+	if s.Root == "" && (s.ReadEnabled || s.WriteEnabled) {
+		return fmt.Errorf("root is required when read or write access is enabled")
+	}
+
+	payload, err := json.Marshal(s)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, settingFileAccess, string(payload))
+	return err
+}
+
 // SaveRAGSettings persists the given RAG settings, validating that they're
 // sane (positive sizes, overlap smaller than the chunk itself).
 func SaveRAGSettings(db *sql.DB, s RAGSettings) error {

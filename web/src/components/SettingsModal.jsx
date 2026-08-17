@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useEscapeKey } from '../useEscapeKey'
 import { FONT_OPTIONS } from '../useFontFamily'
 import { FONT_SCALE_OPTIONS } from '../useFontScale'
@@ -24,18 +24,29 @@ export default function SettingsModal({
   settings,
   ragSettings,
   onSaveRagSettings,
+  fileAccessSettings,
+  onSaveFileAccessSettings,
+  thinkLevel,
+  onThinkLevelChange,
   onClearKnowledgeBase,
   onClearConversations,
   onClose,
 }) {
   const [ragForm, setRagForm] = useState(ragSettings)
   const [ragStatus, setRagStatus] = useState('')
+  const [fileAccessForm, setFileAccessForm] = useState(fileAccessSettings)
+  const [fileAccessStatus, setFileAccessStatus] = useState('')
   const [confirming, setConfirming] = useState(null) // 'kb' | 'conversations' | null
   const [dataStatus, setDataStatus] = useState('')
+  const rootPickerRef = useRef(null)
 
   useEffect(() => {
     setRagForm(ragSettings)
   }, [ragSettings])
+
+  useEffect(() => {
+    setFileAccessForm(fileAccessSettings)
+  }, [fileAccessSettings])
 
   // Escape cancels an open danger-zone confirm first; a second press (or
   // pressing it when nothing's confirming) closes the whole modal.
@@ -59,6 +70,46 @@ export default function SettingsModal({
       setRagStatus('Saved. Applies to newly indexed documents and the next chat message.')
     } catch (err) {
       setRagStatus(`Error: ${err.message}`)
+    }
+  }
+
+  // A native folder picker (webkitdirectory) always returns every file's
+  // path prefixed with the same top-level folder name, by browser
+  // contract — no need to compute a shared prefix across the whole
+  // selection, the first file's leading segment already is the answer.
+  function inferFolderRootFromPicker(files) {
+    const first = files[0]?.webkitRelativePath?.replace(/\\/g, '/') ?? ''
+    return first.split('/')[0] ?? ''
+  }
+
+  function handleRootPickerChange(e) {
+    const files = Array.from(e.target.files ?? [])
+    if (files.length === 0) {
+      e.target.value = ''
+      return
+    }
+
+    const rootValue = inferFolderRootFromPicker(files)
+    setFileAccessForm((prev) => ({ ...prev, root: rootValue }))
+    e.target.value = ''
+  }
+
+  async function handleSaveFileAccess(e) {
+    e.preventDefault()
+    setFileAccessStatus('Saving…')
+    try {
+      const next = {
+        root: fileAccessForm.root?.trim() ?? '',
+        read_enabled: !!fileAccessForm.read_enabled,
+        write_enabled: !!fileAccessForm.write_enabled,
+      }
+      if (next.write_enabled && !next.read_enabled) {
+        throw new Error('Write access requires read access to stay enabled.')
+      }
+      await onSaveFileAccessSettings(next)
+      setFileAccessStatus('Saved. File access updates apply immediately without a server restart.')
+    } catch (err) {
+      setFileAccessStatus(`Error: ${err.message}`)
     }
   }
 
@@ -140,6 +191,72 @@ export default function SettingsModal({
             <span className="settings-row-key">Signed in as</span>
             <span className="settings-row-value">{settings?.username ?? '—'}</span>
           </div>
+        </div>
+
+        <div className="settings-section">
+          <p className="settings-label">Thinking</p>
+          <label className="settings-field">
+            <span>Reasoning effort</span>
+            <select className="model-select" value={thinkLevel || 'medium'} onChange={(e) => onThinkLevelChange(e.target.value)}>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+            </select>
+          </label>
+          <p className="settings-hint">
+            Only models that advertise native thinking support will honor this. Other models will ignore it harmlessly.
+          </p>
+        </div>
+
+        <div className="settings-section">
+          <p className="settings-label">File access</p>
+          <form onSubmit={handleSaveFileAccess} className="rag-form">
+            <label className="settings-field">
+              <span>Project root</span>
+              <div className="file-access-root-row">
+                <input
+                  type="text"
+                  value={fileAccessForm.root ?? ''}
+                  placeholder="Leave blank to disable"
+                  onChange={(e) => setFileAccessForm({ ...fileAccessForm, root: e.target.value })}
+                />
+                <button type="button" className="btn-secondary" onClick={() => rootPickerRef.current?.click()}>
+                  Choose folder
+                </button>
+                <input
+                  ref={rootPickerRef}
+                  type="file"
+                  style={{ display: 'none' }}
+                  webkitdirectory=""
+                  directory=""
+                  multiple
+                  onChange={handleRootPickerChange}
+                />
+              </div>
+            </label>
+            <p className="settings-hint">
+              Browser folder pickers do not expose the full native filesystem path to the app, so the saved value is a browser-provided project path hint. For a real sandbox root on this machine, you may still need to set the server path manually when running outside a native desktop shell.
+            </p>
+            <label className="settings-field checkbox-field settings-check-row">
+              <input
+                type="checkbox"
+                checked={!!fileAccessForm.read_enabled}
+                onChange={(e) => setFileAccessForm({ ...fileAccessForm, read_enabled: e.target.checked, write_enabled: e.target.checked ? fileAccessForm.write_enabled : false })}
+              />
+              <span>Allow reading files</span>
+            </label>
+            <label className="settings-field checkbox-field settings-check-row">
+              <input
+                type="checkbox"
+                checked={!!fileAccessForm.write_enabled}
+                disabled={!fileAccessForm.read_enabled}
+                onChange={(e) => setFileAccessForm({ ...fileAccessForm, write_enabled: e.target.checked })}
+              />
+              <span>Allow writing files</span>
+            </label>
+            <button type="submit" className="btn-primary">Save file access</button>
+            {fileAccessStatus && <p className="status">{fileAccessStatus}</p>}
+          </form>
         </div>
 
         <div className="settings-section">

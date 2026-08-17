@@ -33,7 +33,7 @@ func main() {
 	chatModel := getenv("LLM_CHAT_MODEL", "llama3.1")
 	embedModel := getenv("LLM_EMBED_MODEL", "nomic-embed-text")
 	addr := getenv("FASTLLM_ADDR", ":8080")
-	filesRoot := getenv("FASTLLM_FILES_ROOT", "")       // empty = file-read tool disabled
+	filesRoot := getenv("FASTLLM_FILES_ROOT", "")         // empty = file-read tool disabled
 	filesWrite := getenv("FASTLLM_FILES_WRITE", "") != "" // also requires FASTLLM_FILES_ROOT; every write needs manual approval regardless
 
 	db, err := store.Open(dbPath)
@@ -51,9 +51,20 @@ func main() {
 	log.Printf("loaded %d chunks into vector store", len(chunks))
 
 	llmClient := llm.New(baseURL, apiKey, chatModel, embedModel)
-	fileReader := files.New(filesRoot, filesWrite)
+	if err := store.SeedFileAccessSettingsFromEnv(db, filesRoot, filesWrite); err != nil {
+		log.Printf("seed file access settings from env: %v", err)
+	}
+	fileSettings, err := store.GetFileAccessSettings(db)
+	if err != nil {
+		log.Printf("load file access settings: %v", err)
+		fileSettings = store.DefaultFileAccessSettings
+	}
+	fileReader := files.New("", false)
+	if err := fileReader.SetConfig(fileSettings.Root, fileSettings.ReadEnabled, fileSettings.WriteEnabled); err != nil {
+		log.Printf("apply file access settings: %v", err)
+	}
 	if fileReader.Enabled() {
-		log.Printf("file-read tool enabled, sandboxed to %s", fileReader.Root)
+		log.Printf("file-read tool enabled, sandboxed to %s", fileReader.GetRoot())
 	}
 	if fileReader.WritesEnabled() {
 		log.Printf("file-write tool enabled (manual approval required for every write)")
@@ -71,6 +82,8 @@ func main() {
 	mux.HandleFunc("GET /api/settings", handler.Settings)
 	mux.HandleFunc("GET /api/settings/rag", handler.GetRAGSettings)
 	mux.HandleFunc("PUT /api/settings/rag", handler.UpdateRAGSettings)
+	mux.HandleFunc("GET /api/settings/files", handler.GetFileAccessSettings)
+	mux.HandleFunc("PUT /api/settings/files", handler.UpdateFileAccessSettings)
 	mux.HandleFunc("DELETE /api/conversations", handler.ClearConversations)
 	mux.HandleFunc("GET /api/skills", handler.ListSkills)
 	mux.HandleFunc("POST /api/skills", handler.CreateSkill)

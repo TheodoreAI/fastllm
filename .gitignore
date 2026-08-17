@@ -4,3 +4,4 @@ fastllm.db
 fastllm.log
 web/node_modules/
 web/dist/
+.env
