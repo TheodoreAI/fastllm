@@ -19,6 +19,7 @@ import {
   saveFileAccessSettings,
 } from '../api'
 import { languageExtensionFor } from '../editorLanguages'
+import FileTree from './FileTree'
 
 const PANELS = { files: 'Files', search: 'Search', git: 'Git' }
 
@@ -335,22 +336,9 @@ export default function EditorView({ fileAccessSettings, onFileAccessSettingsCha
         </div>
 
         {panel === 'files' && (
-          <div className="editor-panel-body">
+          <div className="editor-panel-body editor-panel-body-tree">
             {treeStatus && <p className="editor-hint">{treeStatus}</p>}
-            <ul className="editor-file-list">
-              {tree.map((entry) => (
-                <li key={entry.path}>
-                  <button
-                    type="button"
-                    className={openPath === entry.path ? 'is-active' : ''}
-                    onClick={() => openFile(entry.path)}
-                    title={entry.path}
-                  >
-                    {entry.path}
-                  </button>
-                </li>
-              ))}
-            </ul>
+            <FileTree paths={tree.map((entry) => entry.path)} openPath={openPath} onOpenFile={openFile} />
           </div>
         )}
 

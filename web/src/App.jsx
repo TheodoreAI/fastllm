@@ -561,97 +561,30 @@ export default function App() {
         </div>
       </div>
 
+      <div className="main-row">
       <div className="split-container" ref={splitContainerRef}>
       <div
-        className="body"
+        className="editor-pane"
         style={{
-          display: activeView === 'chat' || activeView === 'split' ? undefined : 'none',
+          display: activeView === 'editor' || activeView === 'split' ? undefined : 'none',
           flex: activeView === 'split' ? `0 0 ${splitWidth * 100}%` : undefined,
         }}
       >
-        <aside className={`sidebar ${sidebarCollapsed ? 'is-collapsed' : ''}`}>
-          <button
-            type="button"
-            className="sidebar-collapse-toggle"
-            title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            onClick={() => setSidebarCollapsed((c) => !c)}
-          >
-            {sidebarCollapsed ? '»' : '«'}
-          </button>
+        <EditorView
+          fileAccessSettings={fileAccessSettings}
+          onFileAccessSettingsChange={setFileAccessSettings}
+          theme={theme}
+        />
+      </div>
 
-          {sidebarCollapsed
-            ? sectionOrder.map((key) => (
-                <button
-                  key={key}
-                  type="button"
-                  className="sidebar-icon-btn"
-                  title={SECTION_LABELS[key]}
-                  onClick={() => setSidebarCollapsed(false)}
-                >
-                  <SectionIcon name={key} />
-                </button>
-              ))
-            : sectionOrder.map((key, index) => {
-                const section = {
-                  conversations: (
-                    <ConversationList
-                      conversations={conversations}
-                      conversationId={conversationId}
-                      onNewChat={startNewChat}
-                      onOpen={openConversation}
-                      onRequestDelete={setConversationToDelete}
-                      error={conversationError}
-                    />
-                  ),
-                  model: (
-                <ModelPicker
-                  models={models}
-                  model={model}
-                  onChange={setModel}
-                  fileAccessSettings={fileAccessSettings}
-                  onOpenSettings={() => setSettingsOpen(true)}
-                />
-              ),
-                  skills: (
-                    <SkillPanel
-                      skills={skills}
-                      skillId={skillId}
-                      onSkillIdChange={setSkillId}
-                      onRequestDeleteSkill={setSkillToDelete}
-                      skillFormOpen={skillFormOpen}
-                      onOpenForm={() => setSkillFormOpen(true)}
-                      onCloseForm={() => setSkillFormOpen(false)}
-                      skillName={skillName}
-                      onSkillNameChange={setSkillName}
-                      skillPrompt={skillPrompt}
-                      onSkillPromptChange={setSkillPrompt}
-                      onCreateSkill={createSkill}
-                      error={skillError}
-                    />
-                  ),
-                  knowledge: (
-                    <KnowledgeBasePanel
-                      docText={docText}
-                      onDocTextChange={setDocText}
-                      onUploadDocument={uploadDocument}
-                      fileInputRef={fileInputRef}
-                      onFilePicked={handleFilePicked}
-                      folderInputRef={folderInputRef}
-                      onFolderPicked={handleFolderPicked}
-                      docStatus={docStatus}
-                      documents={documents}
-                    />
-                  ),
-                }[key]
+      {activeView === 'split' && (
+        <div className="split-divider" onMouseDown={handleSplitDragStart} />
+      )}
 
-                return (
-                  <DraggableSection key={key} sectionKey={key} index={index} onReorder={moveSection}>
-                    {section}
-                  </DraggableSection>
-                )
-              })}
-        </aside>
-
+      <div
+        className="body"
+        style={{ display: activeView === 'chat' || activeView === 'split' ? undefined : 'none' }}
+      >
         <ChatPanel
           messages={messages}
           messagesLoading={messagesLoading}
@@ -667,21 +600,90 @@ export default function App() {
           onRejectWrite={handleRejectWrite}
         />
       </div>
-
-      {activeView === 'split' && (
-        <div className="split-divider" onMouseDown={handleSplitDragStart} />
-      )}
-
-      <div
-        className="editor-pane"
-        style={{ display: activeView === 'editor' || activeView === 'split' ? undefined : 'none' }}
-      >
-        <EditorView
-          fileAccessSettings={fileAccessSettings}
-          onFileAccessSettingsChange={setFileAccessSettings}
-          theme={theme}
-        />
       </div>
+
+      <aside className={`sidebar ${sidebarCollapsed ? 'is-collapsed' : ''}`}>
+        <button
+          type="button"
+          className="sidebar-collapse-toggle"
+          title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          onClick={() => setSidebarCollapsed((c) => !c)}
+        >
+          {sidebarCollapsed ? '«' : '»'}
+        </button>
+
+        {sidebarCollapsed
+          ? sectionOrder.map((key) => (
+              <button
+                key={key}
+                type="button"
+                className="sidebar-icon-btn"
+                title={SECTION_LABELS[key]}
+                onClick={() => setSidebarCollapsed(false)}
+              >
+                <SectionIcon name={key} />
+              </button>
+            ))
+          : sectionOrder.map((key, index) => {
+              const section = {
+                conversations: (
+                  <ConversationList
+                    conversations={conversations}
+                    conversationId={conversationId}
+                    onNewChat={startNewChat}
+                    onOpen={openConversation}
+                    onRequestDelete={setConversationToDelete}
+                    error={conversationError}
+                  />
+                ),
+                model: (
+              <ModelPicker
+                models={models}
+                model={model}
+                onChange={setModel}
+                fileAccessSettings={fileAccessSettings}
+                onOpenSettings={() => setSettingsOpen(true)}
+              />
+            ),
+                skills: (
+                  <SkillPanel
+                    skills={skills}
+                    skillId={skillId}
+                    onSkillIdChange={setSkillId}
+                    onRequestDeleteSkill={setSkillToDelete}
+                    skillFormOpen={skillFormOpen}
+                    onOpenForm={() => setSkillFormOpen(true)}
+                    onCloseForm={() => setSkillFormOpen(false)}
+                    skillName={skillName}
+                    onSkillNameChange={setSkillName}
+                    skillPrompt={skillPrompt}
+                    onSkillPromptChange={setSkillPrompt}
+                    onCreateSkill={createSkill}
+                    error={skillError}
+                  />
+                ),
+                knowledge: (
+                  <KnowledgeBasePanel
+                    docText={docText}
+                    onDocTextChange={setDocText}
+                    onUploadDocument={uploadDocument}
+                    fileInputRef={fileInputRef}
+                    onFilePicked={handleFilePicked}
+                    folderInputRef={folderInputRef}
+                    onFolderPicked={handleFolderPicked}
+                    docStatus={docStatus}
+                    documents={documents}
+                  />
+                ),
+              }[key]
+
+              return (
+                <DraggableSection key={key} sectionKey={key} index={index} onReorder={moveSection}>
+                  {section}
+                </DraggableSection>
+              )
+            })}
+      </aside>
       </div>
 
       {conversationToDelete != null && (
