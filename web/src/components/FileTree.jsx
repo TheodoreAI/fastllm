@@ -68,6 +68,19 @@ const NEW_FILE_ICON = (
   </svg>
 )
 
+const NEW_FOLDER_ICON = (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4l1.7 2H19.5A1.5 1.5 0 0 1 21 9.5v8A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5v-10Z" />
+    <path d="M12 11v5M9.5 13.5h5" />
+  </svg>
+)
+
+// The drag payload is a JSON-encoded string on a custom MIME type — using
+// a custom type (rather than 'text/plain') keeps this tree from reacting
+// to drags originating outside it (e.g. dragging text from elsewhere in
+// the page).
+const DND_MIME = 'application/x-fastllm-file-path'
+
 // RowActions renders the small rename/delete icon buttons revealed on
 // row hover — stopPropagation keeps a click from also triggering the
 // row's own onClick (open file / toggle folder).
@@ -136,7 +149,7 @@ function RenameInput({ initialValue, onSubmit, onCancel }) {
   )
 }
 
-function DirRow({ name, node, depth, openPath, expanded, onToggle, onOpenFile, canWrite, renamingPath, onRequestRename, onSubmitRename, onCancelRename, onContextMenu }) {
+function DirRow({ name, node, depth, openPath, expanded, onToggle, onOpenFile, canWrite, renamingPath, onRequestRename, onSubmitRename, onCancelRename, onContextMenu, dropTarget, onDragStartFile, onDragOverTarget, onDragLeaveTarget, onDropTarget }) {
   const dirPath = node.__path
   const isOpen = expanded.has(dirPath)
   const isRenaming = renamingPath === dirPath
@@ -144,10 +157,15 @@ function DirRow({ name, node, depth, openPath, expanded, onToggle, onOpenFile, c
     <>
       <li>
         <div
-          className="tree-row tree-dir"
+          className={`tree-row tree-dir ${dropTarget === dirPath ? 'is-drop-target' : ''}`}
           style={{ paddingLeft: 8 + depth * 14 }}
           onClick={() => !isRenaming && onToggle(dirPath)}
           onContextMenu={(e) => onContextMenu(e, { type: 'dir', path: dirPath, name })}
+          draggable={canWrite && !isRenaming}
+          onDragStart={(e) => onDragStartFile(e, dirPath)}
+          onDragOver={(e) => onDragOverTarget(e, dirPath)}
+          onDragLeave={onDragLeaveTarget}
+          onDrop={(e) => onDropTarget(e, dirPath)}
           title={dirPath}
         >
           <span className={`tree-chevron ${isOpen ? 'is-open' : ''}`}>{CHEVRON}</span>
@@ -176,13 +194,18 @@ function DirRow({ name, node, depth, openPath, expanded, onToggle, onOpenFile, c
           onSubmitRename={onSubmitRename}
           onCancelRename={onCancelRename}
           onContextMenu={onContextMenu}
+          dropTarget={dropTarget}
+          onDragStartFile={onDragStartFile}
+          onDragOverTarget={onDragOverTarget}
+          onDragLeaveTarget={onDragLeaveTarget}
+          onDropTarget={onDropTarget}
         />
       )}
     </>
   )
 }
 
-function TreeChildren({ node, depth, openPath, expanded, onToggle, onOpenFile, canWrite, renamingPath, onRequestRename, onSubmitRename, onCancelRename, onContextMenu, onDeleteFile }) {
+function TreeChildren({ node, depth, openPath, expanded, onToggle, onOpenFile, canWrite, renamingPath, onRequestRename, onSubmitRename, onCancelRename, onContextMenu, onDeleteFile, dropTarget, onDragStartFile, onDragOverTarget, onDragLeaveTarget, onDropTarget }) {
   const dirNames = [...node.dirs.keys()].sort((a, b) => a.localeCompare(b))
   const files = [...node.files].sort((a, b) => a.name.localeCompare(b.name))
   return (
@@ -203,6 +226,11 @@ function TreeChildren({ node, depth, openPath, expanded, onToggle, onOpenFile, c
           onSubmitRename={onSubmitRename}
           onCancelRename={onCancelRename}
           onContextMenu={onContextMenu}
+          dropTarget={dropTarget}
+          onDragStartFile={onDragStartFile}
+          onDragOverTarget={onDragOverTarget}
+          onDragLeaveTarget={onDragLeaveTarget}
+          onDropTarget={onDropTarget}
         />
       ))}
       {files.map((file) => {
@@ -214,6 +242,8 @@ function TreeChildren({ node, depth, openPath, expanded, onToggle, onOpenFile, c
               style={{ paddingLeft: 8 + depth * 14 + 18 }}
               onClick={() => !isRenaming && onOpenFile(file.path)}
               onContextMenu={(e) => onContextMenu(e, { type: 'file', path: file.path, name: file.name })}
+              draggable={canWrite && !isRenaming}
+              onDragStart={(e) => onDragStartFile(e, file.path)}
               title={file.path}
             >
               <span className="tree-icon">{FILE_ICON}</span>
@@ -257,7 +287,9 @@ export default function FileTree({ paths, openPath, onOpenFile, canWrite, onCrea
   const [expanded, setExpanded] = useState(() => new Set())
   const [renamingPath, setRenamingPath] = useState(null)
   const [menu, setMenu] = useState(null) // { x, y, type: 'file'|'dir'|'root', path, name }
-  const [creating, setCreating] = useState(null) // { dirPath } while a new-file input is showing
+  const [creating, setCreating] = useState(null) // { dirPath, folder } while a new-file/-folder input is showing
+  const [dropTarget, setDropTarget] = useState(null) // path of the dir row currently dragged over, '' for root
+  const draggingPathRef = useRef(null)
 
   const root = useMemo(() => {
     const tree = buildTree(paths)
@@ -302,24 +334,120 @@ export default function FileTree({ paths, openPath, onOpenFile, canWrite, onCrea
 
   function startCreate(dirPath) {
     if (dirPath) setExpanded((prev) => new Set(prev).add(dirPath))
-    setCreating({ dirPath })
+    setCreating({ dirPath, folder: false })
+    setMenu(null)
+  }
+
+  function startCreateFolder(dirPath) {
+    if (dirPath) setExpanded((prev) => new Set(prev).add(dirPath))
+    setCreating({ dirPath, folder: true })
     setMenu(null)
   }
 
   function submitCreate(name) {
     if (!creating) return
+    const isFolder = creating.folder
     const path = creating.dirPath ? `${creating.dirPath}/${name}` : name
     setCreating(null)
-    onCreateFile(path)
+    // Folders only exist implicitly via file paths (see buildTree above),
+    // so "creating a folder" means creating a placeholder file inside it —
+    // the folder then shows up in the tree like any other. Immediately
+    // renaming that placeholder is the natural next step, so kick that off
+    // rather than leaving a stray README-ish file sitting there unnamed.
+    const filePath = isFolder ? `${path}/new-file` : path
+    onCreateFile(filePath)
+    if (isFolder) {
+      setExpanded((prev) => new Set(prev).add(path))
+      setRenamingPath(filePath)
+    }
+  }
+
+  function movePath(fromPath, toDir) {
+    if (fromPath === toDir) return
+    // Dragging a folder onto itself or one of its own descendants would
+    // otherwise silently fail (or worse, orphan files) — block it up
+    // front rather than letting the backend's os.Rename error surface as
+    // a confusing generic message.
+    if (toDir === fromPath || toDir.startsWith(`${fromPath}/`)) return
+    const name = fromPath.includes('/') ? fromPath.slice(fromPath.lastIndexOf('/') + 1) : fromPath
+    const currentDir = fromPath.includes('/') ? fromPath.slice(0, fromPath.lastIndexOf('/')) : ''
+    if (currentDir === toDir) return
+    const toPath = toDir ? `${toDir}/${name}` : name
+    onRenameFile(fromPath, toPath)
+  }
+
+  function isDirPath(path) {
+    let node = root
+    for (const part of path.split('/')) {
+      if (!node.dirs.has(part)) return false
+      node = node.dirs.get(part)
+    }
+    return true
+  }
+
+  function handleDragStartFile(e, path) {
+    draggingPathRef.current = path
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData(DND_MIME, path)
+  }
+
+  function handleDragOverTarget(e, dirPath) {
+    if (!canWrite || !draggingPathRef.current) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    setDropTarget(dirPath)
+  }
+
+  function handleDragLeaveTarget() {
+    setDropTarget(null)
+  }
+
+  function handleDropTarget(e, dirPath) {
+    e.preventDefault()
+    e.stopPropagation()
+    setDropTarget(null)
+    const fromPath = draggingPathRef.current ?? e.dataTransfer.getData(DND_MIME)
+    draggingPathRef.current = null
+    if (!fromPath) return
+    const targetDir = isDirPath(dirPath) ? dirPath : dirPath.includes('/') ? dirPath.slice(0, dirPath.lastIndexOf('/')) : ''
+    movePath(fromPath, targetDir)
+  }
+
+  function handleRootDragOver(e) {
+    if (!canWrite || !draggingPathRef.current) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    setDropTarget('')
+  }
+
+  function handleRootDrop(e) {
+    e.preventDefault()
+    setDropTarget(null)
+    const fromPath = draggingPathRef.current ?? e.dataTransfer.getData(DND_MIME)
+    draggingPathRef.current = null
+    if (!fromPath) return
+    movePath(fromPath, '')
   }
 
   return (
-    <div className="tree-container" onContextMenu={openRootContextMenu}>
+    <div
+      className={`tree-container ${dropTarget === '' ? 'is-drop-target-root' : ''}`}
+      onContextMenu={openRootContextMenu}
+      onDragOver={handleRootDragOver}
+      onDragLeave={(e) => {
+        if (e.target === e.currentTarget) setDropTarget(null)
+      }}
+      onDrop={handleRootDrop}
+    >
       {canWrite && (
         <div className="tree-toolbar">
           <button type="button" className="tree-toolbar-btn" title="New File" onClick={() => startCreate('')}>
             {NEW_FILE_ICON}
             <span>New File</span>
+          </button>
+          <button type="button" className="tree-toolbar-btn" title="New Folder" onClick={() => startCreateFolder('')}>
+            {NEW_FOLDER_ICON}
+            <span>New Folder</span>
           </button>
         </div>
       )}
@@ -342,12 +470,21 @@ export default function FileTree({ paths, openPath, onOpenFile, canWrite, onCrea
           onCancelRename={() => setRenamingPath(null)}
           onContextMenu={openContextMenu}
           onDeleteFile={onDeleteFile}
+          dropTarget={dropTarget}
+          onDragStartFile={handleDragStartFile}
+          onDragOverTarget={handleDragOverTarget}
+          onDragLeaveTarget={handleDragLeaveTarget}
+          onDropTarget={handleDropTarget}
         />
         {creating && (
           <li>
             <div className="tree-row tree-file" style={{ paddingLeft: 8 + (creating.dirPath ? 14 : 0) + 18 }}>
-              <span className="tree-icon">{FILE_ICON}</span>
-              <RenameInput initialValue="" onSubmit={submitCreate} onCancel={() => setCreating(null)} />
+              <span className="tree-icon">{creating.folder ? FOLDER_ICON(true) : FILE_ICON}</span>
+              <RenameInput
+                initialValue=""
+                onSubmit={submitCreate}
+                onCancel={() => setCreating(null)}
+              />
             </div>
           </li>
         )}
@@ -359,6 +496,13 @@ export default function FileTree({ paths, openPath, onOpenFile, canWrite, onCrea
             <li>
               <button type="button" onClick={() => startCreate(menu.type === 'dir' ? menu.path : '')}>
                 New File
+              </button>
+            </li>
+          )}
+          {menu.type !== 'file' && (
+            <li>
+              <button type="button" onClick={() => startCreateFolder(menu.type === 'dir' ? menu.path : '')}>
+                New Folder
               </button>
             </li>
           )}

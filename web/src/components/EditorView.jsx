@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import CodeMirror from '@uiw/react-codemirror'
 import { githubLight, githubDark } from '@uiw/codemirror-theme-github'
 import {
@@ -23,11 +23,14 @@ import {
 } from '../api'
 import { languageExtensionFor } from '../editorLanguages'
 import { useEditorSidebarCollapsed } from '../useEditorSidebarCollapsed'
+import { useTerminalPanelHeight } from '../useTerminalPanelHeight'
+import { useTerminalCollapsed } from '../useTerminalCollapsed'
 import FileTree from './FileTree'
+import TerminalView from './TerminalView'
 
 const PANELS = { files: 'Files', search: 'Search', git: 'Git' }
 
-export default function EditorView({ fileAccessSettings, onFileAccessSettingsChange, theme }) {
+export default function EditorView({ fileAccessSettings, onFileAccessSettingsChange, theme, terminalEnabled, visible }) {
   const [panel, setPanel] = useState('files')
   const [tree, setTree] = useState([])
   const [treeStatus, setTreeStatus] = useState('')
@@ -59,6 +62,19 @@ export default function EditorView({ fileAccessSettings, onFileAccessSettingsCha
   const [openingFolder, setOpeningFolder] = useState(false)
   const [folderError, setFolderError] = useState('')
   const [sidebarCollapsed, setSidebarCollapsed] = useEditorSidebarCollapsed()
+  const [terminalPanelHeight, setTerminalPanelHeight] = useTerminalPanelHeight()
+  const [terminalCollapsed, setTerminalCollapsed] = useTerminalCollapsed()
+  const mainColumnRef = useRef(null)
+  // EditorView is always mounted (just hidden) so Chat<->Editor switches
+  // don't lose state — but that means the terminal shouldn't mount along
+  // with it, or every app load would spawn a PowerShell session even for
+  // someone who never opens the Editor tab. Tracks whether this view has
+  // ever actually been made visible, so the terminal only mounts — and
+  // spawns a real shell — the first time the user navigates here.
+  const [everVisible, setEverVisible] = useState(false)
+  useEffect(() => {
+    if (visible) setEverVisible(true)
+  }, [visible])
 
   const enabled = !!fileAccessSettings?.read_enabled
   const canWrite = !!fileAccessSettings?.write_enabled
@@ -350,6 +366,33 @@ export default function EditorView({ fileAccessSettings, onFileAccessSettingsCha
   const staged = gitStatus.filter((s) => s.staged)
   const unstaged = gitStatus.filter((s) => s.unstaged)
 
+  // Drags the terminal panel's top divider to resize it vertically.
+  // Tracks the cursor against the main column's own bottom edge (rather
+  // than delta movement) so a fast drag can't desync from the cursor.
+  // Clamped so the panel can't be dragged to nothing or to swallow the
+  // whole column.
+  function handleTerminalDragStart(e) {
+    e.preventDefault()
+    const container = mainColumnRef.current
+    if (!container) return
+
+    const previousUserSelect = document.body.style.userSelect
+    document.body.style.userSelect = 'none'
+
+    function handleMove(moveEvent) {
+      const rect = container.getBoundingClientRect()
+      const height = rect.bottom - moveEvent.clientY
+      setTerminalPanelHeight(Math.min(rect.height - 120, Math.max(120, height)))
+    }
+    function handleUp() {
+      window.removeEventListener('mousemove', handleMove)
+      window.removeEventListener('mouseup', handleUp)
+      document.body.style.userSelect = previousUserSelect
+    }
+    window.addEventListener('mousemove', handleMove)
+    window.addEventListener('mouseup', handleUp)
+  }
+
   if (!enabled) {
     return (
       <div className="editor-view editor-view-empty">
@@ -558,46 +601,81 @@ export default function EditorView({ fileAccessSettings, onFileAccessSettingsCha
         )}
       </aside>
 
-      <main className="editor-main">
-        {openPath ? (
-          <>
-            <div className="editor-file-header">
-              <span className="editor-file-path">{openPath}</span>
-              {fileStatus && <span className="editor-file-status">{fileStatus}</span>}
-              <button
-                type="button"
-                className="editor-save-button"
-                onClick={handleSave}
-                disabled={!canWrite || !dirty || saving}
-                title={canWrite ? '' : 'File writes are disabled in Settings → File access'}
-              >
-                {saving ? 'Saving…' : dirty ? 'Save' : 'Saved'}
-              </button>
+      <main className="editor-main" ref={mainColumnRef}>
+        <div className="editor-main-content">
+          {openPath ? (
+            <>
+              <div className="editor-file-header">
+                <span className="editor-file-path">{openPath}</span>
+                {fileStatus && <span className="editor-file-status">{fileStatus}</span>}
+                <button
+                  type="button"
+                  className="editor-save-button"
+                  onClick={handleSave}
+                  disabled={!canWrite || !dirty || saving}
+                  title={canWrite ? '' : 'File writes are disabled in Settings → File access'}
+                >
+                  {saving ? 'Saving…' : dirty ? 'Save' : 'Saved'}
+                </button>
+              </div>
+              <div className="editor-codemirror" onKeyDown={handleEditorKeyDown}>
+                <CodeMirror
+                  value={content}
+                  height="100%"
+                  theme={theme === 'light' ? githubLight : githubDark}
+                  extensions={languageExtensions}
+                  onChange={setContent}
+                  readOnly={!canWrite}
+                />
+              </div>
+            </>
+          ) : diffPath ? (
+            <>
+              <div className="editor-file-header">
+                <span className="editor-file-path">Diff: {diffPath}</span>
+                <button type="button" onClick={() => setDiffPath(null)}>Close</button>
+              </div>
+              <pre className="editor-diff">{diffText}</pre>
+            </>
+          ) : (
+            <div className="editor-empty-state">
+              <p>Select a file to open it.</p>
             </div>
-            <div className="editor-codemirror" onKeyDown={handleEditorKeyDown}>
-              <CodeMirror
-                value={content}
-                height="100%"
-                theme={theme === 'light' ? githubLight : githubDark}
-                extensions={languageExtensions}
-                onChange={setContent}
-                readOnly={!canWrite}
-              />
-            </div>
-          </>
-        ) : diffPath ? (
-          <>
-            <div className="editor-file-header">
-              <span className="editor-file-path">Diff: {diffPath}</span>
-              <button type="button" onClick={() => setDiffPath(null)}>Close</button>
-            </div>
-            <pre className="editor-diff">{diffText}</pre>
-          </>
-        ) : (
-          <div className="editor-empty-state">
-            <p>Select a file to open it.</p>
-          </div>
+          )}
+        </div>
+
+        {!terminalCollapsed && (
+          <div className="terminal-panel-divider" onMouseDown={handleTerminalDragStart} />
         )}
+
+        <div
+          className={`terminal-panel ${terminalCollapsed ? 'is-collapsed' : ''}`}
+          style={{ flex: terminalCollapsed ? '0 0 auto' : `0 0 ${terminalPanelHeight}px` }}
+        >
+          <div className="terminal-panel-header">
+            <span className="terminal-panel-title">Terminal</span>
+            <button
+              type="button"
+              className="terminal-panel-collapse-toggle"
+              title={terminalCollapsed ? 'Expand terminal' : 'Collapse terminal'}
+              onClick={() => setTerminalCollapsed((c) => !c)}
+            >
+              {terminalCollapsed ? '▲' : '▼'}
+            </button>
+          </div>
+          <div
+            className="terminal-panel-body"
+            style={{ display: terminalCollapsed ? 'none' : undefined }}
+          >
+            {terminalEnabled ? (
+              everVisible && <TerminalView theme={theme} />
+            ) : (
+              <div className="terminal-disabled-state">
+                <p>Terminal is disabled. Enable it in Settings → Terminal.</p>
+              </div>
+            )}
+          </div>
+        </div>
       </main>
     </div>
   )

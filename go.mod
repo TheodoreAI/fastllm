@@ -3,6 +3,8 @@ module fastllm
 go 1.25.0
 
 require (
+	github.com/UserExistsError/conpty v0.1.4 // indirect
+	github.com/coder/websocket v1.8.15 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728 // indirect

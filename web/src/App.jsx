@@ -28,6 +28,8 @@ import {
   saveRagSettings,
   fetchFileAccessSettings,
   saveFileAccessSettings,
+  fetchTerminalSettings,
+  saveTerminalSettings,
   clearKnowledgeBase,
   clearConversations,
   createSkill as apiCreateSkill,
@@ -81,6 +83,7 @@ export default function App() {
   const [serverStopped, setServerStopped] = useState(false)
   const [ragSettings, setRagSettings] = useState(null)
   const [fileAccessSettings, setFileAccessSettings] = useState({ root: '', read_enabled: false, write_enabled: false })
+  const [terminalSettings, setTerminalSettings] = useState({ enabled: false })
   const [thinkLevel, setThinkLevel] = useState('medium')
   const [theme, setTheme] = useTheme()
   const [fontFamily, setFontFamily] = useFontFamily()
@@ -108,6 +111,7 @@ export default function App() {
     fetchSettings().then(setSettings)
     fetchRagSettings().then(setRagSettings)
     fetchFileAccessSettings().then((settings) => setFileAccessSettings(settings ?? { root: '', read_enabled: false, write_enabled: false }))
+    fetchTerminalSettings().then((settings) => setTerminalSettings(settings ?? { enabled: false }))
   }, [])
 
   useEffect(() => {
@@ -411,6 +415,14 @@ export default function App() {
     return saved
   }
 
+  async function handleSaveTerminalSettings(next) {
+    const res = await saveTerminalSettings(next)
+    if (!res.ok) throw new Error(await res.text())
+    const saved = await res.json()
+    setTerminalSettings(saved)
+    return saved
+  }
+
   async function createSkill(e) {
     e.preventDefault()
     if (!skillName.trim() || !skillPrompt.trim()) return
@@ -564,6 +576,8 @@ export default function App() {
           fileAccessSettings={fileAccessSettings}
           onFileAccessSettingsChange={setFileAccessSettings}
           theme={theme}
+          terminalEnabled={terminalSettings.enabled}
+          visible={activeView === 'editor' || activeView === 'split'}
         />
       </div>
 
@@ -719,6 +733,8 @@ export default function App() {
           onSaveRagSettings={handleSaveRagSettings}
           fileAccessSettings={fileAccessSettings}
           onSaveFileAccessSettings={handleSaveFileAccessSettings}
+          terminalSettings={terminalSettings}
+          onSaveTerminalSettings={handleSaveTerminalSettings}
           thinkLevel={thinkLevel}
           onThinkLevelChange={setThinkLevel}
           onClearKnowledgeBase={handleClearKnowledgeBase}

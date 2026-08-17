@@ -27,6 +27,8 @@ export default function SettingsModal({
   onSaveRagSettings,
   fileAccessSettings,
   onSaveFileAccessSettings,
+  terminalSettings,
+  onSaveTerminalSettings,
   thinkLevel,
   onThinkLevelChange,
   onClearKnowledgeBase,
@@ -37,6 +39,8 @@ export default function SettingsModal({
   const [ragStatus, setRagStatus] = useState('')
   const [fileAccessForm, setFileAccessForm] = useState(fileAccessSettings)
   const [fileAccessStatus, setFileAccessStatus] = useState('')
+  const [terminalForm, setTerminalForm] = useState(terminalSettings)
+  const [terminalStatus, setTerminalStatus] = useState('')
   const [confirming, setConfirming] = useState(null) // 'kb' | 'conversations' | null
   const [dataStatus, setDataStatus] = useState('')
   const [browsing, setBrowsing] = useState(false)
@@ -48,6 +52,10 @@ export default function SettingsModal({
   useEffect(() => {
     setFileAccessForm(fileAccessSettings)
   }, [fileAccessSettings])
+
+  useEffect(() => {
+    setTerminalForm(terminalSettings)
+  }, [terminalSettings])
 
   // Escape cancels an open danger-zone confirm first; a second press (or
   // pressing it when nothing's confirming) closes the whole modal.
@@ -108,6 +116,18 @@ export default function SettingsModal({
       setFileAccessStatus('Saved. File access updates apply immediately without a server restart.')
     } catch (err) {
       setFileAccessStatus(`Error: ${err.message}`)
+    }
+  }
+
+  async function handleSaveTerminal(e) {
+    e.preventDefault()
+    setTerminalStatus('Saving…')
+    try {
+      const next = { enabled: !!terminalForm.enabled }
+      await onSaveTerminalSettings(next)
+      setTerminalStatus('Saved. Terminal access updates apply immediately without a server restart.')
+    } catch (err) {
+      setTerminalStatus(`Error: ${err.message}`)
     }
   }
 
@@ -245,6 +265,25 @@ export default function SettingsModal({
             </label>
             <button type="submit" className="btn-primary">Save file access</button>
             {fileAccessStatus && <p className="status">{fileAccessStatus}</p>}
+          </form>
+        </div>
+
+        <div className="settings-section">
+          <p className="settings-label">Terminal</p>
+          <form onSubmit={handleSaveTerminal} className="rag-form">
+            <label className="settings-field checkbox-field settings-check-row">
+              <input
+                type="checkbox"
+                checked={!!terminalForm.enabled}
+                onChange={(e) => setTerminalForm({ ...terminalForm, enabled: e.target.checked })}
+              />
+              <span>Enable interactive terminal</span>
+            </label>
+            <p className="settings-hint">
+              Gives the Editor panel a real PowerShell session on this machine. Unlike file access, this isn't sandboxed — anything the terminal can run, it runs with full access as whatever account runs fastllm. Only enable this if you trust everyone who can reach this app.
+            </p>
+            <button type="submit" className="btn-primary">Save terminal access</button>
+            {terminalStatus && <p className="status">{terminalStatus}</p>}
           </form>
         </div>
 
