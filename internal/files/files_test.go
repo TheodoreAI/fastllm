@@ -315,3 +315,121 @@ func TestTruncatesLargeFiles(t *testing.T) {
 		t.Fatalf("got content length %d, want %d", len(content), MaxReadBytes)
 	}
 }
+
+func TestDeleteRemovesFile(t *testing.T) {
+	root := setupRoot(t)
+	r := New(root, true)
+
+	if err := r.Delete("hello.txt"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "hello.txt")); !os.IsNotExist(err) {
+		t.Error("expected hello.txt to be removed from disk")
+	}
+}
+
+func TestDeleteDisabledWithoutWriteAccess(t *testing.T) {
+	root := setupRoot(t)
+	r := New(root, false)
+
+	if err := r.Delete("hello.txt"); err == nil {
+		t.Error("expected error deleting when writes are disabled")
+	}
+	if _, err := os.Stat(filepath.Join(root, "hello.txt")); err != nil {
+		t.Error("hello.txt should still exist")
+	}
+}
+
+func TestDeleteRejectsDirectory(t *testing.T) {
+	root := setupRoot(t)
+	r := New(root, true)
+
+	if err := r.Delete("sub"); err == nil {
+		t.Error("expected error deleting a directory")
+	}
+	if _, err := os.Stat(filepath.Join(root, "sub")); err != nil {
+		t.Error("sub/ should still exist")
+	}
+}
+
+func TestDeleteRejectsTraversal(t *testing.T) {
+	root := setupRoot(t)
+	r := New(root, true)
+
+	if err := r.Delete("../escape.txt"); err == nil {
+		t.Error("expected error deleting outside root")
+	}
+}
+
+func TestRenameMovesFile(t *testing.T) {
+	root := setupRoot(t)
+	r := New(root, true)
+
+	if err := r.Rename("hello.txt", "renamed.txt"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "hello.txt")); !os.IsNotExist(err) {
+		t.Error("expected hello.txt to no longer exist")
+	}
+	content, _, err := r.Read("renamed.txt")
+	if err != nil {
+		t.Fatalf("unexpected error reading renamed file: %v", err)
+	}
+	if content != "hello world" {
+		t.Fatalf("got %q", content)
+	}
+}
+
+func TestRenameToDifferentDirectory(t *testing.T) {
+	root := setupRoot(t)
+	r := New(root, true)
+
+	if err := r.Rename("hello.txt", "sub/moved.txt"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	content, _, err := r.Read("sub/moved.txt")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if content != "hello world" {
+		t.Fatalf("got %q", content)
+	}
+}
+
+func TestRenameRejectsExistingDestination(t *testing.T) {
+	root := setupRoot(t)
+	r := New(root, true)
+
+	if err := r.Rename("hello.txt", "sub/nested.txt"); err == nil {
+		t.Error("expected error when destination already exists")
+	}
+	// Neither file should have been touched.
+	if _, err := os.Stat(filepath.Join(root, "hello.txt")); err != nil {
+		t.Error("hello.txt should still exist")
+	}
+	content, err := os.ReadFile(filepath.Join(root, "sub", "nested.txt"))
+	if err != nil || string(content) != "nested" {
+		t.Error("sub/nested.txt should be untouched")
+	}
+}
+
+func TestRenameDisabledWithoutWriteAccess(t *testing.T) {
+	root := setupRoot(t)
+	r := New(root, false)
+
+	if err := r.Rename("hello.txt", "renamed.txt"); err == nil {
+		t.Error("expected error renaming when writes are disabled")
+	}
+}
+
+func TestRenameRejectsTraversal(t *testing.T) {
+	root := setupRoot(t)
+	r := New(root, true)
+
+	if err := r.Rename("hello.txt", "../escape.txt"); err == nil {
+		t.Error("expected error renaming to a path outside root")
+	}
+	if err := r.Rename("../escape.txt", "new.txt"); err == nil {
+		t.Error("expected error renaming from a path outside root")
+	}
+}

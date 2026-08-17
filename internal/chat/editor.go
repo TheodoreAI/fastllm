@@ -140,6 +140,57 @@ func (h *Handler) EditorSaveFile(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"path": req.Path, "saved": true})
 }
 
+type editorDeleteRequest struct {
+	Path string `json:"path"`
+}
+
+// EditorDeleteFile removes a single file from disk. No confirmation
+// step server-side — the editor's own delete button is the
+// confirmation, same as EditorSaveFile treats a human clicking Save as
+// the approval step.
+func (h *Handler) EditorDeleteFile(w http.ResponseWriter, r *http.Request) {
+	if !h.Files.WritesEnabled() {
+		http.Error(w, "file writes are not enabled", http.StatusForbidden)
+		return
+	}
+	var req editorDeleteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Path == "" {
+		http.Error(w, "path is required", http.StatusBadRequest)
+		return
+	}
+	if err := h.Files.Delete(req.Path); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type editorRenameRequest struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+// EditorRenameFile moves a file within the sandbox — covers both a
+// same-directory rename and a move to a different folder, since both
+// are just a path change to os.Rename. Fails if the destination already
+// exists rather than silently overwriting it.
+func (h *Handler) EditorRenameFile(w http.ResponseWriter, r *http.Request) {
+	if !h.Files.WritesEnabled() {
+		http.Error(w, "file writes are not enabled", http.StatusForbidden)
+		return
+	}
+	var req editorRenameRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.From == "" || req.To == "" {
+		http.Error(w, "from and to are required", http.StatusBadRequest)
+		return
+	}
+	if err := h.Files.Rename(req.From, req.To); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, map[string]any{"path": req.To, "renamed": true})
+}
+
 // EditorSearch searches file contents across the project via `git grep`.
 func (h *Handler) EditorSearch(w http.ResponseWriter, r *http.Request) {
 	root, ok := h.editorRoot(w)
