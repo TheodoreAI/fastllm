@@ -160,6 +160,14 @@ export default function App() {
     const container = splitContainerRef.current
     if (!container) return
 
+    // Belt-and-suspenders alongside preventDefault: without this, a fast
+    // drag can still start a text-selection drag across the rest of the
+    // page (the mousedown target is a thin 5px divider, easy to graze
+    // rather than hit squarely) — force it off for the duration of the
+    // drag, then restore whatever the page's own default was.
+    const previousUserSelect = document.body.style.userSelect
+    document.body.style.userSelect = 'none'
+
     function handleMove(moveEvent) {
       const rect = container.getBoundingClientRect()
       const fraction = (moveEvent.clientX - rect.left) / rect.width
@@ -168,6 +176,7 @@ export default function App() {
     function handleUp() {
       window.removeEventListener('mousemove', handleMove)
       window.removeEventListener('mouseup', handleUp)
+      document.body.style.userSelect = previousUserSelect
     }
     window.addEventListener('mousemove', handleMove)
     window.addEventListener('mouseup', handleUp)
@@ -552,7 +561,14 @@ export default function App() {
         </div>
       </div>
 
-      <div className="body" style={{ display: activeView === 'chat' ? undefined : 'none' }}>
+      <div className="split-container" ref={splitContainerRef}>
+      <div
+        className="body"
+        style={{
+          display: activeView === 'chat' || activeView === 'split' ? undefined : 'none',
+          flex: activeView === 'split' ? `0 0 ${splitWidth * 100}%` : undefined,
+        }}
+      >
         <aside className={`sidebar ${sidebarCollapsed ? 'is-collapsed' : ''}`}>
           <button
             type="button"
@@ -652,7 +668,17 @@ export default function App() {
         />
       </div>
 
-      {activeView === 'editor' && <EditorView fileAccessSettings={fileAccessSettings} theme={theme} />}
+      {activeView === 'split' && (
+        <div className="split-divider" onMouseDown={handleSplitDragStart} />
+      )}
+
+      <div
+        className="editor-pane"
+        style={{ display: activeView === 'editor' || activeView === 'split' ? undefined : 'none' }}
+      >
+        <EditorView fileAccessSettings={fileAccessSettings} theme={theme} />
+      </div>
+      </div>
 
       {conversationToDelete != null && (
         <ConfirmDeleteModal

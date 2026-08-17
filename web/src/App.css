@@ -274,10 +274,50 @@ body {
   letter-spacing: 0.2px;
 }
 
+.split-container {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+}
+
 .body {
   flex: 1;
   display: flex;
   min-height: 0;
+  min-width: 0;
+}
+
+.split-divider {
+  flex: 0 0 5px;
+  cursor: col-resize;
+  background: var(--border);
+  position: relative;
+  z-index: 2;
+}
+
+.split-divider:hover,
+.split-divider:active {
+  background: var(--accent);
+}
+
+/* Widens the actual hit area beyond the thin visible divider line,
+   without widening what's drawn — a 5px target is hard to grab
+   precisely with a mouse. */
+.split-divider::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  right: -3px;
+}
+
+.editor-pane {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  min-width: 0;
 }
 
 /* ---------- sidebar ---------- */
@@ -1343,6 +1383,7 @@ body {
   flex: 1;
   display: flex;
   min-height: 0;
+  min-width: 0;
   background: var(--bg-chat);
 }
 
