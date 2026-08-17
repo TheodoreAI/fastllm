@@ -15,6 +15,7 @@ import (
 	"fastllm/internal/files"
 	"fastllm/internal/llm"
 	"fastllm/internal/store"
+	"fastllm/internal/terminal"
 	"fastllm/internal/vector"
 	"fastllm/web"
 )
@@ -35,6 +36,7 @@ func main() {
 	addr := getenv("FASTLLM_ADDR", ":8080")
 	filesRoot := getenv("FASTLLM_FILES_ROOT", "")         // empty = file-read tool disabled
 	filesWrite := getenv("FASTLLM_FILES_WRITE", "") != "" // also requires FASTLLM_FILES_ROOT; every write needs manual approval regardless
+	terminalEnabled := getenv("FASTLLM_TERMINAL_ENABLED", "") != ""
 
 	db, err := store.Open(dbPath)
 	if err != nil {
@@ -69,7 +71,21 @@ func main() {
 	if fileReader.WritesEnabled() {
 		log.Printf("file-write tool enabled (manual approval required for every write)")
 	}
-	handler := chat.New(db, llmClient, vecStore, fileReader)
+
+	if err := store.SeedTerminalSettingsFromEnv(db, terminalEnabled); err != nil {
+		log.Printf("seed terminal settings from env: %v", err)
+	}
+	terminalSettings, err := store.GetTerminalSettings(db)
+	if err != nil {
+		log.Printf("load terminal settings: %v", err)
+		terminalSettings = store.DefaultTerminalSettings
+	}
+	terminalGate := terminal.NewGate(terminalSettings.Enabled)
+	if terminalGate.Enabled() {
+		log.Printf("terminal enabled — /api/terminal/ws will spawn an interactive PowerShell session for any loopback connection")
+	}
+
+	handler := chat.New(db, llmClient, vecStore, fileReader, terminalGate)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/chat", handler.Chat)
@@ -84,6 +100,8 @@ func main() {
 	mux.HandleFunc("PUT /api/settings/rag", handler.UpdateRAGSettings)
 	mux.HandleFunc("GET /api/settings/files", handler.GetFileAccessSettings)
 	mux.HandleFunc("PUT /api/settings/files", handler.UpdateFileAccessSettings)
+	mux.HandleFunc("GET /api/settings/terminal", handler.GetTerminalSettings)
+	mux.HandleFunc("PUT /api/settings/terminal", handler.UpdateTerminalSettings)
 	mux.HandleFunc("POST /api/settings/files/browse", handler.BrowseForFolder)
 	mux.HandleFunc("DELETE /api/conversations", handler.ClearConversations)
 	mux.HandleFunc("GET /api/skills", handler.ListSkills)
@@ -109,8 +127,11 @@ func main() {
 	mux.HandleFunc("POST /api/editor/git/switch", handler.EditorGitSwitchBranch)
 	mux.HandleFunc("POST /api/editor/git/branch", handler.EditorGitCreateBranch)
 
+	terminalRegistry := terminal.NewRegistry()
+	mux.HandleFunc("GET /api/terminal/ws", terminal.NewHandler(terminalRegistry, terminalGate, fileReader))
+
 	server := &http.Server{Addr: addr, Handler: mux}
-	mux.HandleFunc("POST /api/quit", quitHandler(server))
+	mux.HandleFunc("POST /api/quit", quitHandler(server, terminalRegistry))
 
 	serveFrontend(mux)
 
@@ -125,11 +146,12 @@ func main() {
 // remote exposure, so no auth is needed beyond it already listening on
 // localhost. Responds first, then shuts down from a goroutine so the
 // response actually reaches the browser before the process exits.
-func quitHandler(server *http.Server) http.HandlerFunc {
+func quitHandler(server *http.Server, terminalRegistry *terminal.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		go func() {
 			time.Sleep(200 * time.Millisecond)
+			terminalRegistry.CloseAll()
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			server.Shutdown(ctx)

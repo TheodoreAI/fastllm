@@ -24,6 +24,7 @@ import (
 	"fastllm/internal/folderpicker"
 	"fastllm/internal/llm"
 	"fastllm/internal/store"
+	"fastllm/internal/terminal"
 	"fastllm/internal/vector"
 )
 
@@ -126,17 +127,18 @@ type PendingWrite struct {
 }
 
 type Handler struct {
-	DB     *sql.DB
-	LLM    *llm.Client
-	Vector *vector.Store
-	Files  *files.Reader
+	DB       *sql.DB
+	LLM      *llm.Client
+	Vector   *vector.Store
+	Files    *files.Reader
+	Terminal *terminal.Gate
 
 	writesMu sync.Mutex
 	writes   map[string]*PendingWrite
 }
 
-func New(db *sql.DB, llmClient *llm.Client, vec *vector.Store, fileReader *files.Reader) *Handler {
-	return &Handler{DB: db, LLM: llmClient, Vector: vec, Files: fileReader, writes: make(map[string]*PendingWrite)}
+func New(db *sql.DB, llmClient *llm.Client, vec *vector.Store, fileReader *files.Reader, terminalGate *terminal.Gate) *Handler {
+	return &Handler{DB: db, LLM: llmClient, Vector: vec, Files: fileReader, Terminal: terminalGate, writes: make(map[string]*PendingWrite)}
 }
 
 func newWriteID() string {
@@ -658,6 +660,29 @@ func (h *Handler) UpdateFileAccessSettings(w http.ResponseWriter, r *http.Reques
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	writeJSON(w, settings)
+}
+
+func (h *Handler) GetTerminalSettings(w http.ResponseWriter, r *http.Request) {
+	settings, err := store.GetTerminalSettings(h.DB)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, settings)
+}
+
+func (h *Handler) UpdateTerminalSettings(w http.ResponseWriter, r *http.Request) {
+	var settings store.TerminalSettings
+	if err := json.NewDecoder(r.Body).Decode(&settings); err != nil {
+		http.Error(w, "invalid terminal settings payload", http.StatusBadRequest)
+		return
+	}
+	if err := store.SaveTerminalSettings(h.DB, settings); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	h.Terminal.SetEnabled(settings.Enabled)
 	writeJSON(w, settings)
 }
 

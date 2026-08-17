@@ -105,6 +105,12 @@ export function fetchFileAccessSettings() {
     .catch(() => ({ root: '', read_enabled: false, write_enabled: false }))
 }
 
+export function fetchTerminalSettings() {
+  return fetch('/api/settings/terminal')
+    .then((r) => okJson(r, 'fetchTerminalSettings'))
+    .catch(() => ({ enabled: false }))
+}
+
 // Opens a native OS folder-picker dialog on the machine running the
 // server (not the browser) and resolves with the chosen absolute path.
 // The request blocks server-side until the user picks a folder or
@@ -258,6 +264,14 @@ export function saveRagSettings(settings) {
 
 export function saveFileAccessSettings(settings) {
   return fetch('/api/settings/files', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settings),
+  })
+}
+
+export function saveTerminalSettings(settings) {
+  return fetch('/api/settings/terminal', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(settings),
