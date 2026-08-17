@@ -120,7 +120,26 @@ export function browseForFolder() {
     .then((r) => okJson(r, 'browseForFolder'))
 }
 
+// window.runtime is injected by Wails into every page it loads (see
+// internal/frontend/runtime's JS bridge) — detecting it this way, rather
+// than importing @wailsjs/runtime, means this file works unmodified in
+// both the plain-browser build (cmd/server) and the desktop build
+// (cmd/desktop) without adding a new frontend dependency, mirroring how
+// the old Tauri branch detected window.__TAURI__ for the same purpose.
+function isWails() {
+  return typeof window !== 'undefined' && typeof window.runtime?.Quit === 'function'
+}
+
 export function quitServer() {
+  if (isWails()) {
+    // cmd/desktop's OnShutdown hook (see cmd/desktop/main.go) does the
+    // same terminal-session cleanup /api/quit does server-side — calling
+    // the native Quit() closes the window, which triggers that hook,
+    // rather than POSTing to a server the desktop app doesn't expose a
+    // fetchable /api/quit distinction for.
+    window.runtime.Quit()
+    return Promise.resolve()
+  }
   return fetch('/api/quit', { method: 'POST' })
 }
 
