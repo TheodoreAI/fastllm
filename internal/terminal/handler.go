@@ -62,7 +62,19 @@ func NewHandler(registry *Registry, gate *Gate) http.HandlerFunc {
 		session, err := Start(defaultCols, defaultRows)
 		if err != nil {
 			log.Printf("terminal: failed to start session: %v", err)
-			conn.Close(websocket.StatusInternalError, err.Error())
+			// A short, stable machine-readable reason rather than err's full
+			// prose: WS close reasons are capped at 123 bytes by the
+			// protocol, and the frontend needs something to key off of
+			// precisely (e.g. show a permanent "won't work until you
+			// restart non-elevated" message instead of a generic
+			// "disconnected, try again" for this specific, deterministic
+			// failure) rather than pattern-matching on wording that might
+			// change.
+			reason := "spawn failed"
+			if err == ErrServerElevated {
+				reason = "elevated"
+			}
+			conn.Close(websocket.StatusInternalError, reason)
 			return
 		}
 		registry.add(session)

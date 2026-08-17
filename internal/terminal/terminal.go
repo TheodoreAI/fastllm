@@ -17,6 +17,15 @@ import "errors"
 // ErrUnsupported is returned on platforms without a PTY implementation.
 var ErrUnsupported = errors.New("terminal is not supported on this platform")
 
+// ErrServerElevated is returned instead of spawning a session when the
+// fastllm server process itself is running elevated (admin). Refusing
+// outright — rather than spawning an elevated shell — is the guardrail:
+// a ConPTY-spawned child inherits the parent's token with no separate UAC
+// prompt, so a shell handed to the browser would otherwise be elevated
+// with no indication of that to whoever's typing into it. Run fastllm as
+// a standard user to use the terminal.
+var ErrServerElevated = errors.New("fastllm is running elevated (as Administrator) — the terminal refuses to start an elevated shell; restart fastllm without admin rights to use it")
+
 // Session is a live, interactive shell process attached to a pseudo
 // console. Read/Write carry the raw terminal byte stream (including ANSI
 // escape sequences); Resize adjusts the pseudo console's character grid.

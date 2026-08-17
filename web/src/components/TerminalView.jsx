@@ -45,7 +45,7 @@ export default function TerminalView({ theme }) {
   const termRef = useRef(null)
   const fitAddonRef = useRef(null)
   const socketRef = useRef(null)
-  const [status, setStatus] = useState('connecting') // connecting | connected | disconnected
+  const [status, setStatus] = useState('connecting') // connecting | connected | disconnected | elevated
 
   useEffect(() => {
     const term = new Terminal({
@@ -123,7 +123,15 @@ export default function TerminalView({ theme }) {
         term.write(new Uint8Array(event.data))
       }
     }
-    socket.onclose = () => setStatus('disconnected')
+    socket.onclose = (event) => {
+      // "elevated" is a short, stable machine-readable reason the server
+      // sends (see internal/terminal/handler.go) when fastllm itself is
+      // running as Administrator — a deterministic, permanent refusal,
+      // not a dropped connection, so it gets its own message instead of
+      // the generic "disconnected" state with a "Restart" button that
+      // would just fail identically every time.
+      setStatus(event.reason === 'elevated' ? 'elevated' : 'disconnected')
+    }
     socket.onerror = () => setStatus('disconnected')
 
     term.onData((data) => {
@@ -147,6 +155,14 @@ export default function TerminalView({ theme }) {
           <button type="button" onClick={restart}>
             Restart terminal
           </button>
+        </div>
+      )}
+      {status === 'elevated' && (
+        <div className="terminal-disconnected-overlay">
+          <p>
+            fastllm is running as Administrator. The terminal refuses to start an
+            elevated shell — restart fastllm without admin rights to use it.
+          </p>
         </div>
       )}
     </div>

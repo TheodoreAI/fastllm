@@ -2,7 +2,12 @@
 
 package terminal
 
-import "github.com/UserExistsError/conpty"
+import (
+	"unsafe"
+
+	"github.com/UserExistsError/conpty"
+	"golang.org/x/sys/windows"
+)
 
 // conptySession adapts *conpty.ConPty to the Session interface — mainly so
 // handler.go never imports conpty directly, keeping the Windows-only
@@ -11,7 +16,42 @@ type conptySession struct {
 	cpty *conpty.ConPty
 }
 
+// isElevated reports whether the current process token has an elevated
+// (admin) integrity level — the same check Explorer uses to decide
+// whether to show the UAC shield on a running process. A ConPTY-spawned
+// child inherits the parent's token as-is; there's no separate consent
+// prompt the way double-clicking an app marked "requires administrator"
+// would show, so if fastllm.exe itself happens to be running elevated,
+// every terminal session spawned from it would silently be elevated too
+// with no indication to whoever's typing into the browser. Checked fresh
+// on every spawn (not cached at startup) since it's a cheap syscall and
+// this is the one place it actually matters.
+func isElevated() (bool, error) {
+	token := windows.GetCurrentProcessToken()
+	var elevation uint32
+	var outLen uint32
+	err := windows.GetTokenInformation(
+		token,
+		windows.TokenElevation,
+		(*byte)(unsafe.Pointer(&elevation)),
+		uint32(unsafe.Sizeof(elevation)),
+		&outLen,
+	)
+	if err != nil {
+		return false, err
+	}
+	return elevation != 0, nil
+}
+
 func start(cols, rows int) (Session, error) {
+	elevated, err := isElevated()
+	if err != nil {
+		return nil, err
+	}
+	if elevated {
+		return nil, ErrServerElevated
+	}
+
 	cpty, err := conpty.Start(
 		"powershell.exe -NoLogo",
 		conpty.ConPtyDimensions(cols, rows),
