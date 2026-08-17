@@ -42,8 +42,11 @@ export default function SettingsModal({
 
   useEffect(() => {
     setRagForm(ragSettings)
+  }, [ragSettings])
+
+  useEffect(() => {
     setFileAccessForm(fileAccessSettings)
-  }, [ragSettings, fileAccessSettings])
+  }, [fileAccessSettings])
 
   // Escape cancels an open danger-zone confirm first; a second press (or
   // pressing it when nothing's confirming) closes the whole modal.
@@ -70,28 +73,13 @@ export default function SettingsModal({
     }
   }
 
+  // A native folder picker (webkitdirectory) always returns every file's
+  // path prefixed with the same top-level folder name, by browser
+  // contract — no need to compute a shared prefix across the whole
+  // selection, the first file's leading segment already is the answer.
   function inferFolderRootFromPicker(files) {
-    const relPaths = files
-      .map((file) => (file.webkitRelativePath || file.name || '').replace(/\\/g, '/'))
-      .filter(Boolean)
-
-    if (relPaths.length === 0) return ''
-
-    const parts = relPaths.map((p) => p.split('/').filter(Boolean))
-    const minLen = Math.min(...parts.map((p) => p.length))
-    const shared = []
-
-    for (let i = 0; i < minLen; i += 1) {
-      const candidate = parts[0][i]
-      if (!parts.every((list) => list[i] === candidate)) break
-      shared.push(candidate)
-    }
-
-    if (shared.length <= 1) {
-      return shared[0] || ''
-    }
-
-    return shared.slice(0, -1).join('/')
+    const first = files[0]?.webkitRelativePath?.replace(/\\/g, '/') ?? ''
+    return first.split('/')[0] ?? ''
   }
 
   function handleRootPickerChange(e) {

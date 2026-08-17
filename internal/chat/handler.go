@@ -29,7 +29,8 @@ the user's question when it's relevant. If the context doesn't contain the
 answer, say so and answer from general knowledge instead.`
 
 // readFileTool is the schema advertised to the model when file access is
-// enabled. Read-only, sandboxed to Handler.Files.Root — see internal/files.
+// enabled. Read-only, sandboxed to Handler.Files's configured root — see
+// internal/files.
 var readFileTool = llm.Tool{
 	Type: "function",
 	Function: llm.ToolFunction{
@@ -83,6 +84,15 @@ type PendingWrite struct {
 	ExistingContent string `json:"existing_content"`
 	FileExists      bool   `json:"file_exists"`
 	Resolved        bool   `json:"-"`
+
+	// root is the sandbox root this write was validated and diffed
+	// against when proposed. If the live file-access root has changed by
+	// the time it's approved (via PUT /api/settings/files), applying it
+	// against the new root could silently write somewhere the reviewer
+	// never saw in the diff — ApproveWrite refuses the write instead. Not
+	// exported: this is an internal consistency check, not part of the
+	// API response the frontend renders.
+	root string
 }
 
 type Handler struct {
@@ -303,8 +313,14 @@ type fileRead struct {
 // that in its tool result, so its final answer can honestly say the
 // change is pending review rather than claiming it already happened.
 func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]llm.Message, thinkLevel string) ([]fileRead, []*PendingWrite) {
+	// Snapshot once so every check below (which tools to advertise, whether
+	// writes are allowed, which root a proposed write is validated/diffed
+	// against) agrees with itself for this one request, even if a
+	// concurrent PUT /api/settings/files changes config mid-flight.
+	root, writesEnabled := h.Files.Snapshot()
+
 	tools := []llm.Tool{readFileTool}
-	if h.Files.WritesEnabled() {
+	if writesEnabled {
 		tools = append(tools, writeFileTool)
 	}
 
@@ -349,7 +365,7 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 			_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
 
 			var result string
-			if !h.Files.WritesEnabled() {
+			if !writesEnabled {
 				result = "Error: file writes are not enabled."
 			} else if len(args.Content) > files.MaxWriteBytes {
 				result = fmt.Sprintf("Error: proposed content is too large (%d bytes, max %d).", len(args.Content), files.MaxWriteBytes)
@@ -363,6 +379,7 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 					NewContent:      args.Content,
 					ExistingContent: existing,
 					FileExists:      exists,
+					root:            root,
 				}
 				h.writesMu.Lock()
 				h.writes[pw.ID] = pw
@@ -399,6 +416,15 @@ func (h *Handler) ApproveWrite(w http.ResponseWriter, r *http.Request) {
 	pw := h.takePendingWrite(id)
 	if pw == nil {
 		http.Error(w, "no such pending write (already resolved or unknown id)", http.StatusNotFound)
+		return
+	}
+	// The sandbox root may have changed (via PUT /api/settings/files)
+	// since this write was proposed and diffed for review — approving it
+	// against a different root than the one shown to the reviewer would
+	// silently write somewhere they never saw. Refuse instead; the model
+	// can re-propose the write against the new root if still wanted.
+	if currentRoot, _ := h.Files.Snapshot(); currentRoot != pw.root {
+		http.Error(w, "file access settings changed since this write was proposed — re-ask the model to make this change so it can be reviewed against the current settings", http.StatusConflict)
 		return
 	}
 	if err := h.Files.Write(pw.Path, pw.NewContent); err != nil {
