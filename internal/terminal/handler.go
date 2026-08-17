@@ -7,6 +7,8 @@ import (
 	"net"
 	"net/http"
 
+	"fastllm/internal/files"
+
 	"github.com/coder/websocket"
 )
 
@@ -37,7 +39,14 @@ type controlMessage struct {
 // the caller is local — a shell endpoint is the one place that gap can't
 // be inherited silently. Both checks must pass; neither substitutes for
 // the other.
-func NewHandler(registry *Registry, gate *Gate) http.HandlerFunc {
+//
+// fileReader supplies the session's starting directory: whatever folder
+// is currently opened in the Editor (files.Reader.GetRoot()), so the
+// terminal lands somewhere relevant instead of the server's own launch
+// directory. Read fresh on every connect (not passed once at startup)
+// since the opened folder can change live via Settings → File access
+// without a restart, same as the reader itself.
+func NewHandler(registry *Registry, gate *Gate, fileReader *files.Reader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !gate.Enabled() {
 			http.NotFound(w, r)
@@ -59,7 +68,7 @@ func NewHandler(registry *Registry, gate *Gate) http.HandlerFunc {
 			return
 		}
 
-		session, err := Start(defaultCols, defaultRows)
+		session, err := Start(defaultCols, defaultRows, fileReader.GetRoot())
 		if err != nil {
 			log.Printf("terminal: failed to start session: %v", err)
 			// A short, stable machine-readable reason rather than err's full

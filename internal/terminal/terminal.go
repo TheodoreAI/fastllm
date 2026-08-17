@@ -36,7 +36,9 @@ type Session interface {
 	Close() error
 }
 
-// Start launches a new shell session with the given initial size.
-func Start(cols, rows int) (Session, error) {
-	return start(cols, rows)
+// Start launches a new shell session with the given initial size. workDir
+// sets the session's starting directory — pass "" to use the process's
+// own default (whatever directory the server itself was launched from).
+func Start(cols, rows int, workDir string) (Session, error) {
+	return start(cols, rows, workDir)
 }

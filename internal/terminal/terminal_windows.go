@@ -43,7 +43,7 @@ func isElevated() (bool, error) {
 	return elevation != 0, nil
 }
 
-func start(cols, rows int) (Session, error) {
+func start(cols, rows int, workDir string) (Session, error) {
 	elevated, err := isElevated()
 	if err != nil {
 		return nil, err
@@ -52,10 +52,11 @@ func start(cols, rows int) (Session, error) {
 		return nil, ErrServerElevated
 	}
 
-	cpty, err := conpty.Start(
-		"powershell.exe -NoLogo",
-		conpty.ConPtyDimensions(cols, rows),
-	)
+	opts := []conpty.ConPtyOption{conpty.ConPtyDimensions(cols, rows)}
+	if workDir != "" {
+		opts = append(opts, conpty.ConPtyWorkDir(workDir))
+	}
+	cpty, err := conpty.Start("powershell.exe -NoLogo", opts...)
 	if err != nil {
 		return nil, err
 	}

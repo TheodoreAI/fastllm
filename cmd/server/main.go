@@ -128,7 +128,7 @@ func main() {
 	mux.HandleFunc("POST /api/editor/git/branch", handler.EditorGitCreateBranch)
 
 	terminalRegistry := terminal.NewRegistry()
-	mux.HandleFunc("GET /api/terminal/ws", terminal.NewHandler(terminalRegistry, terminalGate))
+	mux.HandleFunc("GET /api/terminal/ws", terminal.NewHandler(terminalRegistry, terminalGate, fileReader))
 
 	server := &http.Server{Addr: addr, Handler: mux}
 	mux.HandleFunc("POST /api/quit", quitHandler(server, terminalRegistry))
