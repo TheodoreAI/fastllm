@@ -12,6 +12,9 @@ import {
   unstageGitPaths,
   commitGit,
   pushGit,
+  fetchGitBranches,
+  switchGitBranch,
+  createGitBranch,
 } from '../api'
 import { languageExtensionFor } from '../editorLanguages'
 
@@ -41,6 +44,12 @@ export default function EditorView({ fileAccessSettings, theme }) {
   const [pushing, setPushing] = useState(false)
   const [pushStatus, setPushStatus] = useState('')
 
+  const [branches, setBranches] = useState([])
+  const [branchBusy, setBranchBusy] = useState(false)
+  const [branchError, setBranchError] = useState('')
+  const [newBranchOpen, setNewBranchOpen] = useState(false)
+  const [newBranchName, setNewBranchName] = useState('')
+
   const enabled = !!fileAccessSettings?.read_enabled
   const canWrite = !!fileAccessSettings?.write_enabled
   const dirty = content !== savedContent
@@ -49,6 +58,7 @@ export default function EditorView({ fileAccessSettings, theme }) {
     if (!enabled) return
     refreshTree()
     refreshGitStatus()
+    refreshBranches()
   }, [enabled])
 
   function refreshTree() {
@@ -61,6 +71,52 @@ export default function EditorView({ fileAccessSettings, theme }) {
 
   function refreshGitStatus() {
     fetchGitStatus().then(setGitStatus)
+  }
+
+  function refreshBranches() {
+    fetchGitBranches().then(setBranches)
+  }
+
+  // Switching branches can carry over non-conflicting uncommitted
+  // changes (same as running `git switch` by hand) or fail outright if
+  // they'd be overwritten — either way the file tree, open file, and
+  // git status can all be stale afterward, so refresh everything rather
+  // than just the branch list.
+  async function handleSwitchBranch(name) {
+    setBranchBusy(true)
+    setBranchError('')
+    try {
+      const res = await switchGitBranch(name)
+      if (!res.ok) throw new Error(await res.text())
+      setOpenPath(null)
+      setDiffPath(null)
+      refreshTree()
+      refreshGitStatus()
+      refreshBranches()
+    } catch (err) {
+      setBranchError(err.message)
+    } finally {
+      setBranchBusy(false)
+    }
+  }
+
+  async function handleCreateBranch(e) {
+    e.preventDefault()
+    if (!newBranchName.trim()) return
+    setBranchBusy(true)
+    setBranchError('')
+    try {
+      const res = await createGitBranch(newBranchName.trim())
+      if (!res.ok) throw new Error(await res.text())
+      setNewBranchName('')
+      setNewBranchOpen(false)
+      refreshGitStatus()
+      refreshBranches()
+    } catch (err) {
+      setBranchError(err.message)
+    } finally {
+      setBranchBusy(false)
+    }
   }
 
   async function openFile(path) {
@@ -279,6 +335,38 @@ export default function EditorView({ fileAccessSettings, theme }) {
 
         {panel === 'git' && (
           <div className="editor-panel-body">
+            {branchError && <p className="editor-error">{branchError}</p>}
+            <div className="editor-branch-row">
+              <select
+                className="editor-branch-select"
+                value={branches.find((b) => b.current)?.name ?? ''}
+                onChange={(e) => handleSwitchBranch(e.target.value)}
+                disabled={branchBusy || branches.length === 0}
+              >
+                {branches.map((b) => (
+                  <option key={b.name} value={b.name}>
+                    {b.name}
+                  </option>
+                ))}
+              </select>
+              <button type="button" onClick={() => setNewBranchOpen((v) => !v)} disabled={branchBusy}>
+                New
+              </button>
+            </div>
+            {newBranchOpen && (
+              <form onSubmit={handleCreateBranch} className="editor-search-form">
+                <input
+                  value={newBranchName}
+                  onChange={(e) => setNewBranchName(e.target.value)}
+                  placeholder="New branch name"
+                  autoFocus
+                />
+                <button type="submit" disabled={branchBusy || !newBranchName.trim()}>
+                  Create
+                </button>
+              </form>
+            )}
+
             {gitError && <p className="editor-error">{gitError}</p>}
             <form onSubmit={handleCommit} className="editor-commit-form">
               <textarea

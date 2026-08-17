@@ -103,6 +103,9 @@ func main() {
 	mux.HandleFunc("POST /api/editor/git/unstage", handler.EditorGitUnstage)
 	mux.HandleFunc("POST /api/editor/git/commit", handler.EditorGitCommit)
 	mux.HandleFunc("POST /api/editor/git/push", handler.EditorGitPush)
+	mux.HandleFunc("GET /api/editor/git/branches", handler.EditorGitBranches)
+	mux.HandleFunc("POST /api/editor/git/switch", handler.EditorGitSwitchBranch)
+	mux.HandleFunc("POST /api/editor/git/branch", handler.EditorGitCreateBranch)
 
 	server := &http.Server{Addr: addr, Handler: mux}
 	mux.HandleFunc("POST /api/quit", quitHandler(server))

@@ -189,6 +189,34 @@ export function pushGit() {
   return fetch('/api/editor/git/push', { method: 'POST' })
 }
 
+export function fetchGitBranches() {
+  return fetch('/api/editor/git/branches')
+    .then((r) => okJson(r, 'fetchGitBranches'))
+    .then((data) => data ?? [])
+    .catch(() => [])
+}
+
+// Switches to an existing local branch. If uncommitted changes would be
+// overwritten by the target branch, this fails (a 500/error response)
+// rather than discarding or auto-stashing them.
+export function switchGitBranch(name) {
+  return fetch('/api/editor/git/switch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+}
+
+// Creates a new branch from the current HEAD and switches to it. Fails
+// if a branch with that name already exists.
+export function createGitBranch(name) {
+  return fetch('/api/editor/git/branch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+}
+
 export function approveWrite(id) {
   return fetch(`/api/writes/${id}/approve`, { method: 'POST' })
 }

@@ -1554,6 +1554,38 @@ body {
   cursor: default;
 }
 
+.editor-branch-row {
+  display: flex;
+  gap: 6px;
+}
+
+.editor-branch-select {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-input);
+  color: var(--text);
+  font-size: 0.75rem;
+  font-family: ui-monospace, 'SF Mono', Consolas, 'Cascadia Code', monospace;
+}
+
+.editor-branch-row button {
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-panel);
+  color: var(--text);
+  font-size: 0.6875rem;
+  cursor: pointer;
+}
+
+.editor-branch-row button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .editor-push-row {
   display: flex;
   align-items: center;

@@ -232,6 +232,67 @@ func (h *Handler) EditorGitPush(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"output": output})
 }
 
+// EditorGitBranches lists local branches, marking which is current.
+func (h *Handler) EditorGitBranches(w http.ResponseWriter, r *http.Request) {
+	root, ok := h.editorRoot(w)
+	if !ok {
+		return
+	}
+	branches, err := gitrepo.Branches(r.Context(), root)
+	if err != nil {
+		h.writeGitError(w, err)
+		return
+	}
+	if branches == nil {
+		branches = []gitrepo.Branch{}
+	}
+	writeJSON(w, branches)
+}
+
+type editorGitBranchRequest struct {
+	Name string `json:"name"`
+}
+
+// EditorGitSwitchBranch checks out an existing local branch. If the
+// working tree has uncommitted changes that would be overwritten by the
+// target branch, this fails and git's own error is returned as-is — no
+// auto-stash, nothing discarded. See gitrepo.SwitchBranch.
+func (h *Handler) EditorGitSwitchBranch(w http.ResponseWriter, r *http.Request) {
+	root, ok := h.editorRoot(w)
+	if !ok {
+		return
+	}
+	var req editorGitBranchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
+		http.Error(w, "name is required", http.StatusBadRequest)
+		return
+	}
+	if err := gitrepo.SwitchBranch(r.Context(), root, req.Name); err != nil {
+		h.writeGitError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// EditorGitCreateBranch creates a new branch from HEAD and switches to
+// it. Fails if a branch with that name already exists.
+func (h *Handler) EditorGitCreateBranch(w http.ResponseWriter, r *http.Request) {
+	root, ok := h.editorRoot(w)
+	if !ok {
+		return
+	}
+	var req editorGitBranchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
+		http.Error(w, "name is required", http.StatusBadRequest)
+		return
+	}
+	if err := gitrepo.CreateBranch(r.Context(), root, req.Name); err != nil {
+		h.writeGitError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // editorRoot resolves the sandbox root for editor/git endpoints,
 // writing an error response and returning ok=false if file access isn't
 // enabled. All editor and git-panel operations share the same root the

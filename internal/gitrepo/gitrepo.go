@@ -180,6 +180,69 @@ func Commit(ctx context.Context, root, message string) error {
 	return err
 }
 
+// Branch is one local branch.
+type Branch struct {
+	Name    string `json:"name"`
+	Current bool   `json:"current"`
+}
+
+// Branches lists local branches (not remote-tracking refs), marking
+// which one is currently checked out.
+func Branches(ctx context.Context, root string) ([]Branch, error) {
+	if !IsRepo(ctx, root) {
+		return nil, ErrNotARepo
+	}
+	out, err := run(ctx, root, "branch", "--format=%(refname:short)%00%(HEAD)")
+	if err != nil {
+		return nil, err
+	}
+	var branches []Branch
+	for _, line := range splitLines(out) {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\x00", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		branches = append(branches, Branch{Name: parts[0], Current: parts[1] == "*"})
+	}
+	return branches, nil
+}
+
+// SwitchBranch checks out an existing local branch. Like the rest of
+// this package, never does anything beyond the plain git command: if
+// the working tree has uncommitted changes that would be overwritten by
+// the target branch's version of the same files, `git switch` itself
+// refuses and this returns that error as-is — no auto-stash, no
+// discarding. Changes that don't conflict are carried over onto the new
+// branch, same as running `git switch` by hand.
+func SwitchBranch(ctx context.Context, root, name string) error {
+	if !IsRepo(ctx, root) {
+		return ErrNotARepo
+	}
+	if strings.TrimSpace(name) == "" {
+		return errors.New("gitrepo: branch name is required")
+	}
+	_, err := run(ctx, root, "switch", name)
+	return err
+}
+
+// CreateBranch creates a new branch starting from the current HEAD and
+// switches to it (`git switch -c`). Fails if a branch with that name
+// already exists — callers should use SwitchBranch for that case
+// instead of silently switching.
+func CreateBranch(ctx context.Context, root, name string) error {
+	if !IsRepo(ctx, root) {
+		return ErrNotARepo
+	}
+	if strings.TrimSpace(name) == "" {
+		return errors.New("gitrepo: branch name is required")
+	}
+	_, err := run(ctx, root, "switch", "-c", name)
+	return err
+}
+
 // Push runs a plain `git push` (current branch to its configured
 // upstream). No force flag, ever — if the remote has commits this
 // branch doesn't (someone else pushed, or there's no upstream

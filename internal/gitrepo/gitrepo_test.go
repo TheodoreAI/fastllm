@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -298,6 +299,143 @@ func TestPushFailsWhenRemoteHasDivergedNoForce(t *testing.T) {
 	}
 }
 
+func TestBranchesListsAndMarksCurrent(t *testing.T) {
+	dir := newTestRepo(t)
+	initialBranch := currentBranchName(t, dir)
+
+	if out, err := exec.Command("git", "-C", dir, "branch", "feature").CombinedOutput(); err != nil {
+		t.Fatalf("git branch feature: %v\n%s", err, out)
+	}
+
+	branches, err := Branches(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	byName := map[string]Branch{}
+	for _, b := range branches {
+		byName[b.Name] = b
+	}
+	if !byName[initialBranch].Current {
+		t.Errorf("expected %q to be marked current, got %+v", initialBranch, byName[initialBranch])
+	}
+	if byName["feature"].Current {
+		t.Errorf("expected feature to not be current, got %+v", byName["feature"])
+	}
+}
+
+func currentBranchName(t *testing.T, dir string) string {
+	t.Helper()
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git rev-parse: %v\n%s", err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func TestCreateBranchThenSwitchBack(t *testing.T) {
+	dir := newTestRepo(t)
+	initialBranch := currentBranchName(t, dir)
+
+	if err := CreateBranch(context.Background(), dir, "feature"); err != nil {
+		t.Fatal(err)
+	}
+	if got := currentBranchName(t, dir); got != "feature" {
+		t.Fatalf("expected to be on feature after CreateBranch, got %q", got)
+	}
+
+	if err := SwitchBranch(context.Background(), dir, initialBranch); err != nil {
+		t.Fatal(err)
+	}
+	if got := currentBranchName(t, dir); got != initialBranch {
+		t.Fatalf("expected to be back on %q after SwitchBranch, got %q", initialBranch, got)
+	}
+}
+
+func TestCreateBranchFailsIfAlreadyExists(t *testing.T) {
+	dir := newTestRepo(t)
+	initialBranch := currentBranchName(t, dir)
+
+	if err := CreateBranch(context.Background(), dir, "feature"); err != nil {
+		t.Fatal(err)
+	}
+	// Switch back to the original branch, then try to create "feature"
+	// again — it already exists, so this must fail rather than silently
+	// switching to it (that's what SwitchBranch is for).
+	if err := SwitchBranch(context.Background(), dir, initialBranch); err != nil {
+		t.Fatal(err)
+	}
+	if err := CreateBranch(context.Background(), dir, "feature"); err == nil {
+		t.Fatal("expected CreateBranch to fail: branch already exists")
+	}
+}
+
+func TestSwitchBranchFailsOnConflictingUncommittedChanges(t *testing.T) {
+	dir := newTestRepo(t)
+	initialBranch := currentBranchName(t, dir)
+
+	if err := CreateBranch(context.Background(), dir, "feature"); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(dir, "committed.txt"), "feature version\n")
+	if err := Stage(context.Background(), dir, []string{"committed.txt"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Commit(context.Background(), dir, "feature change"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SwitchBranch(context.Background(), dir, initialBranch); err != nil {
+		t.Fatal(err)
+	}
+	// An uncommitted change to the same file, different content than
+	// either branch has committed — switching to feature would have to
+	// overwrite it, so git must refuse.
+	mustWrite(t, filepath.Join(dir, "committed.txt"), "conflicting uncommitted change\n")
+
+	if err := SwitchBranch(context.Background(), dir, "feature"); err == nil {
+		t.Fatal("expected SwitchBranch to fail rather than overwrite uncommitted conflicting changes")
+	}
+
+	// The uncommitted change must survive untouched — SwitchBranch failing
+	// must not have discarded it.
+	got, err := os.ReadFile(filepath.Join(dir, "committed.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "conflicting uncommitted change\n" {
+		t.Fatalf("uncommitted change was lost after failed SwitchBranch, got: %q", got)
+	}
+}
+
+func TestSwitchBranchCarriesNonConflictingChanges(t *testing.T) {
+	dir := newTestRepo(t)
+	initialBranch := currentBranchName(t, dir)
+
+	if err := CreateBranch(context.Background(), dir, "feature"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SwitchBranch(context.Background(), dir, initialBranch); err != nil {
+		t.Fatal(err)
+	}
+
+	// An uncommitted new file, unrelated to anything either branch
+	// tracks — switching branches should carry it along rather than
+	// requiring it to be committed first.
+	mustWrite(t, filepath.Join(dir, "untracked.txt"), "carry me over\n")
+
+	if err := SwitchBranch(context.Background(), dir, "feature"); err != nil {
+		t.Fatalf("expected switch to succeed and carry the non-conflicting change, got: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "untracked.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "carry me over\n" {
+		t.Fatalf("uncommitted non-conflicting file was not carried over, got: %q", got)
+	}
+}
+
 func TestNonRepoOperationsReturnErrNotARepo(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
@@ -316,5 +454,14 @@ func TestNonRepoOperationsReturnErrNotARepo(t *testing.T) {
 	}
 	if _, err := Push(ctx, dir); err != ErrNotARepo {
 		t.Errorf("Push: expected ErrNotARepo, got %v", err)
+	}
+	if _, err := Branches(ctx, dir); err != ErrNotARepo {
+		t.Errorf("Branches: expected ErrNotARepo, got %v", err)
+	}
+	if err := SwitchBranch(ctx, dir, "main"); err != ErrNotARepo {
+		t.Errorf("SwitchBranch: expected ErrNotARepo, got %v", err)
+	}
+	if err := CreateBranch(ctx, dir, "feature"); err != ErrNotARepo {
+		t.Errorf("CreateBranch: expected ErrNotARepo, got %v", err)
 	}
 }
