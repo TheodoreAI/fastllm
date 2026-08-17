@@ -510,7 +510,7 @@ export default function App() {
         </div>
         <div className="stopped-state">
           <p className="stopped-title">fastllm has stopped.</p>
-          <p className="stopped-hint">You can close this tab, or relaunch it from the Desktop shortcut.</p>
+          <p className="stopped-hint">You can close this window, or relaunch it from the Desktop shortcut.</p>
         </div>
       </div>
     )
