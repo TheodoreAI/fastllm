@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 
 const STORAGE_KEY = 'fastllm-terminal-panel-height'
-const DEFAULT_HEIGHT = 260 // px
+const DEFAULT_HEIGHT = 200 // px
 
 function initialHeight() {
   const stored = Number(localStorage.getItem(STORAGE_KEY))

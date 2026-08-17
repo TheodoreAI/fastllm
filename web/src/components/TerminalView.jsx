@@ -57,9 +57,19 @@ export default function TerminalView({ theme }) {
     const fitAddon = new FitAddon()
     term.loadAddon(fitAddon)
     term.open(containerRef.current)
-    fitAddon.fit()
     termRef.current = term
     fitAddonRef.current = fitAddon
+
+    // Deferred one frame rather than called synchronously right after
+    // open(): the container (.terminal-surface) may not have settled
+    // into its final flex-computed size in the same paint yet, which was
+    // producing an undersized initial render (small text area, lots of
+    // unused space below the prompt) until something else — a manual
+    // window resize — happened to trigger the ResizeObserver's
+    // corrective re-fit below. Mirrors that same rAF-deferral pattern.
+    const initialFitId = requestAnimationFrame(() => {
+      fitAddon.fit()
+    })
 
     connect(term, fitAddon)
 
@@ -83,6 +93,7 @@ export default function TerminalView({ theme }) {
     resizeObserver.observe(containerRef.current)
 
     return () => {
+      cancelAnimationFrame(initialFitId)
       if (rafId != null) cancelAnimationFrame(rafId)
       resizeObserver.disconnect()
       socketRef.current?.close()
