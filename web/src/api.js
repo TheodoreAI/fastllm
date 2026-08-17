@@ -138,6 +138,29 @@ export function saveEditorFile(path, content) {
   })
 }
 
+// Creating a file is just saving an empty (or given) body to a
+// not-yet-existing path — the backend's Write already creates parent
+// directories as needed, so there's no separate "create" endpoint.
+export function createEditorFile(path, content = '') {
+  return saveEditorFile(path, content)
+}
+
+export function deleteEditorFile(path) {
+  return fetch('/api/editor/file', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  })
+}
+
+export function renameEditorFile(from, to) {
+  return fetch('/api/editor/file/rename', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from, to }),
+  })
+}
+
 export function searchEditor(query) {
   return fetch(`/api/editor/search?q=${encodeURIComponent(query)}`)
     .then((r) => okJson(r, 'searchEditor'))

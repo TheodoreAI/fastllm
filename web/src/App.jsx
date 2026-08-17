@@ -494,11 +494,6 @@ export default function App() {
     return (
       <div className="app">
         <div className="titlebar">
-          <div className="traffic-lights">
-            <span className="dot red" />
-            <span className="dot yellow" />
-            <span className="dot green" />
-          </div>
           <span className="titlebar-title">fastllm</span>
         </div>
         <div className="stopped-state">
@@ -512,11 +507,6 @@ export default function App() {
   return (
     <div className="app">
       <div className="titlebar">
-        <div className="traffic-lights">
-          <span className="dot red" />
-          <span className="dot yellow" />
-          <span className="dot green" />
-        </div>
         <span className="titlebar-title">fastllm</span>
         <div className="titlebar-tabs">
           <button

@@ -5,6 +5,9 @@ import {
   fetchEditorTree,
   fetchEditorFile,
   saveEditorFile,
+  createEditorFile,
+  deleteEditorFile,
+  renameEditorFile,
   searchEditor,
   fetchGitStatus,
   fetchGitDiff,
@@ -19,6 +22,7 @@ import {
   saveFileAccessSettings,
 } from '../api'
 import { languageExtensionFor } from '../editorLanguages'
+import { useEditorSidebarCollapsed } from '../useEditorSidebarCollapsed'
 import FileTree from './FileTree'
 
 const PANELS = { files: 'Files', search: 'Search', git: 'Git' }
@@ -54,6 +58,7 @@ export default function EditorView({ fileAccessSettings, onFileAccessSettingsCha
   const [newBranchName, setNewBranchName] = useState('')
   const [openingFolder, setOpeningFolder] = useState(false)
   const [folderError, setFolderError] = useState('')
+  const [sidebarCollapsed, setSidebarCollapsed] = useEditorSidebarCollapsed()
 
   const enabled = !!fileAccessSettings?.read_enabled
   const canWrite = !!fileAccessSettings?.write_enabled
@@ -195,6 +200,52 @@ export default function EditorView({ fileAccessSettings, onFileAccessSettingsCha
     }
   }
 
+  // Creating is just saving an empty file to a path that doesn't exist
+  // yet (see createEditorFile in api.js) — succeeds even for an empty
+  // name-only file, then opens it immediately so the human can start
+  // typing right away.
+  async function handleCreateFile(path) {
+    setTreeStatus('')
+    try {
+      const res = await createEditorFile(path)
+      if (!res.ok) throw new Error(await res.text())
+      refreshTree()
+      refreshGitStatus()
+      openFile(path)
+    } catch (err) {
+      setTreeStatus(`Error creating ${path}: ${err.message}`)
+    }
+  }
+
+  async function handleDeleteFile(path) {
+    if (!window.confirm(`Delete ${path}? This can't be undone.`)) return
+    try {
+      const res = await deleteEditorFile(path)
+      if (!res.ok) throw new Error(await res.text())
+      if (openPath === path) {
+        setOpenPath(null)
+        setContent('')
+        setSavedContent('')
+      }
+      refreshTree()
+      refreshGitStatus()
+    } catch (err) {
+      setTreeStatus(`Error deleting ${path}: ${err.message}`)
+    }
+  }
+
+  async function handleRenameFile(fromPath, toPath) {
+    try {
+      const res = await renameEditorFile(fromPath, toPath)
+      if (!res.ok) throw new Error(await res.text())
+      if (openPath === fromPath) setOpenPath(toPath)
+      refreshTree()
+      refreshGitStatus()
+    } catch (err) {
+      setTreeStatus(`Error renaming ${fromPath}: ${err.message}`)
+    }
+  }
+
   async function runSearch(e) {
     e.preventDefault()
     if (!query.trim()) return
@@ -309,36 +360,55 @@ export default function EditorView({ fileAccessSettings, onFileAccessSettingsCha
 
   return (
     <div className="editor-view">
-      <aside className="editor-sidebar">
-        <div className="editor-folder-row">
-          <button type="button" onClick={handleOpenFolder} disabled={openingFolder} title={fileAccessSettings?.root}>
-            {openingFolder ? 'Opening…' : 'Open Folder…'}
-          </button>
-          {fileAccessSettings?.root && (
-            <span className="editor-folder-name" title={fileAccessSettings.root}>
-              {fileAccessSettings.root.split(/[/\\]/).filter(Boolean).pop()}
-            </span>
-          )}
-        </div>
-        {folderError && <p className="editor-error">{folderError}</p>}
-        <div className="editor-panel-tabs">
-          {Object.entries(PANELS).map(([key, label]) => (
-            <button
-              key={key}
-              type="button"
-              className={panel === key ? 'is-active' : ''}
-              onClick={() => setPanel(key)}
-            >
-              {label}
-              {key === 'git' && gitStatus.length > 0 && <span className="editor-badge">{gitStatus.length}</span>}
-            </button>
-          ))}
-        </div>
+      <aside className={`editor-sidebar ${sidebarCollapsed ? 'is-collapsed' : ''}`}>
+        <button
+          type="button"
+          className="editor-sidebar-collapse-toggle"
+          title={sidebarCollapsed ? 'Expand file panel' : 'Collapse file panel'}
+          onClick={() => setSidebarCollapsed((c) => !c)}
+        >
+          {sidebarCollapsed ? '»' : '«'}
+        </button>
+
+        {!sidebarCollapsed && (
+          <>
+            <div className="editor-folder-row">
+              <button type="button" onClick={handleOpenFolder} disabled={openingFolder} title={fileAccessSettings?.root}>
+                {openingFolder ? 'Opening…' : 'Open Folder…'}
+              </button>
+              {fileAccessSettings?.root && (
+                <span className="editor-folder-name" title={fileAccessSettings.root}>
+                  {fileAccessSettings.root.split(/[/\\]/).filter(Boolean).pop()}
+                </span>
+              )}
+            </div>
+            {folderError && <p className="editor-error">{folderError}</p>}
+            <div className="editor-panel-tabs">
+              {Object.entries(PANELS).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  className={panel === key ? 'is-active' : ''}
+                  onClick={() => setPanel(key)}
+                >
+                  {label}
+                  {key === 'git' && gitStatus.length > 0 && <span className="editor-badge">{gitStatus.length}</span>}
+                </button>
+              ))}
+            </div>
 
         {panel === 'files' && (
           <div className="editor-panel-body editor-panel-body-tree">
             {treeStatus && <p className="editor-hint">{treeStatus}</p>}
-            <FileTree paths={tree.map((entry) => entry.path)} openPath={openPath} onOpenFile={openFile} />
+            <FileTree
+              paths={tree.map((entry) => entry.path)}
+              openPath={openPath}
+              onOpenFile={openFile}
+              canWrite={canWrite}
+              onCreateFile={handleCreateFile}
+              onDeleteFile={handleDeleteFile}
+              onRenameFile={handleRenameFile}
+            />
           </div>
         )}
 
@@ -483,6 +553,8 @@ export default function EditorView({ fileAccessSettings, onFileAccessSettingsCha
 
             {gitStatus.length === 0 && <p className="editor-hint">No changes.</p>}
           </div>
+        )}
+          </>
         )}
       </aside>
 

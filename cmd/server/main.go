@@ -96,6 +96,8 @@ func main() {
 	mux.HandleFunc("GET /api/editor/tree", handler.EditorTree)
 	mux.HandleFunc("GET /api/editor/file", handler.EditorReadFile)
 	mux.HandleFunc("PUT /api/editor/file", handler.EditorSaveFile)
+	mux.HandleFunc("DELETE /api/editor/file", handler.EditorDeleteFile)
+	mux.HandleFunc("POST /api/editor/file/rename", handler.EditorRenameFile)
 	mux.HandleFunc("GET /api/editor/search", handler.EditorSearch)
 	mux.HandleFunc("GET /api/editor/git/status", handler.EditorGitStatus)
 	mux.HandleFunc("GET /api/editor/git/diff", handler.EditorGitDiff)
