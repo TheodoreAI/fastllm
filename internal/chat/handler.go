@@ -400,6 +400,13 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 
 		*messages = append(*messages, reply)
 
+		// Two passes: write_file and read_file calls are resolved first
+		// (in original order) so pendingByPath reflects every write this
+		// round before any run_build call is evaluated, regardless of
+		// which order the model listed the calls in — a model that
+		// requests a fix and a verification in the same round must not
+		// have the verification see stale, pre-fix content.
+		results := make(map[string]string, len(reply.ToolCalls))
 		for _, call := range reply.ToolCalls {
 			switch call.Function.Name {
 			case "read_file":
@@ -422,7 +429,7 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 					}
 				}
 				reads = append(reads, fr)
-				*messages = append(*messages, llm.Message{Role: "tool", ToolCallID: call.ID, Content: result})
+				results[call.ID] = result
 
 			case "write_file":
 				var args struct {
@@ -455,27 +462,40 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 					pendingByPath[args.Path] = args.Content
 					result = fmt.Sprintf("Change to %q proposed and awaiting human approval (id: %s). Do not tell the user it has been written yet — it is pending review. You can call run_build to check it compiles before finishing.", args.Path, pw.ID)
 				}
-				*messages = append(*messages, llm.Message{Role: "tool", ToolCallID: call.ID, Content: result})
+				results[call.ID] = result
+			}
+		}
 
-			case "run_build":
-				var overlays []buildcheck.Overlay
-				for path, content := range pendingByPath {
-					overlays = append(overlays, buildcheck.Overlay{Path: path, Content: content})
-				}
-				result, err := buildcheck.Run(ctx, root, overlays)
-				var text string
-				switch {
-				case err != nil:
-					text = "Error running build check: " + err.Error()
-					buildChecks = append(buildChecks, buildCheckReport{Passed: false, Output: text})
-				case result.Passed:
-					text = "Build passed.\n\n" + result.Output
-					buildChecks = append(buildChecks, buildCheckReport{Passed: true, Output: result.Output})
-				default:
-					text = "Build failed:\n\n" + result.Output
-					buildChecks = append(buildChecks, buildCheckReport{Passed: false, Output: result.Output})
-				}
-				*messages = append(*messages, llm.Message{Role: "tool", ToolCallID: call.ID, Content: text})
+		for _, call := range reply.ToolCalls {
+			if call.Function.Name != "run_build" {
+				continue
+			}
+			var overlays []buildcheck.Overlay
+			for path, content := range pendingByPath {
+				overlays = append(overlays, buildcheck.Overlay{Path: path, Content: content})
+			}
+			result, err := buildcheck.Run(ctx, root, overlays)
+			var text string
+			switch {
+			case err != nil:
+				text = "Error running build check: " + err.Error()
+				buildChecks = append(buildChecks, buildCheckReport{Passed: false, Output: text})
+			case result.Passed:
+				text = "Build passed.\n\n" + result.Output
+				buildChecks = append(buildChecks, buildCheckReport{Passed: true, Output: result.Output})
+			default:
+				text = "Build failed:\n\n" + result.Output
+				buildChecks = append(buildChecks, buildCheckReport{Passed: false, Output: result.Output})
+			}
+			results[call.ID] = text
+		}
+
+		// Emit tool-result messages in the model's original call order —
+		// required so each "tool" message's position corresponds to the
+		// assistant message's tool_calls order that most backends expect.
+		for _, call := range reply.ToolCalls {
+			if result, ok := results[call.ID]; ok {
+				*messages = append(*messages, llm.Message{Role: "tool", ToolCallID: call.ID, Content: result})
 			}
 		}
 	}
