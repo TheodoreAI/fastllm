@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useEscapeKey } from '../useEscapeKey'
 import { FONT_OPTIONS } from '../useFontFamily'
 import { FONT_SCALE_OPTIONS } from '../useFontScale'
+import { browseForFolder } from '../api'
 
 // __APP_VERSION__ / __BUILD_TIME__ are baked in at build time by
 // vite.config.js from package.json + the build clock — see there for why.
@@ -38,7 +39,7 @@ export default function SettingsModal({
   const [fileAccessStatus, setFileAccessStatus] = useState('')
   const [confirming, setConfirming] = useState(null) // 'kb' | 'conversations' | null
   const [dataStatus, setDataStatus] = useState('')
-  const rootPickerRef = useRef(null)
+  const [browsing, setBrowsing] = useState(false)
 
   useEffect(() => {
     setRagForm(ragSettings)
@@ -73,25 +74,22 @@ export default function SettingsModal({
     }
   }
 
-  // A native folder picker (webkitdirectory) always returns every file's
-  // path prefixed with the same top-level folder name, by browser
-  // contract — no need to compute a shared prefix across the whole
-  // selection, the first file's leading segment already is the answer.
-  function inferFolderRootFromPicker(files) {
-    const first = files[0]?.webkitRelativePath?.replace(/\\/g, '/') ?? ''
-    return first.split('/')[0] ?? ''
-  }
-
-  function handleRootPickerChange(e) {
-    const files = Array.from(e.target.files ?? [])
-    if (files.length === 0) {
-      e.target.value = ''
-      return
+  // Opens a native OS folder dialog on the server's own machine/desktop —
+  // unlike a browser <input type=file webkitdirectory>, this returns a
+  // real absolute filesystem path instead of just a folder-name hint,
+  // since fastllm's server and its browser tab run on the same machine.
+  async function handleBrowseForFolder() {
+    setBrowsing(true)
+    setFileAccessStatus('')
+    try {
+      const result = await browseForFolder()
+      if (result.cancelled) return
+      setFileAccessForm((prev) => ({ ...prev, root: result.path }))
+    } catch (err) {
+      setFileAccessStatus(`Error: ${err.message}`)
+    } finally {
+      setBrowsing(false)
     }
-
-    const rootValue = inferFolderRootFromPicker(files)
-    setFileAccessForm((prev) => ({ ...prev, root: rootValue }))
-    e.target.value = ''
   }
 
   async function handleSaveFileAccess(e) {
@@ -220,22 +218,13 @@ export default function SettingsModal({
                   placeholder="Leave blank to disable"
                   onChange={(e) => setFileAccessForm({ ...fileAccessForm, root: e.target.value })}
                 />
-                <button type="button" className="btn-secondary" onClick={() => rootPickerRef.current?.click()}>
-                  Choose folder
+                <button type="button" className="btn-secondary" onClick={handleBrowseForFolder} disabled={browsing}>
+                  {browsing ? 'Waiting for dialog…' : 'Choose folder'}
                 </button>
-                <input
-                  ref={rootPickerRef}
-                  type="file"
-                  style={{ display: 'none' }}
-                  webkitdirectory=""
-                  directory=""
-                  multiple
-                  onChange={handleRootPickerChange}
-                />
               </div>
             </label>
             <p className="settings-hint">
-              Browser folder pickers do not expose the full native filesystem path to the app, so the saved value is a browser-provided project path hint. For a real sandbox root on this machine, you may still need to set the server path manually when running outside a native desktop shell.
+              "Choose folder" opens a native folder picker on this machine (fastllm's server and browser tab run on the same computer), so the path it fills in is real and ready to use. You can also type or paste a path directly.
             </p>
             <label className="settings-field checkbox-field settings-check-row">
               <input
