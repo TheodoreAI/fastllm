@@ -21,6 +21,8 @@ import { useEditorSidebarCollapsed } from './useEditorSidebarCollapsed'
 import { useTerminalCollapsed } from './useTerminalCollapsed'
 import { useSplitWidth } from './useSplitWidth'
 import { useConnectionStatus } from './useConnectionStatus'
+import { useModel } from './useModel'
+import { useSkillId } from './useSkillId'
 import {
   fetchConversations,
   fetchMessages,
@@ -158,9 +160,9 @@ export default function App() {
   const [uploadErrors, setUploadErrors] = useState([])
   const [documents, setDocuments] = useState([])
   const [models, setModels] = useState([])
-  const [model, setModel] = useState('')
+  const [model, setModel] = useModel()
   const [skills, setSkills] = useState([])
-  const [skillId, setSkillId] = useState('')
+  const [skillId, setSkillId] = useSkillId()
   const [skillFormOpen, setSkillFormOpen] = useState(false)
   const [skillName, setSkillName] = useState('')
   const [skillPrompt, setSkillPrompt] = useState('')
