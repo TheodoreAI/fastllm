@@ -3430,27 +3430,10 @@ body {
    it can't depend on them.
    --------------------------------------------------------------------- */
 
-#tweak-bar-toggle {
-  position: fixed;
-  bottom: 16px;
-  right: 16px;
-  z-index: 2147483000;
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  background: #1e1e1e;
-  color: #f2f2f2;
-  font-size: 18px;
-  line-height: 1;
-  cursor: pointer;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
-}
-
 #tweak-bar-panel {
   position: fixed;
-  bottom: 64px;
-  right: 16px;
+  bottom: 16px;
+  left: 52px;
   z-index: 2147483000;
   width: 320px;
   max-height: 80vh;

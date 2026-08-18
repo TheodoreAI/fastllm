@@ -38,8 +38,6 @@ export const DEFAULTS = {
 
   motionPreset: 'none',
   motionSpeed: 1,
-
-  panelOpen: false,
 }
 
 export const STORAGE_KEY = 'fastllm-tweak-bar-state'

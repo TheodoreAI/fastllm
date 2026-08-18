@@ -13,15 +13,20 @@ import {
 // design tokens (color, typography, spacing, motion) plus a click-to-copy
 // element inspector, with live WCAG contrast readouts on every color pair
 // so a color/background combo can be tweaked until it actually passes AA
-// rather than eyeballing it. Mounted once from main.jsx, always available
-// but collapsed by default (see main.jsx for why fastllm has no dev/prod
-// split to gate this on).
+// rather than eyeballing it. Rendered from App.jsx, always available but
+// collapsed by default (fastllm has no dev/prod split to gate this on —
+// it's a single-user local desktop app).
 //
 // fastllm's themes are all selected via :root[data-theme='x'] (see
 // themes.js / App.css), which beats a bare :root rule on CSS specificity
 // (0-1-1 vs 0-0-1) regardless of source order — the classic override trap.
 // Every custom-property override below therefore carries !important.
-export default function TweakBar() {
+//
+// The panel-open toggle lives in App.jsx's own view-rail (a plain SVG
+// button matching Chat/Editor/Split/Search/Git), not inside this
+// component — `open`/`onToggle` are lifted up so App.jsx can own that
+// button the same way it owns every other rail button's active state.
+export default function TweakBar({ open, onToggle }) {
   const [state, setState] = useState(() => loadInitialState())
   const styleTagRef = useRef(null)
   const motionStyleTagRef = useRef(null)
@@ -188,7 +193,7 @@ export default function TweakBar() {
     document.body.classList.add('picking-mode')
 
     function isExcluded(el) {
-      return !!el.closest('#tweak-bar-panel, #tweak-bar-toggle, #tweak-bar-hover-outline')
+      return !!el.closest('#tweak-bar-panel, #view-rail-tweak-bar, #tweak-bar-hover-outline')
     }
 
     function onMove(e) {
@@ -228,7 +233,7 @@ export default function TweakBar() {
         document.body.removeChild(ta)
       }
       setInspecting(false)
-      patch({ panelOpen: true })
+      if (!open) onToggle()
       setFlashMessage(`Copied ${description.selector}`)
     }
 
@@ -246,7 +251,7 @@ export default function TweakBar() {
       document.removeEventListener('click', onClick, true)
       document.removeEventListener('keydown', onKeydown, true)
     }
-  }, [inspecting, patch])
+  }, [inspecting, open, onToggle])
 
   useEffect(() => {
     return () => hoverOutlineRef.current?.remove()
@@ -259,196 +264,179 @@ export default function TweakBar() {
   }, [flashMessage])
 
   function resetAll() {
-    setState({ ...DEFAULTS, panelOpen: state.panelOpen })
+    setState({ ...DEFAULTS })
   }
 
+  if (!open) return null
+
   return (
-    <>
-      <button
-        type="button"
-        id="tweak-bar-toggle"
-        title="Tweak bar"
-        onClick={() => {
-          if (inspecting) {
-            setInspecting(false)
-            return
-          }
-          patch({ panelOpen: !state.panelOpen })
-        }}
-      >
-        🎛
-      </button>
+    <div id="tweak-bar-panel" ref={panelRef}>
+      <div className="tb-header">
+        <span>Tweak bar</span>
+        <button type="button" onClick={resetAll}>
+          Reset
+        </button>
+      </div>
 
-      {state.panelOpen && (
-        <div id="tweak-bar-panel" ref={panelRef}>
-          <div className="tb-header">
-            <span>Tweak bar</span>
-            <button type="button" onClick={resetAll}>
-              Reset
-            </button>
-          </div>
+      <div className="tb-row tb-row-full">
+        <button type="button" onClick={() => setInspecting((v) => !v)}>
+          {inspecting ? 'Cancel (Esc)' : 'Select element'}
+        </button>
+      </div>
 
-          <div className="tb-row tb-row-full">
-            <button type="button" onClick={() => setInspecting((v) => !v)}>
-              {inspecting ? 'Cancel (Esc)' : 'Select element'}
-            </button>
-          </div>
+      <div className="tb-row tb-row-full">
+        <label>
+          Font family
+          <select value={state.fontFamily} onChange={(e) => patch({ fontFamily: e.target.value })}>
+            {Object.entries(FONT_STACKS).map(([label, stack]) => (
+              <option key={label} value={stack}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
 
-          <div className="tb-row tb-row-full">
-            <label>
-              Font family
-              <select value={state.fontFamily} onChange={(e) => patch({ fontFamily: e.target.value })}>
-                {Object.entries(FONT_STACKS).map(([label, stack]) => (
-                  <option key={label} value={stack}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
+      <div className="tb-group">
+        <div className="tb-group-title">Typography</div>
+        <label>
+          Weight
+          <select value={state.fontWeight} onChange={(e) => patch({ fontWeight: e.target.value })}>
+            <option value="300">Light</option>
+            <option value="400">Regular</option>
+            <option value="500">Medium</option>
+            <option value="600">Semibold</option>
+            <option value="700">Bold</option>
+          </select>
+        </label>
+        <label>
+          Size <span>{Math.round(state.fontSize * 100)}%</span>
+          <input
+            type="range"
+            min="0.75"
+            max="1.5"
+            step="0.05"
+            value={state.fontSize}
+            onChange={(e) => patch({ fontSize: Number(e.target.value) })}
+          />
+        </label>
+        <label>
+          Letter spacing <span>{state.letterSpacing}px</span>
+          <input
+            type="range"
+            min="-1"
+            max="3"
+            step="0.1"
+            value={state.letterSpacing}
+            onChange={(e) => patch({ letterSpacing: Number(e.target.value) })}
+          />
+        </label>
+      </div>
 
-          <div className="tb-group">
-            <div className="tb-group-title">Typography</div>
-            <label>
-              Weight
-              <select value={state.fontWeight} onChange={(e) => patch({ fontWeight: e.target.value })}>
-                <option value="300">Light</option>
-                <option value="400">Regular</option>
-                <option value="500">Medium</option>
-                <option value="600">Semibold</option>
-                <option value="700">Bold</option>
-              </select>
-            </label>
-            <label>
-              Size <span>{Math.round(state.fontSize * 100)}%</span>
-              <input
-                type="range"
-                min="0.75"
-                max="1.5"
-                step="0.05"
-                value={state.fontSize}
-                onChange={(e) => patch({ fontSize: Number(e.target.value) })}
-              />
-            </label>
-            <label>
-              Letter spacing <span>{state.letterSpacing}px</span>
-              <input
-                type="range"
-                min="-1"
-                max="3"
-                step="0.1"
-                value={state.letterSpacing}
-                onChange={(e) => patch({ letterSpacing: Number(e.target.value) })}
-              />
-            </label>
-          </div>
-
-          <div className="tb-group">
-            <div className="tb-group-title">
-              Color
-              <span className="tb-group-hint">Ratios update live — green = passes WCAG AA</span>
-            </div>
-
-            <ColorControl
-              label="Text"
-              value={state.textColor}
-              tokenVar="--text"
-              themeTick={themeTick}
-              onChange={(v) => patch({ textColor: v })}
-            />
-            <ColorControl
-              label="Muted text"
-              value={state.textDimColor}
-              tokenVar="--text-dim"
-              themeTick={themeTick}
-              onChange={(v) => patch({ textDimColor: v })}
-            />
-            <ColorControl
-              label="Background"
-              value={state.bgColor}
-              tokenVar="--bg-chat"
-              themeTick={themeTick}
-              onChange={(v) => patch({ bgColor: v })}
-            />
-            <ColorControl
-              label="Panel background"
-              value={state.bgPanelColor}
-              tokenVar="--bg-panel"
-              themeTick={themeTick}
-              onChange={(v) => patch({ bgPanelColor: v })}
-            />
-            <ColorControl
-              label="Accent"
-              value={state.accentColor}
-              tokenVar="--accent"
-              themeTick={themeTick}
-              onChange={(v) => patch({ accentColor: v })}
-            />
-            <ColorControl
-              label="User bubble bg"
-              value={state.bubbleUserColor}
-              tokenVar="--bg-bubble-user"
-              themeTick={themeTick}
-              onChange={(v) => patch({ bubbleUserColor: v })}
-            />
-
-            <ContrastReadouts pairs={contrastPairs} />
-          </div>
-
-          <div className="tb-group">
-            <div className="tb-group-title">Space</div>
-            <label>
-              Density <span>{Math.round(state.spaceScale * 100)}%</span>
-              <input
-                type="range"
-                min="0.5"
-                max="2"
-                step="0.1"
-                value={state.spaceScale}
-                onChange={(e) => patch({ spaceScale: Number(e.target.value) })}
-              />
-            </label>
-            <label>
-              Corner radius <span>{state.radius ?? currentRadius()}px</span>
-              <input
-                type="range"
-                min="0"
-                max="20"
-                step="1"
-                value={state.radius ?? currentRadius()}
-                onChange={(e) => patch({ radius: Number(e.target.value) })}
-              />
-            </label>
-          </div>
-
-          <div className="tb-group">
-            <div className="tb-group-title">Motion</div>
-            <label>
-              Preset
-              <select value={state.motionPreset} onChange={(e) => patch({ motionPreset: e.target.value })}>
-                <option value="none">None</option>
-                <option value="fade-in">Fade in</option>
-                <option value="rise-in">Rise in</option>
-                <option value="pulse-accent">Pulse accent</option>
-              </select>
-            </label>
-            <label>
-              Speed <span>{state.motionSpeed}x</span>
-              <input
-                type="range"
-                min="0.25"
-                max="3"
-                step="0.25"
-                value={state.motionSpeed}
-                onChange={(e) => patch({ motionSpeed: Number(e.target.value) })}
-              />
-            </label>
-          </div>
-
-          {flashMessage && <div className="tb-flash">{flashMessage}</div>}
+      <div className="tb-group">
+        <div className="tb-group-title">
+          Color
+          <span className="tb-group-hint">Ratios update live — green = passes WCAG AA</span>
         </div>
-      )}
-    </>
+
+        <ColorControl
+          label="Text"
+          value={state.textColor}
+          tokenVar="--text"
+          themeTick={themeTick}
+          onChange={(v) => patch({ textColor: v })}
+        />
+        <ColorControl
+          label="Muted text"
+          value={state.textDimColor}
+          tokenVar="--text-dim"
+          themeTick={themeTick}
+          onChange={(v) => patch({ textDimColor: v })}
+        />
+        <ColorControl
+          label="Background"
+          value={state.bgColor}
+          tokenVar="--bg-chat"
+          themeTick={themeTick}
+          onChange={(v) => patch({ bgColor: v })}
+        />
+        <ColorControl
+          label="Panel background"
+          value={state.bgPanelColor}
+          tokenVar="--bg-panel"
+          themeTick={themeTick}
+          onChange={(v) => patch({ bgPanelColor: v })}
+        />
+        <ColorControl
+          label="Accent"
+          value={state.accentColor}
+          tokenVar="--accent"
+          themeTick={themeTick}
+          onChange={(v) => patch({ accentColor: v })}
+        />
+        <ColorControl
+          label="User bubble bg"
+          value={state.bubbleUserColor}
+          tokenVar="--bg-bubble-user"
+          themeTick={themeTick}
+          onChange={(v) => patch({ bubbleUserColor: v })}
+        />
+
+        <ContrastReadouts pairs={contrastPairs} />
+      </div>
+
+      <div className="tb-group">
+        <div className="tb-group-title">Space</div>
+        <label>
+          Density <span>{Math.round(state.spaceScale * 100)}%</span>
+          <input
+            type="range"
+            min="0.5"
+            max="2"
+            step="0.1"
+            value={state.spaceScale}
+            onChange={(e) => patch({ spaceScale: Number(e.target.value) })}
+          />
+        </label>
+        <label>
+          Corner radius <span>{state.radius ?? currentRadius()}px</span>
+          <input
+            type="range"
+            min="0"
+            max="20"
+            step="1"
+            value={state.radius ?? currentRadius()}
+            onChange={(e) => patch({ radius: Number(e.target.value) })}
+          />
+        </label>
+      </div>
+
+      <div className="tb-group">
+        <div className="tb-group-title">Motion</div>
+        <label>
+          Preset
+          <select value={state.motionPreset} onChange={(e) => patch({ motionPreset: e.target.value })}>
+            <option value="none">None</option>
+            <option value="fade-in">Fade in</option>
+            <option value="rise-in">Rise in</option>
+            <option value="pulse-accent">Pulse accent</option>
+          </select>
+        </label>
+        <label>
+          Speed <span>{state.motionSpeed}x</span>
+          <input
+            type="range"
+            min="0.25"
+            max="3"
+            step="0.25"
+            value={state.motionSpeed}
+            onChange={(e) => patch({ motionSpeed: Number(e.target.value) })}
+          />
+        </label>
+      </div>
+
+      {flashMessage && <div className="tb-flash">{flashMessage}</div>}
+    </div>
   )
 }
 
