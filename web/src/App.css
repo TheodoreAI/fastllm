@@ -2358,6 +2358,32 @@ body {
   background: rgba(0, 0, 0, 0.85);
 }
 
+.composer-image-error {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--danger);
+}
+
+/* Persistent flag next to the composer input showing whether the
+   selected model accepts pasted images — unlike the placeholder text
+   (which disappears the moment the user starts typing), this stays
+   visible the whole time so the capability is never hidden mid-draft. */
+.composer-vision-flag {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  font-size: 0.9rem;
+  opacity: 0.55;
+}
+
+.composer-vision-flag.is-supported {
+  opacity: 0.9;
+}
+
+.composer-vision-flag.is-unsupported {
+  opacity: 0.4;
+}
+
 .message-images {
   display: flex;
   flex-wrap: wrap;

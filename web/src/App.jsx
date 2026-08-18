@@ -155,6 +155,11 @@ export default function App() {
   // attachment is exactly the kind of ephemeral draft state localStorage
   // is deliberately NOT used for elsewhere in this app either.
   const [pendingImages, setPendingImages] = useState([])
+  // Set when a paste/attach is rejected (wrong model, bad file, too
+  // large) so the composer can show why nothing was attached — cleared
+  // on the next successful attach or on send, same lifecycle as
+  // pendingImages itself.
+  const [composerImageError, setComposerImageError] = useState('')
   const [streaming, setStreaming] = useState(false)
   const [docText, setDocText] = useState('')
   const [docStatus, setDocStatus] = useState('')
@@ -442,12 +447,15 @@ export default function App() {
   const maxPendingImages = 4
   const maxImageBytes = 8 * 1024 * 1024
 
+  const visionSupported = !!models.find((m) => m.name === model)?.supports_vision
+
   function addPendingImage(file) {
     if (!file.type.startsWith('image/')) return
     if (file.size > maxImageBytes) {
-      setDocStatus(`"${file.name || 'pasted image'}" is too large to attach (max 8 MB).`)
+      setComposerImageError(`"${file.name || 'pasted image'}" is too large to attach (max 8 MB).`)
       return
     }
+    setComposerImageError('')
     const reader = new FileReader()
     reader.onload = () => {
       setPendingImages((prev) => {
@@ -468,12 +476,25 @@ export default function App() {
   // it can't, so nothing would happen otherwise). Text pastes are left
   // completely alone: only clipboard items whose type starts with
   // "image/" are intercepted, so a normal text paste never even reaches
-  // this branch, let alone gets preventDefault'd.
+  // this branch, let alone gets preventDefault'd — and never rejected for
+  // vision support, since a plain-text paste is always valid regardless
+  // of which model is selected.
+  //
+  // A model that doesn't support vision (per visionSupported, derived
+  // from llm.SupportsVisionForModel via GET /api/models) rejects the
+  // image outright rather than silently attaching it and letting the
+  // request fail (or be silently dropped) deep inside whichever
+  // provider's API receives it — see llm.Message's Images field and each
+  // provider's request translation for what would otherwise happen.
   function handleComposerPaste(e) {
     const items = Array.from(e.clipboardData?.items || [])
     const imageItems = items.filter((item) => item.type.startsWith('image/'))
     if (imageItems.length === 0) return
     e.preventDefault()
+    if (!visionSupported) {
+      setComposerImageError(`"${model || 'This model'}" doesn't support images.`)
+      return
+    }
     for (const item of imageItems) {
       const file = item.getAsFile()
       if (file) addPendingImage(file)
@@ -488,6 +509,7 @@ export default function App() {
     const images = pendingImages.map((img) => img.dataUri)
     setInput('')
     setPendingImages([])
+    setComposerImageError('')
     setStreaming(true)
     setMessages((prev) => [...prev, { role: 'user', content: text, images }, { role: 'assistant', content: '', sources: [], reasoning: '', toolCalls: [], pendingWrites: [], buildChecks: [] }])
 
@@ -1075,9 +1097,10 @@ export default function App() {
           onRequestApproveWrite={requestApproveWrite}
           onRejectWrite={handleRejectWrite}
           pendingImages={pendingImages}
+          composerImageError={composerImageError}
           onComposerPaste={handleComposerPaste}
           onRemovePendingImage={removePendingImage}
-          visionSupported={!!models.find((m) => m.name === model)?.supports_vision}
+          visionSupported={visionSupported}
         />
       </div>
       </div>

@@ -16,6 +16,7 @@ export default function ChatPanel({
   onRequestApproveWrite,
   onRejectWrite,
   pendingImages,
+  composerImageError,
   onComposerPaste,
   onRemovePendingImage,
   visionSupported,
@@ -138,6 +139,7 @@ export default function ChatPanel({
       </div>
 
       <form className="composer-form" onSubmit={handleSubmit}>
+        {composerImageError && <p className="composer-image-error">{composerImageError}</p>}
         {pendingImages && pendingImages.length > 0 && (
           <div className="composer-image-previews">
             {pendingImages.map((img, i) => (
@@ -157,6 +159,12 @@ export default function ChatPanel({
           </div>
         )}
         <div className="composer">
+          <span
+            className={`composer-vision-flag ${visionSupported ? 'is-supported' : 'is-unsupported'}`}
+            title={visionSupported ? 'This model accepts pasted images.' : "This model doesn't accept images — paste is disabled."}
+          >
+            🖼{visionSupported ? '' : '🚫'}
+          </span>
           <input
             value={input}
             onChange={(e) => handleComposerChange(e.target.value)}
