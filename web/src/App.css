@@ -896,6 +896,81 @@ body {
   letter-spacing: 0.2px;
 }
 
+.terminal-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.terminal-tab {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 4px 3px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--text-faint);
+}
+
+.terminal-tab.is-active {
+  background: color-mix(in srgb, var(--bg-panel), var(--text) 8%);
+  color: var(--text);
+}
+
+.terminal-tab-label {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  cursor: pointer;
+  padding: 0;
+  white-space: nowrap;
+}
+
+.terminal-tab-close {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 9px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+.terminal-tab-close:hover {
+  background: rgba(128, 128, 128, 0.25);
+}
+
+.terminal-tab-add {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.terminal-tab-add:hover {
+  background: rgba(128, 128, 128, 0.18);
+  color: var(--text);
+}
+
 .terminal-panel-collapse-toggle {
   width: 20px;
   height: 20px;
