@@ -319,9 +319,21 @@ export default function App() {
   }, [setEditorSidebarCollapsed, setTerminalCollapsed, setSidebarCollapsed])
 
   // Search and Git live on the main rail (see the Search/Git buttons
-  // below) rather than as tabs inside EditorView's own sidebar.
+  // below) rather than as tabs inside EditorView's own sidebar. Mirrors
+  // toggleFilesPanel's behavior below: clicking the button for the panel
+  // that's already open collapses the sidebar (a second click re-expands,
+  // same toggle Ctrl+B already does); clicking it from anywhere else
+  // selects that panel and makes sure the sidebar is actually expanded to
+  // show it, rather than leaving it collapsed from an earlier
+  // Ctrl+B/manual collapse.
   function openEditorPanel(panel) {
+    const alreadyShowingPanel = editorPanel === panel && !editorSidebarCollapsed
+    if (alreadyShowingPanel) {
+      setEditorSidebarCollapsed(true)
+      return
+    }
     setEditorPanel(panel)
+    setEditorSidebarCollapsed(false)
   }
 
   // The Files rail button mirrors VS Code's Explorer icon: clicking it
