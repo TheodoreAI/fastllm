@@ -26,6 +26,7 @@ import {
   saveFileAccessSettings,
 } from '../api'
 import { languageExtensionFor, languageNameFor } from '../editorLanguages'
+import { parseDiff } from '../diffFormat'
 import { aiCompletionExtension } from '../aiCompletion'
 import { useEditorSidebarWidth } from '../useEditorSidebarWidth'
 import { useTerminalPanelHeight } from '../useTerminalPanelHeight'
@@ -72,6 +73,7 @@ export default function EditorView({
   const [selectedPaths, setSelectedPaths] = useState(new Set())
   const [diffPath, setDiffPath] = useState(null)
   const [diffText, setDiffText] = useState('')
+  const diffLines = useMemo(() => parseDiff(diffText), [diffText])
   const [commitMessage, setCommitMessage] = useState('')
   const [gitBusy, setGitBusy] = useState(false)
   // Commit/Stage/Unstage share one gitBusy flag (they're already mutually
@@ -957,9 +959,18 @@ export default function EditorView({
             <>
               <div className="editor-file-header">
                 <span className="editor-file-path">Diff: {diffPath}</span>
-                <button type="button" onClick={() => setDiffPath(null)}>Close</button>
+                <button type="button" className="editor-diff-close" onClick={() => setDiffPath(null)}>Close</button>
               </div>
-              <pre className="editor-diff">{diffText}</pre>
+              <div className="editor-diff">
+                {diffLines.map((line, i) => (
+                  <div key={i} className={`editor-diff-line editor-diff-line--${line.type}`}>
+                    <span className="editor-diff-gutter">
+                      {line.type === 'add' ? '+' : line.type === 'del' ? '−' : ''}
+                    </span>
+                    <span className="editor-diff-text">{line.text}</span>
+                  </div>
+                ))}
+              </div>
             </>
           ) : (
             <div className="editor-empty-state">

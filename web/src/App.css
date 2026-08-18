@@ -3135,17 +3135,86 @@ body {
   user-select: none;
 }
 
+.editor-diff-close {
+  flex: 0 0 auto;
+  padding: 5px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+
+.editor-diff-close:hover {
+  background: rgba(128, 128, 128, 0.14);
+  color: var(--text);
+}
+
 .editor-diff {
   flex: 1;
   margin: 0;
-  padding: 14px;
+  padding: 8px 0;
   overflow: auto;
   font-family: ui-monospace, 'SF Mono', Consolas, 'Cascadia Code', monospace;
   font-size: 0.8125rem;
   line-height: 1.5;
-  white-space: pre-wrap;
   color: var(--text);
   background: var(--bg-chat);
+}
+
+.editor-diff-line {
+  display: flex;
+  min-height: 1.5em;
+}
+
+.editor-diff-line--add {
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+}
+
+.editor-diff-line--del {
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+}
+
+.editor-diff-line--hunk {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  margin: 4px 0;
+}
+
+.editor-diff-line--meta {
+  color: var(--text-faint);
+}
+
+.editor-diff-line--file {
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+.editor-diff-gutter {
+  flex: 0 0 auto;
+  width: 28px;
+  text-align: center;
+  user-select: none;
+}
+
+.editor-diff-line--add .editor-diff-gutter {
+  color: var(--success);
+  font-weight: 700;
+}
+
+.editor-diff-line--del .editor-diff-gutter {
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.editor-diff-text {
+  flex: 1;
+  min-width: 0;
+  padding-right: 14px;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .settings-floating-panel {
