@@ -2893,6 +2893,36 @@ body {
   min-width: 0;
 }
 
+.settings-row-value-wrap {
+  font-family: inherit;
+  white-space: normal;
+  text-overflow: clip;
+  text-align: right;
+}
+
+.settings-subheading {
+  margin-top: 14px;
+  margin-bottom: 6px;
+}
+
+.settings-row-keybind {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.settings-row-keybind kbd {
+  font-family: ui-monospace, 'SF Mono', Consolas, 'Cascadia Code', monospace;
+  font-size: 0.7188rem;
+  color: var(--text);
+  background: var(--bg-window);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+  box-shadow: 0 1px 0 var(--border-strong);
+}
+
 .theme-toggle {
   display: flex;
   flex-wrap: wrap;

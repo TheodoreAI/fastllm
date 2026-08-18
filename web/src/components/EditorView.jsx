@@ -22,14 +22,26 @@ import {
   saveFileAccessSettings,
 } from '../api'
 import { languageExtensionFor } from '../editorLanguages'
-import { useEditorSidebarCollapsed } from '../useEditorSidebarCollapsed'
 import { useEditorSidebarWidth } from '../useEditorSidebarWidth'
 import { useTerminalPanelHeight } from '../useTerminalPanelHeight'
-import { useTerminalCollapsed } from '../useTerminalCollapsed'
 import FileTree from './FileTree'
 import TerminalView from './TerminalView'
 
-export default function EditorView({ fileAccessSettings, onFileAccessSettingsChange, theme, terminalEnabled, visible, openFolderSignal, panel, onPanelChange, onGitChangeCountChange }) {
+export default function EditorView({
+  fileAccessSettings,
+  onFileAccessSettingsChange,
+  theme,
+  terminalEnabled,
+  visible,
+  openFolderSignal,
+  panel,
+  onPanelChange,
+  onGitChangeCountChange,
+  sidebarCollapsed,
+  onSidebarCollapsedChange,
+  terminalCollapsed,
+  onTerminalCollapsedChange,
+}) {
   const [tree, setTree] = useState([])
   const [treeStatus, setTreeStatus] = useState('')
   const [openPath, setOpenPath] = useState(null)
@@ -59,10 +71,10 @@ export default function EditorView({ fileAccessSettings, onFileAccessSettingsCha
   const [newBranchName, setNewBranchName] = useState('')
   const [openingFolder, setOpeningFolder] = useState(false)
   const [folderError, setFolderError] = useState('')
-  const [sidebarCollapsed, setSidebarCollapsed] = useEditorSidebarCollapsed()
+  const setSidebarCollapsed = onSidebarCollapsedChange
   const [sidebarWidth, setSidebarWidth] = useEditorSidebarWidth()
   const [terminalPanelHeight, setTerminalPanelHeight] = useTerminalPanelHeight()
-  const [terminalCollapsed, setTerminalCollapsed] = useTerminalCollapsed()
+  const setTerminalCollapsed = onTerminalCollapsedChange
   const mainColumnRef = useRef(null)
   const sidebarRef = useRef(null)
   // EditorView is always mounted (just hidden) so Chat<->Editor switches
