@@ -22,6 +22,24 @@ const CHEVRON = (
   </svg>
 )
 
+// Every global keyboard shortcut fastllm defines, shown together in
+// Settings → About so there's one place to look them up — the panel
+// toggles are handled in App.jsx's keydown listener, Save lives in
+// EditorView's own handler, and Open Folder/Exit/Undo etc. are native
+// Wails menu items (see cmd/desktop/main.go's menu()); none of those
+// three places know about the other two, so this list has to be kept in
+// sync by hand rather than generated from a single source.
+const KEYBINDINGS = [
+  { keys: 'Ctrl+B', description: 'Toggle the editor’s Files panel' },
+  { keys: 'Ctrl+J', description: 'Toggle the terminal panel' },
+  { keys: 'Ctrl+Shift+M', description: 'Toggle the model settings panel' },
+  { keys: 'Ctrl+O', description: 'Open folder' },
+  { keys: 'Ctrl+S', description: 'Save the current file (Editor tab)' },
+  { keys: 'Ctrl+Q', description: 'Exit fastllm' },
+  { keys: 'Ctrl+Z', description: 'Undo' },
+  { keys: 'Ctrl+Y', description: 'Redo' },
+]
+
 // One collapsible sub-block within the Settings panel — mirrors
 // FileTree.jsx's folder-row chevron-rotate idiom (same interaction,
 // applied to a settings heading instead of a directory) rather than
@@ -497,6 +515,16 @@ export default function SettingsPanel({
           <span className="settings-row-key">Built</span>
           <span className="settings-row-value" title={__BUILD_TIME__}>{formatBuildTime(__BUILD_TIME__)}</span>
         </div>
+
+        <p className="settings-label settings-subheading">Keyboard shortcuts</p>
+        {KEYBINDINGS.map(({ keys, description }) => (
+          <div className="settings-row" key={keys}>
+            <span className="settings-row-keybind">
+              {keys.split('+').map((k) => <kbd key={k}>{k}</kbd>)}
+            </span>
+            <span className="settings-row-value settings-row-value-wrap">{description}</span>
+          </div>
+        ))}
       </SubSection>
 
       </div>

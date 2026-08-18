@@ -16,6 +16,8 @@ import { useFontFamily } from './useFontFamily'
 import { useFontScale } from './useFontScale'
 import { useSectionOrder } from './useSectionOrder'
 import { useSidebarCollapsed } from './useSidebarCollapsed'
+import { useEditorSidebarCollapsed } from './useEditorSidebarCollapsed'
+import { useTerminalCollapsed } from './useTerminalCollapsed'
 import { useSplitWidth } from './useSplitWidth'
 import {
   fetchConversations,
@@ -99,6 +101,8 @@ export default function App() {
   const [fontScale, setFontScale] = useFontScale()
   const [sectionOrder, moveSection] = useSectionOrder(DEFAULT_SECTION_ORDER)
   const [sidebarCollapsed, setSidebarCollapsed] = useSidebarCollapsed()
+  const [editorSidebarCollapsed, setEditorSidebarCollapsed] = useEditorSidebarCollapsed()
+  const [terminalCollapsed, setTerminalCollapsed] = useTerminalCollapsed()
   const [activeView, setActiveView] = useState('chat')
   const [openFolderSignal, setOpenFolderSignal] = useState(0)
   const [editorPanel, setEditorPanel] = useState('files')
@@ -154,6 +158,36 @@ export default function App() {
     })
     return unsubscribe
   }, [])
+
+  // VS Code-style global panel shortcuts: Ctrl+B (Files panel) and Ctrl+J
+  // (terminal) only mean something while the Editor is showing, so both
+  // also switch into it — mirroring how VS Code's own Ctrl+B works from
+  // anywhere in the window, not just while its explorer is already
+  // focused. Ctrl+Shift+M toggles the right-hand model-settings panel;
+  // plain Ctrl+M was avoided as a pairing with Ctrl+B/Ctrl+J since VS
+  // Code itself reserves unshifted Ctrl+M for focus-tabbing, and Ctrl+C
+  // (as literally requested) was ruled out because it's the OS copy
+  // shortcut used throughout chat, the code editor, and the terminal.
+  useEffect(() => {
+    function handleKeyDown(e) {
+      if (!(e.ctrlKey || e.metaKey)) return
+      const key = e.key.toLowerCase()
+      if (key === 'b' && !e.shiftKey) {
+        e.preventDefault()
+        setActiveView((v) => (v === 'chat' ? 'editor' : v))
+        setEditorSidebarCollapsed((c) => !c)
+      } else if (key === 'j' && !e.shiftKey) {
+        e.preventDefault()
+        setActiveView((v) => (v === 'chat' ? 'editor' : v))
+        setTerminalCollapsed((c) => !c)
+      } else if (key === 'm' && e.shiftKey) {
+        e.preventDefault()
+        setSidebarCollapsed((c) => !c)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [setEditorSidebarCollapsed, setTerminalCollapsed, setSidebarCollapsed])
 
   // Search and Git live on the main rail (see the Search/Git buttons
   // below) rather than as tabs inside EditorView's own sidebar, so
@@ -688,6 +722,10 @@ export default function App() {
           panel={editorPanel}
           onPanelChange={setEditorPanel}
           onGitChangeCountChange={setGitChangeCount}
+          sidebarCollapsed={editorSidebarCollapsed}
+          onSidebarCollapsedChange={setEditorSidebarCollapsed}
+          terminalCollapsed={terminalCollapsed}
+          onTerminalCollapsedChange={setTerminalCollapsed}
         />
       </div>
 
