@@ -97,6 +97,15 @@ func NewHandler(registry *Registry, gate *Gate, fileReader *files.Reader) http.H
 		}
 		registry.add(session)
 		defer registry.remove(session)
+		// Close is also called explicitly below once the read loop ends —
+		// this deferred call is just a safety net for the early-return
+		// paths above/below it. Session implementations are required to
+		// tolerate being closed more than once (see conptySession's
+		// closeOnce on Windows): the underlying OS handles involved have no
+		// such guard themselves, and closing twice was observed to
+		// silently kill the whole fastllm process with no panic, since it
+		// happens at the OS handle-table level below anything Go's runtime
+		// can catch.
 		defer session.Close()
 
 		ctx := r.Context()

@@ -3,6 +3,7 @@
 package terminal
 
 import (
+	"sync"
 	"unsafe"
 
 	"github.com/UserExistsError/conpty"
@@ -15,9 +16,21 @@ import (
 // was successfully placed under a kill-on-close Job Object (see
 // jobobject_windows.go) so it can't outlive fastllm.exe even if this
 // process is killed rather than shut down cleanly.
+//
+// closeOnce guards against Close being called more than once — it has at
+// least two legitimate independent callers (the WS handler's own cleanup
+// in handler.go, and Registry.CloseAll on app shutdown, which can race
+// against a session that's already tearing itself down), and neither
+// conpty.ConPty.Close nor windows.CloseHandle on the job handle tolerates
+// being called twice: both operate on raw OS handles with no double-close
+// guard of their own, and a second CloseHandle on an already-closed (and
+// possibly already-reused) handle value is undefined behavior — observed
+// in practice as the whole fastllm process silently dying with no Go
+// panic, since it happens at the OS handle-table level.
 type conptySession struct {
-	cpty *conpty.ConPty
-	job  windows.Handle
+	cpty      *conpty.ConPty
+	job       windows.Handle
+	closeOnce sync.Once
 }
 
 // isElevated reports whether the current process token has an elevated
@@ -86,15 +99,18 @@ func (s *conptySession) Write(p []byte) (int, error) { return s.cpty.Write(p) }
 func (s *conptySession) Resize(cols, rows int) error  { return s.cpty.Resize(cols, rows) }
 
 func (s *conptySession) Close() error {
-	err := s.cpty.Close()
-	if s.job != 0 {
-		// Closing the job handle without ever calling TerminateJobObject
-		// still kills every assigned process immediately, because the job
-		// was created with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE — this is
-		// the same mechanism that protects against an abrupt fastllm exit,
-		// just invoked explicitly here for the graceful-shutdown path so
-		// there's no reliance on the shell noticing its pipes closed.
-		windows.CloseHandle(s.job)
-	}
+	var err error
+	s.closeOnce.Do(func() {
+		err = s.cpty.Close()
+		if s.job != 0 {
+			// Closing the job handle without ever calling TerminateJobObject
+			// still kills every assigned process immediately, because the job
+			// was created with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE — this is
+			// the same mechanism that protects against an abrupt fastllm exit,
+			// just invoked explicitly here for the graceful-shutdown path so
+			// there's no reliance on the shell noticing its pipes closed.
+			windows.CloseHandle(s.job)
+		}
+	})
 	return err
 }
