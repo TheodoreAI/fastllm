@@ -170,6 +170,9 @@ func Open(path string) (*sql.DB, error) {
 	if err := migrateOrphanMessages(db); err != nil {
 		return nil, fmt.Errorf("store: migrate orphan messages: %w", err)
 	}
+	if err := migrateGeneralAssistantPrompt(db); err != nil {
+		return nil, fmt.Errorf("store: migrate general assistant prompt: %w", err)
+	}
 	return db, nil
 }
 
@@ -252,6 +255,52 @@ func seedDefaultSkills(db *sql.DB) error {
 		}
 	}
 	_, err = db.Exec(`INSERT INTO meta (key, value) VALUES (?, '1')`, seedFlagKey)
+	return err
+}
+
+const generalAssistantPromptMigrationFlagKey = "migrated_general_assistant_prompt_v2"
+
+// oldGeneralAssistantPrompt is the original seed prompt this migration
+// replaces — see generalAssistantPromptMigrationFlagKey below.
+const oldGeneralAssistantPrompt = "You are a helpful assistant. Use the provided context to answer\nthe user's question when it's relevant. If the context doesn't contain the\nanswer, say so and answer from general knowledge instead."
+
+// migrateGeneralAssistantPrompt updates any pre-existing "General
+// Assistant" skill row to the new copilot-style prompt in
+// seed/skills.json, once, for databases that seeded the old wording
+// before this change shipped. Only touches rows whose prompt still
+// exactly matches the old default — if the user already edited it,
+// their edit is left alone. Tracked via meta like seedDefaultSkills, so
+// it runs exactly once even if the user later deletes the skill.
+func migrateGeneralAssistantPrompt(db *sql.DB) error {
+	var done string
+	err := db.QueryRow(`SELECT value FROM meta WHERE key = ?`, generalAssistantPromptMigrationFlagKey).Scan(&done)
+	if err == nil {
+		return nil
+	}
+	if err != sql.ErrNoRows {
+		return err
+	}
+
+	var defaultSkills []seedSkill
+	if err := json.Unmarshal(seedSkillsJSON, &defaultSkills); err != nil {
+		return fmt.Errorf("parse seed/skills.json: %w", err)
+	}
+	var newPrompt string
+	for _, s := range defaultSkills {
+		if s.Name == "General Assistant" {
+			newPrompt = s.Prompt
+			break
+		}
+	}
+	if newPrompt != "" {
+		if _, err := db.Exec(
+			`UPDATE skills SET prompt = ? WHERE name = ? AND prompt = ?`,
+			newPrompt, "General Assistant", oldGeneralAssistantPrompt,
+		); err != nil {
+			return err
+		}
+	}
+	_, err = db.Exec(`INSERT INTO meta (key, value) VALUES (?, '1')`, generalAssistantPromptMigrationFlagKey)
 	return err
 }
 
