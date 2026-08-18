@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { isWails } from './api'
 
 const STORAGE_KEY = 'fastllm-theme'
 
@@ -20,6 +21,19 @@ export function useTheme() {
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
     localStorage.setItem(STORAGE_KEY, theme)
+    // Wails' native menu bar (File → …) is drawn by Windows itself, not by
+    // this page's CSS — it stays on the OS's default light chrome unless
+    // explicitly told to follow dark mode, which is why it looked like a
+    // stray white bar above an otherwise fully dark window. Syncing it
+    // here means the toggle in Settings also flips the native chrome, not
+    // just the in-page colors.
+    if (isWails() && window.runtime) {
+      if (theme === 'dark') {
+        window.runtime.WindowSetDarkTheme()
+      } else {
+        window.runtime.WindowSetLightTheme()
+      }
+    }
   }, [theme])
 
   return [theme, setTheme]

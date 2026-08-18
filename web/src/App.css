@@ -237,7 +237,26 @@ body {
   z-index: 1;
 }
 
+.app-version {
+  position: absolute;
+  right: 8px;
+  bottom: 6px;
+  z-index: 2;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--text);
+  opacity: 1;
+  user-select: none;
+  pointer-events: auto;
+}
+
 .view-rail {
+  /* Single source of truth for every icon on this rail — an SVG icon
+     (Chat/Editor/Split/Search/Git/Screenshot) reads --view-rail-icon-size
+     via width/height below; the Settings gear (a text glyph, not an SVG)
+     reads the same value as its font-size so both scale together from
+     one place instead of six separately-tuned numbers. */
+  --view-rail-icon-size: 20px;
   width: 44px;
   min-width: 44px;
   display: flex;
@@ -266,7 +285,12 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.1rem;
+  font-size: var(--view-rail-icon-size);
+}
+
+.view-rail button svg {
+  width: var(--view-rail-icon-size);
+  height: var(--view-rail-icon-size);
 }
 
 .view-rail button:hover {
@@ -275,8 +299,25 @@ body {
 }
 
 .view-rail button.is-active {
-  color: var(--text);
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent-contrast);
+  background: var(--accent);
+}
+
+.view-rail-git {
+  position: relative;
+}
+
+.view-rail-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border-radius: 999px;
+  font-size: 0.625rem;
+  padding: 0 4px;
+  min-width: 14px;
+  line-height: 1.3;
 }
 
 .main-row {
@@ -497,8 +538,8 @@ body {
   border-radius: 50%;
   border: none;
   background: transparent;
-  color: var(--text-faint);
-  font-size: 12px;
+  color: whitesmoke;
+  font-size: 16px;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -1534,15 +1575,15 @@ body {
 }
 
 .editor-sidebar {
-  width: 260px;
-  min-width: 200px;
-  max-width: 400px;
+  /* Width when expanded is set inline from useEditorSidebarWidth (see
+     EditorView.jsx) via the draggable divider right after this element —
+     no fixed width here, just the collapsed-state override below. */
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border);
   overflow: hidden;
-  transition: width 0.15s ease, min-width 0.15s ease;
 }
 
 .editor-sidebar.is-collapsed {
@@ -1559,8 +1600,8 @@ body {
   border-radius: 50%;
   border: none;
   background: transparent;
-  color: var(--text-faint);
-  font-size: 12px;
+  color: whitesmoke;
+  font-size: 16px;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -1574,6 +1615,28 @@ body {
 .editor-sidebar-collapse-toggle:hover {
   background: rgba(128, 128, 128, 0.18);
   color: var(--text);
+}
+
+.editor-sidebar-divider {
+  flex: 0 0 5px;
+  cursor: col-resize;
+  background: var(--border);
+  position: relative;
+  z-index: 2;
+}
+
+.editor-sidebar-divider:hover,
+.editor-sidebar-divider:active {
+  background: var(--accent);
+}
+
+.editor-sidebar-divider::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  right: -3px;
 }
 
 .editor-folder-row {
@@ -2197,6 +2260,9 @@ body {
 
 .editor-codemirror {
   flex: 1;
+  width: 100%;
+  max-width: 900px;
+  align-self: center;
   min-height: 0;
   overflow: hidden;
 }

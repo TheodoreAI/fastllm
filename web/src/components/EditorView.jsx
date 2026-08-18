@@ -23,15 +23,13 @@ import {
 } from '../api'
 import { languageExtensionFor } from '../editorLanguages'
 import { useEditorSidebarCollapsed } from '../useEditorSidebarCollapsed'
+import { useEditorSidebarWidth } from '../useEditorSidebarWidth'
 import { useTerminalPanelHeight } from '../useTerminalPanelHeight'
 import { useTerminalCollapsed } from '../useTerminalCollapsed'
 import FileTree from './FileTree'
 import TerminalView from './TerminalView'
 
-const PANELS = { files: 'Files', search: 'Search', git: 'Git' }
-
-export default function EditorView({ fileAccessSettings, onFileAccessSettingsChange, theme, terminalEnabled, visible, openFolderSignal }) {
-  const [panel, setPanel] = useState('files')
+export default function EditorView({ fileAccessSettings, onFileAccessSettingsChange, theme, terminalEnabled, visible, openFolderSignal, panel, onPanelChange, onGitChangeCountChange }) {
   const [tree, setTree] = useState([])
   const [treeStatus, setTreeStatus] = useState('')
   const [openPath, setOpenPath] = useState(null)
@@ -62,9 +60,11 @@ export default function EditorView({ fileAccessSettings, onFileAccessSettingsCha
   const [openingFolder, setOpeningFolder] = useState(false)
   const [folderError, setFolderError] = useState('')
   const [sidebarCollapsed, setSidebarCollapsed] = useEditorSidebarCollapsed()
+  const [sidebarWidth, setSidebarWidth] = useEditorSidebarWidth()
   const [terminalPanelHeight, setTerminalPanelHeight] = useTerminalPanelHeight()
   const [terminalCollapsed, setTerminalCollapsed] = useTerminalCollapsed()
   const mainColumnRef = useRef(null)
+  const sidebarRef = useRef(null)
   // EditorView is always mounted (just hidden) so Chat<->Editor switches
   // don't lose state — but that means the terminal shouldn't mount along
   // with it, or every app load would spawn a PowerShell session even for
@@ -86,6 +86,13 @@ export default function EditorView({ fileAccessSettings, onFileAccessSettingsCha
     refreshGitStatus()
     refreshBranches()
   }, [enabled])
+
+  // Git's change count now surfaces as a badge on App.jsx's rail button
+  // (see the Git button there) rather than only inside this component's
+  // own tab row, so the count needs to travel up whenever it changes.
+  useEffect(() => {
+    onGitChangeCountChange?.(gitStatus.length)
+  }, [gitStatus, onGitChangeCountChange])
 
   function refreshTree() {
     setTreeStatus('Loading…')
@@ -411,6 +418,34 @@ export default function EditorView({ fileAccessSettings, onFileAccessSettingsCha
     window.addEventListener('mouseup', handleUp)
   }
 
+  // Drags the sidebar's right-edge divider to resize the Files/Search/Git
+  // panel horizontally. Tracks the cursor against the sidebar's own left
+  // edge (rather than delta movement) so a fast drag can't desync from
+  // the cursor — same approach as handleTerminalDragStart above, just on
+  // the horizontal axis. Clamped so the panel can't be dragged to nothing
+  // or to swallow the whole editor.
+  function handleSidebarDragStart(e) {
+    e.preventDefault()
+    const el = sidebarRef.current
+    if (!el) return
+
+    const previousUserSelect = document.body.style.userSelect
+    document.body.style.userSelect = 'none'
+
+    function handleMove(moveEvent) {
+      const rect = el.getBoundingClientRect()
+      const width = moveEvent.clientX - rect.left
+      setSidebarWidth(Math.min(500, Math.max(160, width)))
+    }
+    function handleUp() {
+      window.removeEventListener('mousemove', handleMove)
+      window.removeEventListener('mouseup', handleUp)
+      document.body.style.userSelect = previousUserSelect
+    }
+    window.addEventListener('mousemove', handleMove)
+    window.addEventListener('mouseup', handleUp)
+  }
+
   if (!enabled) {
     return (
       <div className="editor-view editor-view-empty">
@@ -421,7 +456,11 @@ export default function EditorView({ fileAccessSettings, onFileAccessSettingsCha
 
   return (
     <div className="editor-view">
-      <aside className={`editor-sidebar ${sidebarCollapsed ? 'is-collapsed' : ''}`}>
+      <aside
+        ref={sidebarRef}
+        className={`editor-sidebar ${sidebarCollapsed ? 'is-collapsed' : ''}`}
+        style={sidebarCollapsed ? undefined : { width: sidebarWidth }}
+      >
         <button
           type="button"
           className="editor-sidebar-collapse-toggle"
@@ -445,17 +484,13 @@ export default function EditorView({ fileAccessSettings, onFileAccessSettingsCha
             </div>
             {folderError && <p className="editor-error">{folderError}</p>}
             <div className="editor-panel-tabs">
-              {Object.entries(PANELS).map(([key, label]) => (
-                <button
-                  key={key}
-                  type="button"
-                  className={panel === key ? 'is-active' : ''}
-                  onClick={() => setPanel(key)}
-                >
-                  {label}
-                  {key === 'git' && gitStatus.length > 0 && <span className="editor-badge">{gitStatus.length}</span>}
-                </button>
-              ))}
+              <button
+                type="button"
+                className={panel === 'files' ? 'is-active' : ''}
+                onClick={() => onPanelChange?.('files')}
+              >
+                Files
+              </button>
             </div>
 
         {panel === 'files' && (
@@ -618,6 +653,10 @@ export default function EditorView({ fileAccessSettings, onFileAccessSettingsCha
           </>
         )}
       </aside>
+
+      {!sidebarCollapsed && (
+        <div className="editor-sidebar-divider" onMouseDown={handleSidebarDragStart} />
+      )}
 
       <main className="editor-main" ref={mainColumnRef}>
         <div className="editor-main-content">
