@@ -86,10 +86,16 @@ export function indexDocument(filename, content) {
 // upload's files being wrongly flagged "empty" in the desktop build (the
 // plain-browser build was never affected, since it always talks to a real
 // net/http listener).
-export async function uploadFile(file) {
+//
+// filename defaults to file.name (just the basename) but callers doing a
+// folder upload pass the full webkitRelativePath instead, so the stored
+// document filename carries its folder — that's what lets
+// KnowledgeBasePanel group the list by directory instead of showing a
+// flat pile of same-looking basenames (multiple index.ts, etc.).
+export async function uploadFile(file, filename = file.name) {
   const origin = await apiOrigin()
   const form = new FormData()
-  form.append('file', file, file.name)
+  form.append('file', file, filename)
   return fetch(`${origin}/api/documents/upload`, { method: 'POST', body: form })
 }
 
