@@ -1,20 +1,25 @@
 package gitrepo
 
 import (
+	"context"
+	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
 )
 
 // debounceWindow coalesces the burst of filesystem events a single git
-// operation produces (a commit touches .git/index, .git/HEAD, and a ref
-// file all at once; a checkout touches even more) into one "changed"
-// notification, rather than firing once per underlying write.
+// operation (or a multi-file write from the chat model's file tool)
+// produces into one "changed" notification, rather than firing once per
+// underlying write.
 const debounceWindow = 300 * time.Millisecond
 
-// Watch notifies the returned channel whenever the git repository at root
-// changes — new commits, branch switches, staging, etc. It's a
+// Watch notifies the returned channel whenever the working tree at root
+// changes — an edit saved from the editor, a file written by the chat
+// model's write tool, a `git` command typed into the Terminal panel, an
+// external editor, a new commit, a branch switch, staging, etc. It's a
 // best-effort convenience for the editor's git panel to refresh itself
 // live (see internal/chat's git-watch SSE endpoint) instead of polling;
 // callers should still treat gitrepo.Status/gitrepo.Branches as the
@@ -23,19 +28,71 @@ const debounceWindow = 300 * time.Millisecond
 // underlying watcher and the returned channel; call it when the caller
 // (e.g. an SSE connection) goes away.
 //
-// Watches .git/HEAD (branch switches, commits on the current branch),
-// .git/refs/ recursively (branch/tag creation, updates from any source —
-// this app's own UI, a separate `git` process in the Terminal panel, or
-// any other tool touching the same repo), and .git/index (staging).
-// Doesn't watch the working tree itself — that's a much larger and
-// noisier surface (every file save would fire it) and file saves already
-// trigger a refresh through the editor's own save path.
-func Watch(root string) (changes <-chan struct{}, stop func(), err error) {
+// Which directories get watched is derived from ListFiles — the same
+// `git ls-files --cached --others --exclude-standard` call the file tree
+// and search use — rather than a hardcoded skip-list, so this works
+// correctly for whatever language/toolchain the project uses (Python's
+// .venv, Rust's target/, Java's build artifacts, etc.) purely from
+// following the project's own .gitignore, with no per-language list here
+// to fall out of date. Plus .git/HEAD, .git/refs/ recursively, and
+// .git/index specifically, so branch switches and commits from a
+// separate `git` process are caught even though they don't always touch
+// a file under the working tree itself. A directory that holds no
+// tracked-or-unignored file (an empty dir, or one containing only
+// ignored files) won't get its own watch — nothing meaningful could
+// happen in it anyway. A directory created after the watch is set up
+// also won't automatically get one (fsnotify has no recursive-watch
+// primitive on Windows) — a following git action still catches the repo
+// up via the .git watch, so this is an acceptable gap for a best-effort
+// live-refresh signal, not a correctness issue.
+func Watch(ctx context.Context, root string) (changes <-chan struct{}, stop func(), err error) {
 	gitDir := filepath.Join(root, ".git")
 
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, nil, err
+	}
+
+	// Best-effort: if this fails (e.g. root isn't a repo after all, a
+	// caller-side race), we still fall back to watching root itself below
+	// so the watcher isn't completely blind.
+	files, _ := ListFiles(ctx, root)
+	dirs := map[string]bool{root: true}
+	for _, f := range files {
+		dir := filepath.Dir(filepath.Join(root, filepath.FromSlash(f)))
+		for dir != root && dir != filepath.Dir(dir) {
+			if dirs[dir] {
+				break
+			}
+			dirs[dir] = true
+			dir = filepath.Dir(dir)
+		}
+	}
+	for dir := range dirs {
+		// Best-effort: a directory that no longer exists just means
+		// nothing to watch there.
+		_ = w.Add(dir)
+	}
+
+	// root itself is always watched (above) so top-level file/directory
+	// creation is caught, but that means an ignored top-level directory
+	// (node_modules, .venv, target, whatever) still generates an event
+	// when its own mtime changes — a non-recursive watch on root sees
+	// its immediate children change, even though nothing inside that
+	// child directory is itself watched. ignoredTopLevel records which
+	// of root's direct children were left out of dirs so the event loop
+	// below can drop those specifically, instead of every ignored write
+	// producing a needless (if harmless) refresh.
+	ignoredTopLevel := map[string]bool{}
+	if entries, err := os.ReadDir(root); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			if full := filepath.Join(root, e.Name()); !dirs[full] {
+				ignoredTopLevel[full] = true
+			}
+		}
 	}
 
 	watchTargets := []string{
@@ -66,9 +123,12 @@ func Watch(root string) (changes <-chan struct{}, stop func(), err error) {
 			select {
 			case <-done:
 				return
-			case _, ok := <-w.Events:
+			case ev, ok := <-w.Events:
 				if !ok {
 					return
+				}
+				if isUnderAny(ev.Name, ignoredTopLevel) {
+					continue
 				}
 				if debounce == nil {
 					debounce = time.AfterFunc(debounceWindow, func() {
@@ -99,4 +159,15 @@ func Watch(root string) (changes <-chan struct{}, stop func(), err error) {
 		w.Close()
 	}
 	return out, stop, nil
+}
+
+// isUnderAny reports whether path is equal to, or nested inside, any
+// directory in dirs.
+func isUnderAny(path string, dirs map[string]bool) bool {
+	for dir := range dirs {
+		if path == dir || strings.HasPrefix(path, dir+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
 }

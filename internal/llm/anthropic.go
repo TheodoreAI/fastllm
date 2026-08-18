@@ -39,9 +39,65 @@ func NewAnthropicClient(apiKey string) *AnthropicClient {
 
 const anthropicAPIVersion = "2023-06-01"
 
+// anthropicMessage's Content is `any` rather than a fixed type since
+// Anthropic accepts either a plain string or an array of content blocks —
+// toAnthropicRequest below sets it to a string for a text-only message
+// and to []anthropicContentBlock once an image is involved, exactly
+// mirroring the OpenAI-compatible wire format's own string-or-array
+// content field (see Message.MarshalJSON in client.go).
 type anthropicMessage struct {
 	Role    string `json:"role"`
-	Content string `json:"content"`
+	Content any    `json:"content"`
+}
+
+type anthropicContentBlock struct {
+	Type   string                `json:"type"`
+	Text   string                `json:"text,omitempty"`
+	Source *anthropicImageSource `json:"source,omitempty"`
+}
+
+type anthropicImageSource struct {
+	Type      string `json:"type"`
+	MediaType string `json:"media_type"`
+	Data      string `json:"data"`
+}
+
+// collapseIfPlainText returns blocks[0].Text directly (Anthropic accepts
+// a bare string as shorthand for a single text block) when blocks is
+// exactly one text-only block, and blocks itself otherwise — the whole
+// point being that a text-only conversation still marshals to the exact
+// same "content": "..." shape it always has, only gaining the
+// "content": [...] array shape once an image is actually involved.
+func collapseIfPlainText(blocks []anthropicContentBlock) any {
+	if len(blocks) == 0 {
+		return ""
+	}
+	if len(blocks) == 1 && blocks[0].Type == "text" {
+		return blocks[0].Text
+	}
+	return blocks
+}
+
+// anthropicBlocksFor converts one fastllm Message into Anthropic content
+// blocks — a leading text block (if Content is non-empty) followed by one
+// image block per attached Image, skipping any image whose data URI
+// doesn't parse (malformed input should never abort the whole request).
+func anthropicBlocksFor(m Message) []anthropicContentBlock {
+	blocks := make([]anthropicContentBlock, 0, len(m.Images)+1)
+	if m.Content != "" {
+		blocks = append(blocks, anthropicContentBlock{Type: "text", Text: m.Content})
+	}
+	for _, img := range m.Images {
+		mediaType, data, ok := splitDataURI(img.DataURI)
+		if !ok {
+			continue
+		}
+		blocks = append(blocks, anthropicContentBlock{
+			Type:   "image",
+			Source: &anthropicImageSource{Type: "base64", MediaType: mediaType, Data: data},
+		})
+	}
+	return blocks
 }
 
 type anthropicRequest struct {
@@ -67,9 +123,16 @@ const anthropicMaxTokens = 8192
 // toAnthropicRequest splits fastllm's flat message list into Anthropic's
 // shape: the (at most one, expected-first) system message becomes the
 // top-level System field, and consecutive same-role messages are merged
-// since Anthropic requires strict user/assistant alternation.
+// (block list concatenated, since Anthropic requires strict
+// user/assistant alternation). Every message is built as a block list
+// internally regardless of whether it carries images, purely so merging
+// is one append instead of two different cases — collapseIfPlainText
+// below then converts any message that ended up as exactly one text
+// block back into a bare string, so a request with no images at all
+// produces byte-identical JSON to before image support existed.
 func toAnthropicRequest(model string, messages []Message, stream bool, thinkLevel string) anthropicRequest {
 	var system strings.Builder
+	blockLists := make([][]anthropicContentBlock, 0, len(messages))
 	converted := make([]anthropicMessage, 0, len(messages))
 	for _, m := range messages {
 		if m.Role == "system" {
@@ -79,11 +142,16 @@ func toAnthropicRequest(model string, messages []Message, stream bool, thinkLeve
 			system.WriteString(m.Content)
 			continue
 		}
+		blocks := anthropicBlocksFor(m)
 		if n := len(converted); n > 0 && converted[n-1].Role == m.Role {
-			converted[n-1].Content += "\n\n" + m.Content
+			blockLists[n-1] = append(blockLists[n-1], blocks...)
 			continue
 		}
-		converted = append(converted, anthropicMessage{Role: m.Role, Content: m.Content})
+		converted = append(converted, anthropicMessage{Role: m.Role})
+		blockLists = append(blockLists, blocks)
+	}
+	for i, blocks := range blockLists {
+		converted[i].Content = collapseIfPlainText(blocks)
 	}
 
 	req := anthropicRequest{

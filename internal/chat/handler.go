@@ -187,6 +187,17 @@ type chatRequest struct {
 	SkillID        int64  `json:"skill_id"`
 	ConversationID int64  `json:"conversation_id"`
 	ThinkLevel     string `json:"think_level"`
+	// Images is data URIs pasted/attached in the composer — see
+	// llm.Image's doc comment for why data URIs are carried unmodified
+	// end to end rather than decoded server-side. Only meaningful for a
+	// model llm.SupportsVisionForModel reports true for; the composer is
+	// expected to only offer image attachment for such a model in the
+	// first place. Nothing here re-validates that server-side — sending
+	// an image to a model that doesn't support vision is left to fail (or
+	// be silently ignored) however that provider's own API handles it,
+	// same as this handler doesn't re-validate SupportsToolsForModel
+	// before letting a request through with tools attached.
+	Images []string `json:"images,omitempty"`
 }
 
 // Chat streams the assistant's reply back to the client as Server-Sent
@@ -197,8 +208,8 @@ type chatRequest struct {
 // starts, so the frontend can track which thread it's now in.
 func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	var req chatRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Message) == "" {
-		http.Error(w, "message is required", http.StatusBadRequest)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || (strings.TrimSpace(req.Message) == "" && len(req.Images) == 0) {
+		http.Error(w, "message or an image is required", http.StatusBadRequest)
 		return
 	}
 
@@ -219,7 +230,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := store.SaveMessage(h.DB, defaultWorkspace, convID, "user", req.Message); err != nil {
+	if err := store.SaveMessage(h.DB, defaultWorkspace, convID, "user", req.Message, req.Images); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -303,7 +314,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if full.Len() > 0 {
-		_ = store.SaveMessage(h.DB, defaultWorkspace, convID, "assistant", full.String())
+		_ = store.SaveMessage(h.DB, defaultWorkspace, convID, "assistant", full.String(), nil)
 	}
 	fmt.Fprintf(w, "event: done\ndata: {}\n\n")
 	flusher.Flush()
@@ -375,7 +386,11 @@ func (h *Handler) buildPrompt(ctx context.Context, conversationID int64, questio
 			start = len(history) - 20
 		}
 		for _, m := range history[start:] {
-			messages = append(messages, llm.Message{Role: m.Role, Content: m.Content})
+			msg := llm.Message{Role: m.Role, Content: m.Content}
+			for _, dataURI := range m.Images {
+				msg.Images = append(msg.Images, llm.Image{DataURI: dataURI})
+			}
+			messages = append(messages, msg)
 		}
 	} else {
 		messages = append(messages, llm.Message{Role: "user", Content: question})

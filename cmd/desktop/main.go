@@ -171,14 +171,14 @@ type desktopApp struct {
 // menu builds fastllm's native Windows menu bar — just File → Open
 // Folder… for now. This runs as a real native menu (not an in-app
 // dropdown) because an in-app "File" button/dropdown, built the same way
-// as the working Chat/Editor/Split tabs right next to it, was reliably
-// unclickable when this exe was launched via automation (PowerShell's
-// Start-Process) — a normal double-click launch never showed the problem.
-// Native menu items sidestep whatever that launch-path quirk was. The
-// click handler can't call the folder-open flow directly — that logic
-// (browseForFolder → save settings → refresh tree/git) lives in React
-// state inside EditorView — so it emits a Wails event instead and lets
-// the frontend react.
+// as the working rail buttons right next to it, was reliably unclickable
+// when this exe was launched via automation (PowerShell's Start-Process)
+// — a normal double-click launch never showed the problem. Native menu
+// items sidestep whatever that launch-path quirk was. The click handler
+// can't call the folder-open flow directly — that logic (browseForFolder
+// → save settings → refresh tree/git) lives in React state inside
+// EditorView — so it emits a Wails event instead and lets the frontend
+// react.
 func (a *desktopApp) menu() *menu.Menu {
 	m := menu.NewMenu()
 	fileMenu := m.AddSubmenu("File")

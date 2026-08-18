@@ -908,10 +908,10 @@ body {
 
 .view-rail {
   /* Single source of truth for every icon on this rail — an SVG icon
-     (Chat/Editor/Split/Search/Git/Screenshot) reads --view-rail-icon-size
-     via width/height below; the Settings gear (a text glyph, not an SVG)
+     (Files/Search/Git/Screenshot) reads --view-rail-icon-size via
+     width/height below; the Settings gear (a text glyph, not an SVG)
      reads the same value as its font-size so both scale together from
-     one place instead of six separately-tuned numbers. */
+     one place instead of separately-tuned numbers. */
   --view-rail-icon-size: 20px;
   width: 44px;
   min-width: 44px;
@@ -2300,12 +2300,103 @@ body {
   margin-bottom: 4px;
 }
 
-.composer {
+.composer-form {
   display: flex;
+  flex-direction: column;
   gap: 8px;
   padding: 12px 16px;
   border-top: 1px solid var(--border);
   background: var(--bg-titlebar);
+}
+
+.composer {
+  display: flex;
+  gap: 8px;
+}
+
+.composer-image-previews {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.composer-image-preview {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+}
+
+.composer-image-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.composer-image-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  line-height: 1;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  font-size: 0.75rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.composer-image-remove:hover {
+  background: rgba(0, 0, 0, 0.85);
+}
+
+.composer-image-error {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--danger);
+}
+
+/* Persistent flag next to the composer input showing whether the
+   selected model accepts pasted images — unlike the placeholder text
+   (which disappears the moment the user starts typing), this stays
+   visible the whole time so the capability is never hidden mid-draft. */
+.composer-vision-flag {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  font-size: 0.9rem;
+  opacity: 0.55;
+}
+
+.composer-vision-flag.is-supported {
+  opacity: 0.9;
+}
+
+.composer-vision-flag.is-unsupported {
+  opacity: 0.4;
+}
+
+.message-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 6px 0;
+}
+
+.message-image {
+  max-width: 220px;
+  max-height: 220px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  object-fit: contain;
 }
 
 .composer input {
@@ -3135,17 +3226,86 @@ body {
   user-select: none;
 }
 
+.editor-diff-close {
+  flex: 0 0 auto;
+  padding: 5px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+
+.editor-diff-close:hover {
+  background: rgba(128, 128, 128, 0.14);
+  color: var(--text);
+}
+
 .editor-diff {
   flex: 1;
   margin: 0;
-  padding: 14px;
+  padding: 8px 0;
   overflow: auto;
   font-family: ui-monospace, 'SF Mono', Consolas, 'Cascadia Code', monospace;
   font-size: 0.8125rem;
   line-height: 1.5;
-  white-space: pre-wrap;
   color: var(--text);
   background: var(--bg-chat);
+}
+
+.editor-diff-line {
+  display: flex;
+  min-height: 1.5em;
+}
+
+.editor-diff-line--add {
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+}
+
+.editor-diff-line--del {
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+}
+
+.editor-diff-line--hunk {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  margin: 4px 0;
+}
+
+.editor-diff-line--meta {
+  color: var(--text-faint);
+}
+
+.editor-diff-line--file {
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+.editor-diff-gutter {
+  flex: 0 0 auto;
+  width: 28px;
+  text-align: center;
+  user-select: none;
+}
+
+.editor-diff-line--add .editor-diff-gutter {
+  color: var(--success);
+  font-weight: 700;
+}
+
+.editor-diff-line--del .editor-diff-gutter {
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.editor-diff-text {
+  flex: 1;
+  min-width: 0;
+  padding-right: 14px;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .settings-floating-panel {

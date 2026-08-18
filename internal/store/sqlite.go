@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS messages (
 	conversation_id INTEGER,
 	role TEXT NOT NULL,
 	content TEXT NOT NULL,
+	images TEXT,
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -81,10 +82,11 @@ CREATE TABLE IF NOT EXISTS settings (
 `
 
 type Message struct {
-	ID        int64  `json:"id"`
-	Role      string `json:"role"`
-	Content   string `json:"content"`
-	CreatedAt string `json:"created_at"`
+	ID        int64    `json:"id"`
+	Role      string   `json:"role"`
+	Content   string   `json:"content"`
+	Images    []string `json:"images,omitempty"` // data URIs — see SaveMessage/LoadMessages
+	CreatedAt string   `json:"created_at"`
 }
 
 // Conversation is a single chat thread — a named, ordered sequence of
@@ -164,6 +166,9 @@ func Open(path string) (*sql.DB, error) {
 	if err := addConversationIDColumn(db); err != nil {
 		return nil, fmt.Errorf("store: migrate: %w", err)
 	}
+	if err := addMessagesImagesColumn(db); err != nil {
+		return nil, fmt.Errorf("store: migrate: %w", err)
+	}
 	if err := seedDefaultSkills(db); err != nil {
 		return nil, fmt.Errorf("store: seed skills: %w", err)
 	}
@@ -182,6 +187,17 @@ func Open(path string) (*sql.DB, error) {
 // ALTER is the actual upgrade path for pre-existing databases.
 func addConversationIDColumn(db *sql.DB) error {
 	_, err := db.Exec(`ALTER TABLE messages ADD COLUMN conversation_id INTEGER`)
+	if err != nil && strings.Contains(err.Error(), "duplicate column name") {
+		return nil
+	}
+	return err
+}
+
+// addMessagesImagesColumn adds the images column to a messages table
+// created before image-paste support existed — same upgrade-path pattern
+// as addConversationIDColumn above.
+func addMessagesImagesColumn(db *sql.DB) error {
+	_, err := db.Exec(`ALTER TABLE messages ADD COLUMN images TEXT`)
 	if err != nil && strings.Contains(err.Error(), "duplicate column name") {
 		return nil
 	}
@@ -306,10 +322,23 @@ func migrateGeneralAssistantPrompt(db *sql.DB) error {
 
 // SaveMessage appends a message to a conversation and bumps the
 // conversation's updated_at so recently-active threads sort first.
-func SaveMessage(db *sql.DB, workspaceID string, conversationID int64, role, content string) error {
+// images (data URIs, may be nil/empty) is stored as a JSON array in the
+// images column — nil/empty is stored as SQL NULL rather than "[]" or
+// "", so LoadMessages can tell "no images" apart from a would-be parse
+// failure with a plain NULL check instead of also handling an empty-
+// string-vs-empty-array ambiguity.
+func SaveMessage(db *sql.DB, workspaceID string, conversationID int64, role, content string, images []string) error {
+	var imagesJSON any
+	if len(images) > 0 {
+		enc, err := json.Marshal(images)
+		if err != nil {
+			return err
+		}
+		imagesJSON = string(enc)
+	}
 	_, err := db.Exec(
-		`INSERT INTO messages (workspace_id, conversation_id, role, content) VALUES (?, ?, ?, ?)`,
-		workspaceID, conversationID, role, content)
+		`INSERT INTO messages (workspace_id, conversation_id, role, content, images) VALUES (?, ?, ?, ?, ?)`,
+		workspaceID, conversationID, role, content, imagesJSON)
 	if err != nil {
 		return err
 	}
@@ -318,7 +347,7 @@ func SaveMessage(db *sql.DB, workspaceID string, conversationID int64, role, con
 
 func LoadMessages(db *sql.DB, workspaceID string, conversationID int64) ([]Message, error) {
 	rows, err := db.Query(
-		`SELECT id, role, content, created_at FROM messages
+		`SELECT id, role, content, images, created_at FROM messages
 		 WHERE workspace_id = ? AND conversation_id = ? ORDER BY id ASC`,
 		workspaceID, conversationID)
 	if err != nil {
@@ -329,8 +358,15 @@ func LoadMessages(db *sql.DB, workspaceID string, conversationID int64) ([]Messa
 	out := []Message{}
 	for rows.Next() {
 		var m Message
-		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.CreatedAt); err != nil {
+		var imagesJSON sql.NullString
+		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &imagesJSON, &m.CreatedAt); err != nil {
 			return nil, err
+		}
+		if imagesJSON.Valid {
+			// Best-effort: a row that somehow has malformed JSON here just
+			// loses its images rather than failing the whole conversation
+			// load.
+			_ = json.Unmarshal([]byte(imagesJSON.String), &m.Images)
 		}
 		out = append(out, m)
 	}

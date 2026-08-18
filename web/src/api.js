@@ -475,7 +475,7 @@ export function saveCloudProviderSettings(settings) {
 // into context cancellation on the server, propagating all the way to
 // the in-flight request to the LLM backend (see llm.Client.StreamChat),
 // so this genuinely stops generation rather than just hiding it.
-export async function streamChat({ message, model, skillId, conversationId, thinkLevel }, callbacks, signal) {
+export async function streamChat({ message, model, skillId, conversationId, thinkLevel, images }, callbacks, signal) {
   const origin = await apiOrigin()
   const res = await fetch(`${origin}/api/chat`, {
     method: 'POST',
@@ -486,6 +486,7 @@ export async function streamChat({ message, model, skillId, conversationId, thin
       skill_id: skillId ? Number(skillId) : 0,
       conversation_id: conversationId ?? 0,
       think_level: thinkLevel || '',
+      images: images && images.length > 0 ? images : undefined,
     }),
     signal,
   })
