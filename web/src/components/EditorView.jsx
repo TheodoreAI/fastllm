@@ -81,12 +81,50 @@ export default function EditorView({
   // don't lose state — but that means the terminal shouldn't mount along
   // with it, or every app load would spawn a PowerShell session even for
   // someone who never opens the Editor tab. Tracks whether this view has
-  // ever actually been made visible, so the terminal only mounts — and
-  // spawns a real shell — the first time the user navigates here.
+  // ever actually been made visible, so the first terminal tab only
+  // mounts — and spawns a real shell — the first time the user navigates
+  // here.
   const [everVisible, setEverVisible] = useState(false)
   useEffect(() => {
     if (visible) setEverVisible(true)
   }, [visible])
+
+  // Each terminal tab is an independently mounted <TerminalView>, its own
+  // xterm instance and WebSocket/PTY session server-side (see
+  // internal/terminal/registry.go — already tracks any number of
+  // sessions and tears every one of them down together on app shutdown,
+  // so multiple tabs needed no backend changes). All tabs stay mounted
+  // (display:none when inactive) so switching tabs never loses
+  // scrollback or kills the underlying shell, mirroring the
+  // always-mounted convention used for the Chat/Editor panes themselves.
+  const [terminalTabs, setTerminalTabs] = useState(() => [1])
+  const [activeTerminalTab, setActiveTerminalTab] = useState(1)
+  const nextTerminalIdRef = useRef(2)
+
+  function addTerminalTab() {
+    const id = nextTerminalIdRef.current++
+    setTerminalTabs((prev) => [...prev, id])
+    setActiveTerminalTab(id)
+  }
+
+  function closeTerminalTab(id) {
+    setTerminalTabs((prev) => {
+      const next = prev.filter((t) => t !== id)
+      // Closing the last tab still leaves at least one behind — a
+      // terminal panel with zero tabs and no way to get one back short
+      // of reloading the whole app would be a dead end, not a real
+      // "closed" state.
+      if (next.length === 0) {
+        const freshId = nextTerminalIdRef.current++
+        setActiveTerminalTab(freshId)
+        return [freshId]
+      }
+      if (id === activeTerminalTab) {
+        setActiveTerminalTab(next[next.length - 1])
+      }
+      return next
+    })
+  }
 
   const enabled = !!fileAccessSettings?.read_enabled
   const canWrite = !!fileAccessSettings?.write_enabled
@@ -722,7 +760,42 @@ export default function EditorView({
           style={{ flex: terminalCollapsed ? '0 0 auto' : `0 0 ${terminalPanelHeight}px` }}
         >
           <div className="terminal-panel-header">
-            <span className="terminal-panel-title">Terminal</span>
+            {terminalEnabled && !terminalCollapsed ? (
+              <div className="terminal-tabs">
+                {terminalTabs.map((id, index) => (
+                  <div
+                    key={id}
+                    className={`terminal-tab ${id === activeTerminalTab ? 'is-active' : ''}`}
+                  >
+                    <button
+                      type="button"
+                      className="terminal-tab-label"
+                      onClick={() => setActiveTerminalTab(id)}
+                    >
+                      Terminal {index + 1}
+                    </button>
+                    <button
+                      type="button"
+                      className="terminal-tab-close"
+                      title="Close terminal"
+                      onClick={() => closeTerminalTab(id)}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  className="terminal-tab-add"
+                  title="New terminal"
+                  onClick={addTerminalTab}
+                >
+                  +
+                </button>
+              </div>
+            ) : (
+              <span className="terminal-panel-title">Terminal</span>
+            )}
             <button
               type="button"
               className="terminal-panel-collapse-toggle"
@@ -737,7 +810,12 @@ export default function EditorView({
             style={{ display: terminalCollapsed ? 'none' : undefined }}
           >
             {terminalEnabled ? (
-              everVisible && <TerminalView theme={theme} />
+              everVisible &&
+              terminalTabs.map((id) => (
+                <div key={id} style={{ display: id === activeTerminalTab ? 'contents' : 'none' }}>
+                  <TerminalView theme={theme} />
+                </div>
+              ))
             ) : (
               <div className="terminal-disabled-state">
                 <p>Terminal is disabled. Enable it in Settings → Terminal.</p>
