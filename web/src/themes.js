@@ -21,6 +21,8 @@ export const THEMES = [
   { id: 'tokyo-night', label: 'Tokyo Night', family: 'dark' },
   { id: 'one-dark', label: 'One Dark', family: 'dark' },
   { id: 'monokai', label: 'Monokai', family: 'dark' },
+  { id: 'windows-95', label: 'Windows 95', family: 'light' },
+  { id: 'windows-7', label: 'Windows 7', family: 'light' },
 ]
 
 const THEME_IDS = THEMES.map((t) => t.id)
