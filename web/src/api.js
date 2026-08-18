@@ -1,3 +1,5 @@
+import { reportFetchFailure, reportFetchSuccess } from './connectionStatus'
+
 // Parses a fetch response as JSON, but only if the request actually
 // succeeded — calling r.json() on a non-OK response (which the backend
 // sends as a plain-text error body, not JSON) throws an opaque
@@ -9,21 +11,41 @@ async function okJson(res, context) {
     console.error(`${context} failed (${res.status}): ${text}`)
     throw new Error(text || `request failed with ${res.status}`)
   }
+  reportFetchSuccess()
   return res.json()
+}
+
+// The 13 background-refresh functions below (fetchConversations,
+// fetchModels, fetchGitStatus, …) all resolve to a safe default on
+// failure by design — every caller (App.jsx, EditorView.jsx) does
+// `.then(setX)` and expects an array/object/null it can render directly,
+// never a rejected promise it would need a try/catch around. That's
+// deliberate and stays as-is. What was missing is that the failure was
+// only ever visible in the console (via okJson's console.error above) —
+// swallowNetworkError adds the one line each of those 13 needs to also
+// flip the shared connection-status signal (see connectionStatus.js),
+// which useConnectionStatus/App.jsx surface as a banner, without changing
+// any of their resolved-value contracts.
+function swallowNetworkError(fallback) {
+  return (err) => {
+    console.error(err)
+    reportFetchFailure()
+    return fallback
+  }
 }
 
 export function fetchConversations() {
   return fetch('/api/conversations')
     .then((r) => okJson(r, 'fetchConversations'))
     .then((data) => data ?? [])
-    .catch(() => [])
+    .catch(swallowNetworkError([]))
 }
 
 export function fetchMessages(conversationId) {
   return fetch(`/api/messages?conversation_id=${conversationId}`)
     .then((r) => okJson(r, 'fetchMessages'))
     .then((data) => data ?? [])
-    .catch(() => [])
+    .catch(swallowNetworkError([]))
 }
 
 export function deleteConversation(id) {
@@ -34,27 +56,27 @@ export function fetchDocuments() {
   return fetch('/api/documents')
     .then((r) => okJson(r, 'fetchDocuments'))
     .then((data) => data ?? [])
-    .catch(() => [])
+    .catch(swallowNetworkError([]))
 }
 
 export function fetchSkills() {
   return fetch('/api/skills')
     .then((r) => okJson(r, 'fetchSkills'))
     .then((data) => data ?? [])
-    .catch(() => [])
+    .catch(swallowNetworkError([]))
 }
 
 export function fetchModels() {
   return fetch('/api/models')
     .then((r) => okJson(r, 'fetchModels'))
     .then((data) => data ?? [])
-    .catch(() => [])
+    .catch(swallowNetworkError([]))
 }
 
 export function fetchSettings() {
   return fetch('/api/settings')
     .then((r) => okJson(r, 'fetchSettings'))
-    .catch(() => null)
+    .catch(swallowNetworkError(null))
 }
 
 export function createSkill(name, prompt) {
@@ -116,19 +138,19 @@ export function clearConversations() {
 export function fetchRagSettings() {
   return fetch('/api/settings/rag')
     .then((r) => okJson(r, 'fetchRagSettings'))
-    .catch(() => null)
+    .catch(swallowNetworkError(null))
 }
 
 export function fetchFileAccessSettings() {
   return fetch('/api/settings/files')
     .then((r) => okJson(r, 'fetchFileAccessSettings'))
-    .catch(() => ({ root: '', read_enabled: false, write_enabled: false }))
+    .catch(swallowNetworkError({ root: '', read_enabled: false, write_enabled: false }))
 }
 
 export function fetchTerminalSettings() {
   return fetch('/api/settings/terminal')
     .then((r) => okJson(r, 'fetchTerminalSettings'))
-    .catch(() => ({ enabled: false }))
+    .catch(swallowNetworkError({ enabled: false }))
 }
 
 // Opens a native OS folder-picker dialog on the machine running the
@@ -209,7 +231,7 @@ export function fetchEditorTree() {
   return fetch('/api/editor/tree')
     .then((r) => okJson(r, 'fetchEditorTree'))
     .then((data) => data ?? [])
-    .catch(() => [])
+    .catch(swallowNetworkError([]))
 }
 
 export function fetchEditorFile(path) {
@@ -252,14 +274,14 @@ export function searchEditor(query) {
   return fetch(`/api/editor/search?q=${encodeURIComponent(query)}`)
     .then((r) => okJson(r, 'searchEditor'))
     .then((data) => data ?? [])
-    .catch(() => [])
+    .catch(swallowNetworkError([]))
 }
 
 export function fetchGitStatus() {
   return fetch('/api/editor/git/status')
     .then((r) => okJson(r, 'fetchGitStatus'))
     .then((data) => data ?? [])
-    .catch(() => [])
+    .catch(swallowNetworkError([]))
 }
 
 export function fetchGitDiff(path, staged) {
@@ -303,7 +325,7 @@ export function fetchGitBranches() {
   return fetch('/api/editor/git/branches')
     .then((r) => okJson(r, 'fetchGitBranches'))
     .then((data) => data ?? [])
-    .catch(() => [])
+    .catch(swallowNetworkError([]))
 }
 
 // Switches to an existing local branch. If uncommitted changes would be

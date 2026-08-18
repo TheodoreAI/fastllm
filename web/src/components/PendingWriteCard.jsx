@@ -39,7 +39,7 @@ const STATUS_LABEL = {
   error: 'Failed',
 }
 
-export default function PendingWriteCard({ write, onApprove, onReject }) {
+export default function PendingWriteCard({ write, onRequestApprove, onReject }) {
   const rows = diffLines(write.existing_content || '', write.new_content || '')
 
   return (
@@ -63,7 +63,7 @@ export default function PendingWriteCard({ write, onApprove, onReject }) {
           <button type="button" className="btn-secondary" onClick={() => onReject(write.id)}>
             Reject
           </button>
-          <button type="button" className="btn-primary" onClick={() => onApprove(write.id)}>
+          <button type="button" className="btn-primary" onClick={() => onRequestApprove(write)}>
             Approve &amp; write
           </button>
         </div>

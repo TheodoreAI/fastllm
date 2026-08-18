@@ -56,12 +56,53 @@ export default function TerminalView({ theme }) {
       fontFamily: 'Menlo, Consolas, "SF Mono", monospace',
       fontSize: 13,
       theme: theme === 'light' ? LIGHT_THEME : DARK_THEME,
+      // Mouse drag-select copies to the clipboard immediately, matching
+      // every native terminal emulator's convention — no explicit Ctrl+C
+      // needed for the common case, which stays reserved for the shell.
+      copyOnSelect: true,
     })
     const fitAddon = new FitAddon()
     term.loadAddon(fitAddon)
     term.open(containerRef.current)
     termRef.current = term
     fitAddonRef.current = fitAddon
+
+    // xterm has no built-in copy/paste keybindings of its own — Ctrl+C/V
+    // are terminal control characters (SIGINT / literal ^V), so without
+    // this the browser's own defaults are the only thing deciding what
+    // those keys do, which is inconsistent across browsers. Standard
+    // terminal-emulator convention (used by VS Code's integrated
+    // terminal, Windows Terminal, etc.) is Ctrl+Shift+C/V for
+    // copy/paste, leaving plain Ctrl+C/V free for the shell.
+    term.attachCustomKeyEventHandler((e) => {
+      if (e.type !== 'keydown') return true
+      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'c') {
+        const selection = term.getSelection()
+        if (selection) navigator.clipboard.writeText(selection).catch(() => {})
+        return false
+      }
+      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'v') {
+        navigator.clipboard
+          .readText()
+          .then((text) => term.paste(text))
+          .catch(() => {})
+        return false
+      }
+      return true
+    })
+
+    // Right-click pastes immediately (standard terminal-emulator
+    // convention) instead of showing the browser's default context menu,
+    // which has nothing useful to offer inside a terminal surface.
+    function handleContextMenu(e) {
+      e.preventDefault()
+      navigator.clipboard
+        .readText()
+        .then((text) => term.paste(text))
+        .catch(() => {})
+    }
+    const container = containerRef.current
+    container.addEventListener('contextmenu', handleContextMenu)
 
     // Deferred one frame rather than called synchronously right after
     // open(): the container (.terminal-surface) may not have settled
@@ -100,6 +141,7 @@ export default function TerminalView({ theme }) {
       cancelAnimationFrame(initialFitId)
       if (rafId != null) cancelAnimationFrame(rafId)
       resizeObserver.disconnect()
+      container.removeEventListener('contextmenu', handleContextMenu)
       socketRef.current?.close()
       term.dispose()
     }

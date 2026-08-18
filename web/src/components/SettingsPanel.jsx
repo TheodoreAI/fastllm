@@ -2,8 +2,10 @@ import { useEffect, useRef, useState } from 'react'
 import { FONT_OPTIONS } from '../useFontFamily'
 import { FONT_SCALE_OPTIONS } from '../useFontScale'
 import { THEMES } from '../themes'
-import { browseForFolder } from '../api'
+import { browseForFolder, isWails } from '../api'
 import { useEscapeKey } from '../useEscapeKey'
+import { useSettingsExpanded } from '../useSettingsExpanded'
+import ConfirmDeleteModal from './ConfirmDeleteModal'
 
 // __APP_VERSION__ / __BUILD_TIME__ are baked in at build time by
 // vite.config.js from package.json + the build clock — see there for why.
@@ -24,20 +26,27 @@ const CHEVRON = (
 
 // Every global keyboard shortcut fastllm defines, shown together in
 // Settings → About so there's one place to look them up — the panel
-// toggles are handled in App.jsx's keydown listener, Save lives in
-// EditorView's own handler, and Open Folder/Exit/Undo etc. are native
-// Wails menu items (see cmd/desktop/main.go's menu()); none of those
-// three places know about the other two, so this list has to be kept in
-// sync by hand rather than generated from a single source.
+// toggles and Save (native: false) are handled in this web codebase
+// (App.jsx's keydown listener, EditorView's own handler) and work in any
+// build. Open Folder/Exit/Undo/Redo (native: true) are native Wails menu
+// items (see cmd/desktop/main.go's menu()) with no corresponding keydown
+// handler anywhere in web/src — they only work in the packaged desktop
+// app, not a plain browser tab, so they're flagged here rather than
+// listed as if they were universal. None of these three places (App.jsx,
+// EditorView.jsx, cmd/desktop/main.go) know about the other two, so this
+// list has to be kept in sync by hand rather than generated from one
+// source.
 const KEYBINDINGS = [
-  { keys: 'Ctrl+B', description: 'Toggle the editor’s Files panel' },
-  { keys: 'Ctrl+J', description: 'Toggle the terminal panel' },
-  { keys: 'Ctrl+Shift+M', description: 'Toggle the model settings panel' },
-  { keys: 'Ctrl+O', description: 'Open folder' },
-  { keys: 'Ctrl+S', description: 'Save the current file (Editor tab)' },
-  { keys: 'Ctrl+Q', description: 'Exit fastllm' },
-  { keys: 'Ctrl+Z', description: 'Undo' },
-  { keys: 'Ctrl+Y', description: 'Redo' },
+  { keys: 'Ctrl+B', description: 'Toggle the editor’s Files panel', native: false },
+  { keys: 'Ctrl+J', description: 'Toggle the terminal panel', native: false },
+  { keys: 'Ctrl+Shift+M', description: 'Toggle the model settings panel', native: false },
+  { keys: 'Ctrl+S', description: 'Save the current file (Editor tab)', native: false },
+  { keys: 'Ctrl+O', description: 'Open folder', native: true },
+  { keys: 'Ctrl+Q', description: 'Exit fastllm', native: true },
+  { keys: 'Ctrl+Z', description: 'Undo', native: true },
+  { keys: 'Ctrl+Y', description: 'Redo', native: true },
+  { keys: 'Ctrl+Shift+C', description: 'Copy selection (in the Terminal panel)', native: false },
+  { keys: 'Ctrl+Shift+V', description: 'Paste (in the Terminal panel)', native: false },
 ]
 
 // One collapsible sub-block within the Settings panel — mirrors
@@ -109,11 +118,11 @@ export default function SettingsPanel({
   const [dataStatus, setDataStatus] = useState('')
   const [browsing, setBrowsing] = useState(false)
 
-  // Appearance starts open since it's the sub-section most people touch
-  // first; everything else starts collapsed so a 9-sub-section panel
-  // doesn't dominate the sidebar on first render. Not persisted — same
-  // as the modal never remembered its own scroll position either.
-  const [expanded, setExpanded] = useState({ appearance: true })
+  // Persisted across sessions (see useSettingsExpanded) — Appearance
+  // starts open on a first-ever run since it's the sub-section most
+  // people touch first, but a returning user's expand/collapse choices
+  // now stick instead of resetting every time Settings reopens.
+  const [expanded, setExpanded] = useSettingsExpanded()
 
   function toggleSection(id) {
     setExpanded((prev) => ({ ...prev, [id]: !prev[id] }))
@@ -127,7 +136,7 @@ export default function SettingsPanel({
     if (expandSection) {
       setExpanded((prev) => ({ ...prev, [expandSection]: true }))
     }
-  }, [expandSection])
+  }, [expandSection, setExpanded])
 
   // Drives disabling the read/write checkboxes and Save button before an
   // invalid (checked-but-no-root) state can even be reached, rather than
@@ -159,7 +168,7 @@ export default function SettingsPanel({
       })
       setRagStatus('Saved. Applies to newly indexed documents and the next chat message.')
     } catch (err) {
-      setRagStatus(`Error: ${err.message}`)
+      setRagStatus(`Couldn't save retrieval settings: ${err.message}`)
     }
   }
 
@@ -175,7 +184,7 @@ export default function SettingsPanel({
       if (result.cancelled) return
       setFileAccessForm((prev) => ({ ...prev, root: result.path }))
     } catch (err) {
-      setFileAccessStatus(`Error: ${err.message}`)
+      setFileAccessStatus(`Couldn't open the folder picker: ${err.message}`)
     } finally {
       setBrowsing(false)
     }
@@ -205,7 +214,7 @@ export default function SettingsPanel({
       await onSaveFileAccessSettings(next)
       setFileAccessStatus('Saved. File access updates apply immediately without a server restart.')
     } catch (err) {
-      setFileAccessStatus(`Error: ${err.message}`)
+      setFileAccessStatus(`Couldn't save file access: ${err.message}`)
     }
   }
 
@@ -217,7 +226,7 @@ export default function SettingsPanel({
       await onSaveTerminalSettings(next)
       setTerminalStatus('Saved. Terminal access updates apply immediately without a server restart.')
     } catch (err) {
-      setTerminalStatus(`Error: ${err.message}`)
+      setTerminalStatus(`Couldn't save terminal access: ${err.message}`)
     }
   }
 
@@ -229,7 +238,7 @@ export default function SettingsPanel({
       if (action === 'conversations') await onClearConversations()
       setDataStatus('Done.')
     } catch (err) {
-      setDataStatus(`Error: ${err.message}`)
+      setDataStatus(`Couldn't clear ${action === 'kb' ? 'the knowledge base' : 'conversations'}: ${err.message}`)
     }
   }
 
@@ -378,7 +387,9 @@ export default function SettingsPanel({
           >
             Save file access
           </button>
-          {fileAccessStatus && <p className="status">{fileAccessStatus}</p>}
+          {fileAccessStatus && (
+            <p className={`status ${fileAccessStatus.startsWith("Couldn't") ? 'status-error' : ''}`}>{fileAccessStatus}</p>
+          )}
         </form>
       </SubSection>
 
@@ -396,7 +407,9 @@ export default function SettingsPanel({
             Gives the Editor panel a real PowerShell session on this machine. Unlike file access, this isn't sandboxed — anything the terminal can run, it runs with full access as whatever account runs fastllm. Only enable this if you trust everyone who can reach this app.
           </p>
           <button type="submit" className="btn-primary">Save terminal access</button>
-          {terminalStatus && <p className="status">{terminalStatus}</p>}
+          {terminalStatus && (
+            <p className={`status ${terminalStatus.startsWith("Couldn't") ? 'status-error' : ''}`}>{terminalStatus}</p>
+          )}
         </form>
       </SubSection>
 
@@ -450,7 +463,9 @@ export default function SettingsPanel({
               />
             </label>
             <button type="submit" className="btn-primary">Save retrieval settings</button>
-            {ragStatus && <p className="status">{ragStatus}</p>}
+            {ragStatus && (
+              <p className={`status ${ragStatus.startsWith("Couldn't") ? 'status-error' : ''}`}>{ragStatus}</p>
+            )}
             <p className="settings-hint">
               Chunk size/overlap only affect documents indexed after saving — existing
               documents keep the chunks they were indexed with.
@@ -462,48 +477,24 @@ export default function SettingsPanel({
       </SubSection>
 
       <SubSection id="data" label="Data management" expanded={!!expanded.data} onToggle={toggleSection}>
-        {confirming === null && (
-          <div className="danger-zone">
-            <div className="danger-row">
-              <span>Clear all conversations</span>
-              <button type="button" className="btn-danger" onClick={() => setConfirming('conversations')}>
-                Clear…
-              </button>
-            </div>
-            <div className="danger-row">
-              <span>Clear knowledge base</span>
-              <button type="button" className="btn-danger" onClick={() => setConfirming('kb')}>
-                Clear…
-              </button>
-            </div>
+        <div className="danger-zone">
+          <div className="danger-row">
+            <span>Clear all conversations</span>
+            <button type="button" className="btn-danger" onClick={() => setConfirming('conversations')}>
+              Clear…
+            </button>
           </div>
-        )}
-
-        {confirming === 'conversations' && (
-          <div className="danger-confirm">
-            <p>Delete every conversation and message? This can't be undone.</p>
-            <div className="modal-actions">
-              <button type="button" className="btn-secondary" onClick={() => setConfirming(null)}>Cancel</button>
-              <button type="button" className="btn-danger" onClick={() => runConfirmed('conversations')}>
-                Delete all conversations
-              </button>
-            </div>
+          <div className="danger-row">
+            <span>Clear knowledge base</span>
+            <button type="button" className="btn-danger" onClick={() => setConfirming('kb')}>
+              Clear…
+            </button>
           </div>
-        )}
+        </div>
 
-        {confirming === 'kb' && (
-          <div className="danger-confirm">
-            <p>Delete every indexed document and chunk? This can't be undone.</p>
-            <div className="modal-actions">
-              <button type="button" className="btn-secondary" onClick={() => setConfirming(null)}>Cancel</button>
-              <button type="button" className="btn-danger" onClick={() => runConfirmed('kb')}>
-                Delete knowledge base
-              </button>
-            </div>
-          </div>
+        {dataStatus && (
+          <p className={`status ${dataStatus.startsWith("Couldn't") ? 'status-error' : ''}`}>{dataStatus}</p>
         )}
-
-        {dataStatus && <p className="status">{dataStatus}</p>}
       </SubSection>
 
       <SubSection id="about" label="About" expanded={!!expanded.about} onToggle={toggleSection}>
@@ -517,17 +508,40 @@ export default function SettingsPanel({
         </div>
 
         <p className="settings-label settings-subheading">Keyboard shortcuts</p>
-        {KEYBINDINGS.map(({ keys, description }) => (
+        {KEYBINDINGS.filter((b) => !b.native || isWails()).map(({ keys, description, native }) => (
           <div className="settings-row" key={keys}>
             <span className="settings-row-keybind">
               {keys.split('+').map((k) => <kbd key={k}>{k}</kbd>)}
             </span>
-            <span className="settings-row-value settings-row-value-wrap">{description}</span>
+            <span className="settings-row-value settings-row-value-wrap">
+              {description}
+              {native && <span className="settings-hint-inline"> (desktop app)</span>}
+            </span>
           </div>
         ))}
       </SubSection>
 
       </div>
+
+      {confirming === 'conversations' && (
+        <ConfirmDeleteModal
+          heading="Clear all conversations?"
+          description="Delete every conversation and message. This can't be undone."
+          confirmLabel="Delete all conversations"
+          onCancel={() => setConfirming(null)}
+          onConfirm={() => runConfirmed('conversations')}
+        />
+      )}
+
+      {confirming === 'kb' && (
+        <ConfirmDeleteModal
+          heading="Clear the knowledge base?"
+          description="Delete every indexed document and chunk. This can't be undone."
+          confirmLabel="Delete knowledge base"
+          onCancel={() => setConfirming(null)}
+          onConfirm={() => runConfirmed('kb')}
+        />
+      )}
     </div>
   )
 }

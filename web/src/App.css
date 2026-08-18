@@ -812,6 +812,19 @@ body {
   border: 1px solid var(--border-strong);
 }
 
+.offline-banner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 50;
+  padding: 6px 12px;
+  text-align: center;
+  font-size: 0.75rem;
+  color: var(--accent-contrast);
+  background: var(--danger);
+}
+
 .app::before {
   content: '';
   position: absolute;
@@ -1977,7 +1990,8 @@ body {
   border-radius: var(--radius-sm);
   background: #16171c;
   border: 1px solid var(--border);
-  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .code-copy-btn {
@@ -3330,6 +3344,11 @@ body {
   color: var(--text-faint);
 }
 
+.settings-hint-inline {
+  font-size: 0.6875rem;
+  color: var(--text-faint);
+}
+
 .settings-check-row {
   flex-direction: row !important;
   align-items: center;
@@ -3432,23 +3451,6 @@ body {
   width: auto;
   padding: 5px 12px;
   font-size: 0.7813rem;
-}
-
-.danger-confirm {
-  padding: 10px 12px;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--danger) 10%, transparent);
-  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
-}
-
-.danger-confirm p {
-  margin: 0 0 10px;
-  font-size: 0.8125rem;
-  color: var(--text);
-}
-
-.danger-confirm .modal-actions {
-  margin: 0;
 }
 
 /* ---------------------------------------------------------------------

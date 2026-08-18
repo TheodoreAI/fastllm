@@ -26,6 +26,7 @@ import { useEditorSidebarWidth } from '../useEditorSidebarWidth'
 import { useTerminalPanelHeight } from '../useTerminalPanelHeight'
 import FileTree from './FileTree'
 import TerminalView from './TerminalView'
+import ConfirmDeleteModal from './ConfirmDeleteModal'
 
 export default function EditorView({
   fileAccessSettings,
@@ -60,12 +61,23 @@ export default function EditorView({
   const [diffText, setDiffText] = useState('')
   const [commitMessage, setCommitMessage] = useState('')
   const [gitBusy, setGitBusy] = useState(false)
+  // Commit/Stage/Unstage share one gitBusy flag (they're already mutually
+  // exclusive — all three disable together while any one runs), but each
+  // button still needs its OWN in-flight label rather than all three
+  // flipping to the same text regardless of which one was actually
+  // clicked, which would misleadingly show e.g. "Committing…" on the
+  // Commit button while a Stage request is really what's running.
+  const [gitBusyAction, setGitBusyAction] = useState(null) // 'commit' | 'stage' | 'unstage' | null
   const [gitError, setGitError] = useState('')
   const [pushing, setPushing] = useState(false)
   const [pushStatus, setPushStatus] = useState('')
 
   const [branches, setBranches] = useState([])
   const [branchBusy, setBranchBusy] = useState(false)
+  // branchBusy is shared with handleSwitchBranch (the <select> above), so
+  // this tracks specifically whether it's the Create form's own submit
+  // in flight — same reasoning as gitBusyAction above.
+  const [creatingBranch, setCreatingBranch] = useState(false)
   const [branchError, setBranchError] = useState('')
   const [newBranchOpen, setNewBranchOpen] = useState(false)
   const [newBranchName, setNewBranchName] = useState('')
@@ -130,6 +142,35 @@ export default function EditorView({
   const canWrite = !!fileAccessSettings?.write_enabled
   const dirty = content !== savedContent
 
+  // Themeable, keyboard-accessible replacement for window.confirm() — same
+  // ConfirmDeleteModal used for conversation/skill delete elsewhere in the
+  // app, rather than a native browser dialog that can't be restyled and
+  // looks like it belongs to a different app. confirmDialog(...) mirrors
+  // window.confirm's call shape (await it, get a boolean back) so the four
+  // call sites below only needed "window.confirm(x)" swapped for
+  // "await confirmDialog(x)" — no control-flow restructuring beyond that.
+  const [pendingConfirm, setPendingConfirm] = useState(null)
+  function confirmDialog({ heading, description, confirmLabel }) {
+    return new Promise((resolve) => {
+      setPendingConfirm({ heading, description, confirmLabel, resolve })
+    })
+  }
+  function resolvePendingConfirm(result) {
+    pendingConfirm?.resolve(result)
+    setPendingConfirm(null)
+  }
+  // Three call sites below (open folder, open file, view diff) guard an
+  // in-progress edit the exact same way — factored out so the copy can't
+  // drift between them the way the three near-identical error phrasings
+  // elsewhere in this codebase already have.
+  function confirmDiscardChanges() {
+    return confirmDialog({
+      heading: 'Discard unsaved changes?',
+      description: `"${openPath}" has unsaved changes that will be lost.`,
+      confirmLabel: 'Discard changes',
+    })
+  }
+
   useEffect(() => {
     if (!enabled) return
     refreshTree()
@@ -187,6 +228,7 @@ export default function EditorView({
     e.preventDefault()
     if (!newBranchName.trim()) return
     setBranchBusy(true)
+    setCreatingBranch(true)
     setBranchError('')
     try {
       const res = await createGitBranch(newBranchName.trim())
@@ -199,6 +241,7 @@ export default function EditorView({
       setBranchError(err.message)
     } finally {
       setBranchBusy(false)
+      setCreatingBranch(false)
     }
   }
 
@@ -215,7 +258,7 @@ export default function EditorView({
     try {
       const picked = await browseForFolder()
       if (picked.cancelled || !picked.path) return
-      if (dirty && !window.confirm(`Discard unsaved changes to ${openPath}?`)) return
+      if (dirty && !(await confirmDiscardChanges())) return
       const res = await saveFileAccessSettings({
         ...fileAccessSettings,
         root: picked.path,
@@ -255,7 +298,7 @@ export default function EditorView({
   }, [openFolderSignal])
 
   async function openFile(path) {
-    if (dirty && !window.confirm(`Discard unsaved changes to ${openPath}?`)) return
+    if (dirty && !(await confirmDiscardChanges())) return
     setDiffPath(null)
     setFileStatus('Loading…')
     try {
@@ -265,7 +308,7 @@ export default function EditorView({
       setSavedContent(data.content)
       setFileStatus(data.truncated ? 'File truncated (too large to fully load).' : '')
     } catch (err) {
-      setFileStatus(`Error opening file: ${err.message}`)
+      setFileStatus(`Couldn't open this file: ${err.message}`)
     }
   }
 
@@ -278,7 +321,7 @@ export default function EditorView({
       setSavedContent(content)
       refreshGitStatus()
     } catch (err) {
-      setFileStatus(`Error saving: ${err.message}`)
+      setFileStatus(`Couldn't save this file: ${err.message}`)
     } finally {
       setSaving(false)
     }
@@ -304,12 +347,17 @@ export default function EditorView({
       refreshGitStatus()
       openFile(path)
     } catch (err) {
-      setTreeStatus(`Error creating ${path}: ${err.message}`)
+      setTreeStatus(`Couldn't create ${path}: ${err.message}`)
     }
   }
 
   async function handleDeleteFile(path) {
-    if (!window.confirm(`Delete ${path}? This can't be undone.`)) return
+    const ok = await confirmDialog({
+      heading: 'Delete this file?',
+      description: `This deletes "${path}" from disk. This can't be undone.`,
+      confirmLabel: 'Delete',
+    })
+    if (!ok) return
     try {
       const res = await deleteEditorFile(path)
       if (!res.ok) throw new Error(await res.text())
@@ -321,7 +369,7 @@ export default function EditorView({
       refreshTree()
       refreshGitStatus()
     } catch (err) {
-      setTreeStatus(`Error deleting ${path}: ${err.message}`)
+      setTreeStatus(`Couldn't delete ${path}: ${err.message}`)
     }
   }
 
@@ -333,7 +381,7 @@ export default function EditorView({
       refreshTree()
       refreshGitStatus()
     } catch (err) {
-      setTreeStatus(`Error renaming ${fromPath}: ${err.message}`)
+      setTreeStatus(`Couldn't rename ${fromPath}: ${err.message}`)
     }
   }
 
@@ -359,7 +407,7 @@ export default function EditorView({
   }
 
   async function viewDiff(entry) {
-    if (dirty && !window.confirm(`Discard unsaved changes to ${openPath}?`)) return
+    if (dirty && !(await confirmDiscardChanges())) return
     setOpenPath(null)
     setDiffPath(entry.path)
     setDiffText('Loading…')
@@ -367,13 +415,14 @@ export default function EditorView({
       const data = await fetchGitDiff(entry.path, !!entry.staged)
       setDiffText(data.diff || '(no changes)')
     } catch (err) {
-      setDiffText(`Error loading diff: ${err.message}`)
+      setDiffText(`Couldn't load the diff: ${err.message}`)
     }
   }
 
   async function handleStageSelected() {
     if (selectedPaths.size === 0) return
     setGitBusy(true)
+    setGitBusyAction('stage')
     setGitError('')
     try {
       await stageGitPaths([...selectedPaths])
@@ -383,12 +432,14 @@ export default function EditorView({
       setGitError(err.message)
     } finally {
       setGitBusy(false)
+      setGitBusyAction(null)
     }
   }
 
   async function handleUnstageSelected() {
     if (selectedPaths.size === 0) return
     setGitBusy(true)
+    setGitBusyAction('unstage')
     setGitError('')
     try {
       await unstageGitPaths([...selectedPaths])
@@ -398,6 +449,7 @@ export default function EditorView({
       setGitError(err.message)
     } finally {
       setGitBusy(false)
+      setGitBusyAction(null)
     }
   }
 
@@ -405,6 +457,7 @@ export default function EditorView({
     e.preventDefault()
     if (!commitMessage.trim()) return
     setGitBusy(true)
+    setGitBusyAction('commit')
     setGitError('')
     try {
       const res = await commitGit(commitMessage.trim())
@@ -415,6 +468,7 @@ export default function EditorView({
       setGitError(err.message)
     } finally {
       setGitBusy(false)
+      setGitBusyAction(null)
     }
   }
 
@@ -431,7 +485,7 @@ export default function EditorView({
       if (!res.ok) throw new Error(await res.text())
       setPushStatus('Pushed.')
     } catch (err) {
-      setGitError(`Push failed: ${err.message}`)
+      setGitError(`Couldn't push: ${err.message}`)
     } finally {
       setPushing(false)
     }
@@ -567,7 +621,7 @@ export default function EditorView({
                 placeholder="Search all files…"
               />
               <button type="submit" disabled={searching || !query.trim()}>
-                {searching ? '…' : 'Go'}
+                {searching ? 'Searching…' : 'Go'}
               </button>
             </form>
             <ul className="editor-search-results">
@@ -619,7 +673,7 @@ export default function EditorView({
                   autoFocus
                 />
                 <button type="submit" disabled={branchBusy || !newBranchName.trim()}>
-                  Create
+                  {creatingBranch ? 'Creating…' : 'Create'}
                 </button>
               </form>
             )}
@@ -633,7 +687,9 @@ export default function EditorView({
                 rows={2}
               />
               <button type="submit" disabled={gitBusy || !commitMessage.trim() || staged.length === 0}>
-                Commit {staged.length > 0 ? `(${staged.length})` : ''}
+                {gitBusy && gitBusyAction === 'commit'
+                  ? 'Committing…'
+                  : `Commit ${staged.length > 0 ? `(${staged.length})` : ''}`}
               </button>
             </form>
 
@@ -646,10 +702,10 @@ export default function EditorView({
 
             <div className="editor-git-actions">
               <button type="button" onClick={handleStageSelected} disabled={gitBusy || selectedPaths.size === 0}>
-                Stage selected
+                {gitBusy && gitBusyAction === 'stage' ? 'Staging…' : 'Stage selected'}
               </button>
               <button type="button" onClick={handleUnstageSelected} disabled={gitBusy || selectedPaths.size === 0}>
-                Unstage selected
+                {gitBusy && gitBusyAction === 'unstage' ? 'Unstaging…' : 'Unstage selected'}
               </button>
             </div>
 
@@ -824,6 +880,16 @@ export default function EditorView({
           </div>
         </div>
       </main>
+
+      {pendingConfirm && (
+        <ConfirmDeleteModal
+          heading={pendingConfirm.heading}
+          description={pendingConfirm.description}
+          confirmLabel={pendingConfirm.confirmLabel}
+          onCancel={() => resolvePendingConfirm(false)}
+          onConfirm={() => resolvePendingConfirm(true)}
+        />
+      )}
     </div>
   )
 }

@@ -13,7 +13,7 @@ export default function ChatPanel({
   onSendMessage,
   onStop,
   userDisplayName,
-  onApproveWrite,
+  onRequestApproveWrite,
   onRejectWrite,
 }) {
   // Shell-style prompt recall: ArrowUp/ArrowDown step through this
@@ -107,7 +107,7 @@ export default function ChatPanel({
             {m.pendingWrites && m.pendingWrites.length > 0 && (
               <div className="pending-writes">
                 {m.pendingWrites.map((w) => (
-                  <PendingWriteCard key={w.id} write={w} onApprove={onApproveWrite} onReject={onRejectWrite} />
+                  <PendingWriteCard key={w.id} write={w} onRequestApprove={onRequestApproveWrite} onReject={onRejectWrite} />
                 ))}
               </div>
             )}
