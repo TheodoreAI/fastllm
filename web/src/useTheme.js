@@ -35,11 +35,19 @@ export function useTheme() {
     // OS level, so every theme maps to whichever of those two its family
     // is closest to.
     if (isWails() && window.runtime) {
-      if (familyOf(theme) === 'dark') {
+      const dark = familyOf(theme) === 'dark'
+      if (dark) {
         window.runtime.WindowSetDarkTheme()
       } else {
         window.runtime.WindowSetLightTheme()
       }
+      // WindowSetDarkTheme/WindowSetLightTheme only reach Wails' own
+      // title bar — the native File/Edit/Help menu bar underneath it is
+      // a separate Win32 surface with no Wails API of its own, so it's
+      // driven directly through a bound Go method instead (see
+      // cmd/desktop/menutheme_windows.go). No-ops on non-Windows builds
+      // and harmlessly missing (optional chaining) outside Wails.
+      window.go?.main?.menuTheme?.SetDark?.(dark)
     }
   }, [theme])
 

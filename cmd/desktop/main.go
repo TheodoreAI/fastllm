@@ -99,7 +99,7 @@ func main() {
 			Handler: built.Mux,
 		},
 		BackgroundColour: &options.RGBA{R: 30, G: 30, B: 30, A: 1},
-		Bind:             []interface{}{bridge},
+		Bind:             []interface{}{bridge, &menuTheme{}},
 		Menu:             app.menu(),
 		OnStartup:        app.startup,
 		OnBeforeClose:    app.beforeClose,
