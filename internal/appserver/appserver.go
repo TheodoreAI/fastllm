@@ -83,11 +83,15 @@ func DesktopDBPath() (string, error) {
 
 // Built is everything Build hands back: the fully-routed mux ready to
 // serve, plus the pieces an entrypoint needs for its own lifecycle
-// (closing the DB, tearing down live terminal sessions on shutdown).
+// (closing the DB, tearing down live terminal sessions on shutdown) or to
+// override afterward (cmd/desktop replaces Handler.FolderChooser with a
+// Wails-native dialog before wails.Run starts serving — see that field's
+// doc comment in internal/chat/handler.go).
 type Built struct {
 	Mux              *http.ServeMux
 	DB               *sql.DB
 	TerminalRegistry *terminal.Registry
+	Handler          *chat.Handler
 }
 
 // Build opens the DB, applies persisted (or env-seeded) file-access and
@@ -191,5 +195,5 @@ func Build(cfg Config) (*Built, error) {
 
 	mux.Handle("/", http.FileServer(http.FS(web.FS())))
 
-	return &Built{Mux: mux, DB: db, TerminalRegistry: terminalRegistry}, nil
+	return &Built{Mux: mux, DB: db, TerminalRegistry: terminalRegistry, Handler: handler}, nil
 }

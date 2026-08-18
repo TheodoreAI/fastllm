@@ -15,6 +15,8 @@ import (
 	"net/http"
 
 	"fastllm/internal/appserver"
+	"fastllm/internal/chat"
+	"fastllm/internal/folderpicker"
 	"fastllm/internal/screenshot"
 	"fastllm/internal/terminal"
 
@@ -85,7 +87,7 @@ func main() {
 	}()
 	bridge := &terminalBridge{port: termListener.Addr().(*net.TCPAddr).Port}
 
-	app := &desktopApp{registry: built.TerminalRegistry}
+	app := &desktopApp{registry: built.TerminalRegistry, handler: built.Handler}
 
 	err = wails.Run(&options.App{
 		Title:  appTitle,
@@ -135,10 +137,34 @@ func (b *terminalBridge) TerminalPort() int {
 type desktopApp struct {
 	ctx      context.Context
 	registry *terminal.Registry
+	handler  *chat.Handler
 }
 
 func (a *desktopApp) startup(ctx context.Context) {
 	a.ctx = ctx
+
+	// Overrides the folderpicker.Choose default (see appserver.Build) now
+	// that a real Wails context exists to open a native, in-process folder
+	// dialog against — a.ctx isn't available any earlier than this hook.
+	// Using Wails' own dialog instead of shelling out to a hidden
+	// powershell.exe hosting a WinForms dialog is what fixes the window
+	// flashing/flicker previously seen when clicking "Choose folder" in
+	// Settings → File access: that subprocess approach opened a second,
+	// unowned top-level window from a freshly starting PowerShell/CLR
+	// process, which is exactly the kind of thing that flickers during
+	// its own startup.
+	a.handler.FolderChooser = func(ctx context.Context) (string, error) {
+		path, err := wailsruntime.OpenDirectoryDialog(a.ctx, wailsruntime.OpenDialogOptions{
+			Title: "Select the folder fastllm should be allowed to read and write",
+		})
+		if err != nil {
+			return "", err
+		}
+		if path == "" {
+			return "", folderpicker.ErrCancelled
+		}
+		return path, nil
+	}
 }
 
 // onSecondInstance runs in the already-open instance when the user

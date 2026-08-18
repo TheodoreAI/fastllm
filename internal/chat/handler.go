@@ -133,12 +133,24 @@ type Handler struct {
 	Files    *files.Reader
 	Terminal *terminal.Gate
 
+	// FolderChooser shows the native "choose a folder" dialog used by
+	// Settings → File access. Defaults to folderpicker.Choose (spawns a
+	// hidden powershell.exe hosting a WinForms dialog) so cmd/server keeps
+	// working exactly as before — that subprocess approach is the only
+	// option available outside of a Wails window. cmd/desktop overrides
+	// this with Wails' own runtime.OpenDirectoryDialog instead, since that
+	// runs in-process, owned by the app's actual window, rather than
+	// spawning a separate top-level window from a freshly started
+	// PowerShell/CLR/WinForms process — which is what was causing the
+	// window flashing/flicker reported when clicking "Choose folder".
+	FolderChooser func(ctx context.Context) (string, error)
+
 	writesMu sync.Mutex
 	writes   map[string]*PendingWrite
 }
 
 func New(db *sql.DB, llmClient *llm.Client, vec *vector.Store, fileReader *files.Reader, terminalGate *terminal.Gate) *Handler {
-	return &Handler{DB: db, LLM: llmClient, Vector: vec, Files: fileReader, Terminal: terminalGate, writes: make(map[string]*PendingWrite)}
+	return &Handler{DB: db, LLM: llmClient, Vector: vec, Files: fileReader, Terminal: terminalGate, FolderChooser: folderpicker.Choose, writes: make(map[string]*PendingWrite)}
 }
 
 func newWriteID() string {
@@ -693,7 +705,7 @@ func (h *Handler) UpdateTerminalSettings(w http.ResponseWriter, r *http.Request)
 // server like this one, since the dialog appears on the server's own
 // desktop session, not the browser's.
 func (h *Handler) BrowseForFolder(w http.ResponseWriter, r *http.Request) {
-	path, err := folderpicker.Choose(r.Context())
+	path, err := h.FolderChooser(r.Context())
 	if err != nil {
 		switch {
 		case errors.Is(err, folderpicker.ErrCancelled):
