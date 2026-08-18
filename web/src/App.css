@@ -12,13 +12,17 @@
   --bg-chat: #1e1e1e;
   --bg-input: #3a3a3c;
   --bg-bubble: #3a3a3c;
-  --bg-bubble-user: #0a84ff;
+  /* Slightly deeper than systemBlue (#0a84ff) — the white bubble text
+     needs it to clear WCAG AA's 4.5:1 body-text threshold (was 3.65:1). */
+  --bg-bubble-user: #0875e2;
 
   --border: rgba(255, 255, 255, 0.09);
   --border-strong: rgba(255, 255, 255, 0.15);
 
   --text: #f2f2f2;
-  --text-dim: #a1a1a6;
+  /* Lightened from #a1a1a6 (4.41:1 against --bg-input, just under AA) to
+     clear WCAG AA's 4.5:1 minimum for secondary text everywhere it's used. */
+  --text-dim: #a8a8ad;
   --text-faint: #6e6e73;
 
   --accent: #0a84ff;
@@ -61,20 +65,28 @@ html {
   --bg-chat: #ffffff;
   --bg-input: #ffffff;
   --bg-bubble: #f0f0f2;
-  --bg-bubble-user: #007aff;
+  /* Slightly deeper than systemBlue (#007aff) — the white bubble text
+     needs it to clear WCAG AA's 4.5:1 body-text threshold (was 4.02:1). */
+  --bg-bubble-user: #0072ef;
 
   --border: rgba(0, 0, 0, 0.09);
   --border-strong: rgba(0, 0, 0, 0.15);
 
   --text: #1d1d1f;
-  --text-dim: #6e6e73;
+  /* Darkened from #6e6e73 (4.46:1 against --bg-bubble, just under AA) to
+     clear WCAG AA's 4.5:1 minimum for secondary text everywhere it's used. */
+  --text-dim: #68686d;
   --text-faint: #8e8e93;
 
   --accent: #007aff;
   --accent-contrast: #ffffff;
   --danger: #ff3b30;
-  --success: #34c759;
-  --warning: #b8860b;
+  /* Darkened from #34c759 (as low as 1.88:1 against --bg-window — a
+     severe fail for status text) to clear WCAG AA's 3:1 minimum. */
+  --success: #1f7735;
+  /* Darkened from #b8860b (2.75:1 on this theme's window bg) to clear
+     WCAG AA's 3:1 minimum for status/icon text. */
+  --warning: #8a6408;
 
   --shadow-window: none;
   --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.16);
@@ -131,20 +143,26 @@ html {
   --bg-chat: #f8f1de;
   --bg-input: #faf3e3;
   --bg-bubble: #ecdfc3;
-  --bg-bubble-user: #a9723f;
+  /* Deepened from #a9723f — the cream bubble text needs it to clear
+     WCAG AA's 4.5:1 body-text threshold (was 3.85:1). */
+  --bg-bubble-user: #996739;
 
   --border: rgba(92, 65, 32, 0.14);
   --border-strong: rgba(92, 65, 32, 0.24);
 
   --text: #4a3826;
-  --text-dim: #7a6650;
+  /* Darkened from #7a6650 (4.14:1 against --bg-bubble, just under AA) to
+     clear WCAG AA's 4.5:1 minimum for secondary text everywhere it's used. */
+  --text-dim: #6b5946;
   --text-faint: #9c8a72;
 
   --accent: #a9723f;
   --accent-contrast: #fff8ec;
   --danger: #c1442e;
   --success: #4f7942;
-  --warning: #b8860b;
+  /* Darkened from #b8860b (2.76:1 on this theme's window bg) to clear
+     WCAG AA's 3:1 minimum for status/icon text. */
+  --warning: #8a6408;
 
   /* Softer, book-like corners. */
   --radius-window: 6px;
@@ -197,7 +215,9 @@ html {
   --bg-chat: #2c001e;
   --bg-input: #4b1038;
   --bg-bubble: #4b1038;
-  --bg-bubble-user: #e95420;
+  /* Deepened from #e95420 (Ubuntu orange) — the white bubble text needs
+     it to clear WCAG AA's 4.5:1 body-text threshold (was 3.65:1). */
+  --bg-bubble-user: #cf4a1c;
 
   --border: rgba(255, 255, 255, 0.1);
   --border-strong: rgba(255, 255, 255, 0.18);
@@ -234,18 +254,26 @@ html {
   --bg-chat: #002b36;
   --bg-input: #0a4551;
   --bg-bubble: #0a4551;
-  --bg-bubble-user: #268bd2;
+  /* Lightened from #268bd2 — the dark bubble text needs it to clear
+     WCAG AA's 4.5:1 body-text threshold (was 4.08:1). */
+  --bg-bubble-user: #3b96d6;
 
   --border: rgba(147, 161, 161, 0.16);
   --border-strong: rgba(147, 161, 161, 0.28);
 
-  --text: #93a1a1;
-  --text-dim: #708284;
+  /* Lightened from #93a1a1 (3.96:1 against --bg-bubble) to clear WCAG
+     AA's 4.5:1 minimum for assistant-bubble body text. */
+  --text: #9facac;
+  /* Lightened from #708284 (3.73:1 on --bg-chat, 4.27:1 on --bg-input) to
+     clear WCAG AA's 4.5:1 minimum for secondary text on both surfaces. */
+  --text-dim: #9cb6b8;
   --text-faint: #586e75;
 
   --accent: #2aa198;
   --accent-contrast: #002b36;
-  --danger: #dc322f;
+  /* Lightened from #dc322f (2.81:1 against --bg-panel, just under AA) to
+     clear WCAG AA's 3:1 minimum for status/icon text. */
+  --danger: #e35b58;
   --success: #859900;
   --warning: #b58900;
 
@@ -281,7 +309,9 @@ html {
 
   --accent: #88c0d0;
   --accent-contrast: #2e3440;
-  --danger: #bf616a;
+  /* Lightened from #bf616a (2.46:1 against --bg-panel) to clear WCAG
+     AA's 3:1 minimum for status/icon text. */
+  --danger: #cb8087;
   --success: #a3be8c;
   --warning: #ebcb8b;
 
@@ -313,14 +343,20 @@ html {
   --border-strong: rgba(0, 0, 0, 0.14);
 
   --text: #1d1d1f;
-  --text-dim: #6e6e73;
+  /* Darkened from #6e6e73 (4.37:1 against --bg-bubble, just under AA) to
+     clear WCAG AA's 4.5:1 minimum for secondary text everywhere it's used. */
+  --text-dim: #68686d;
   --text-faint: #86868b;
 
   --accent: #0071e3;
   --accent-contrast: #ffffff;
   --danger: #ff3b30;
-  --success: #28cd41;
-  --warning: #ff9500;
+  /* Darkened from #28cd41 (as low as 1.95:1 against --bg-window — a
+     severe fail for status text) to clear WCAG AA's 3:1 minimum. */
+  --success: #167023;
+  /* Darkened from #ff9500 (2.02:1 on this theme's window bg — a large
+     fail) to clear WCAG AA's 3:1 minimum for status/icon text. */
+  --warning: #a56000;
 
   --radius-window: 10px;
   --radius: 10px;
@@ -413,13 +449,18 @@ html {
   --bg-chat: #282828;
   --bg-input: #504945;
   --bg-bubble: #504945;
-  --bg-bubble-user: #d65d0e;
+  /* Lightened from #d65d0e — accent-contrast here is dark text
+     (#282828), so it needs a lighter bubble, not a darker one, to clear
+     WCAG AA's 4.5:1 body-text threshold (was 3.81:1). */
+  --bg-bubble-user: #dc7532;
 
   --border: rgba(235, 219, 178, 0.1);
   --border-strong: rgba(235, 219, 178, 0.18);
 
   --text: #ebdbb2;
-  --text-dim: #bdae93;
+  /* Lightened from #bdae93 (4.05:1 on this theme's input bg) to clear
+     WCAG AA's 4.5:1 minimum for secondary text. */
+  --text-dim: #cfbfa1;
   --text-faint: #928374;
 
   --accent: #fabd2f;
@@ -490,7 +531,10 @@ html {
   --border-strong: rgba(171, 178, 191, 0.18);
 
   --text: #abb2bf;
-  --text-dim: #828a9a;
+  /* Lightened from #828a9a (4.03:1 on --bg-chat, 3.60:1 on the lighter
+     --bg-input) to clear WCAG AA's 4.5:1 minimum for secondary text on
+     both surfaces — --bg-input is the harder constraint here. */
+  --text-dim: #a7adb8;
   --text-faint: #5c6370;
 
   --accent: #61afef;
@@ -520,7 +564,10 @@ html {
   --bg-chat: #272822;
   --bg-input: #49483e;
   --bg-bubble: #49483e;
-  --bg-bubble-user: #f92672;
+  /* Lightened from #f92672 (hot pink) — accent-contrast here is dark
+     text (#272822), so it needs a lighter bubble, not a darker one, to
+     clear WCAG AA's 4.5:1 body-text threshold (was 3.93:1). */
+  --bg-bubble-user: #fa518e;
 
   --border: rgba(248, 248, 242, 0.1);
   --border-strong: rgba(248, 248, 242, 0.18);
@@ -542,6 +589,83 @@ html {
 
   --shadow-window: none;
   --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+:root[data-theme='windows-95'] {
+  /* Windows 95 — the classic "Chicago" gray chrome (#c0c0c0 across every
+     window/dialog surface), navy titlebar/selection blue, and white
+     content areas. Light-family: needs the light-mode syntax-highlighting
+     overrides below, same as the other light themes. */
+  --bg-window: #c0c0c0;
+  --bg-titlebar: #000080;
+  --bg-sidebar: #c0c0c0;
+  --bg-sidebar-tint: rgba(192, 192, 192, 0.85);
+  --bg-panel: #c0c0c0;
+  --bg-chat: #ffffff;
+  --bg-input: #ffffff;
+  --bg-bubble: #c0c0c0;
+  --bg-bubble-user: #000080;
+
+  --border: rgba(0, 0, 0, 0.4);
+  --border-strong: rgba(0, 0, 0, 0.6);
+
+  --text: #000000;
+  --text-dim: #4d4d4d;
+  --text-faint: #7a7a7a;
+
+  --accent: #000080;
+  --accent-contrast: #ffffff;
+  --danger: #a00000;
+  --success: #006400;
+  /* Darkened from the "raw" #8a6d00 (2.70:1 on this theme's gray chrome)
+     to clear WCAG AA's 3:1 minimum for status/icon text. */
+  --warning: #7c6200;
+
+  /* Classic beveled 3D chrome has zero corner radius anywhere. */
+  --radius-window: 0px;
+  --radius: 0px;
+  --radius-sm: 0px;
+
+  --shadow-window: none;
+  --shadow-overlay: 0 4px 0 rgba(0, 0, 0, 0.5);
+}
+
+:root[data-theme='windows-7'] {
+  /* Windows 7 — the Aero light look: soft blue-tinted window chrome,
+     white content panels, and the signature Aero glass blue accent.
+     Light-family, same as Windows 95 above. */
+  --bg-window: #e8eef7;
+  --bg-titlebar: #c2dbf7;
+  --bg-sidebar: #dbe6f5;
+  --bg-sidebar-tint: rgba(219, 230, 245, 0.82);
+  --bg-panel: #ffffff;
+  --bg-chat: #ffffff;
+  --bg-input: #ffffff;
+  --bg-bubble: #eef3fb;
+  /* Darkened from the "raw" Aero blue #3d7fd6 (4.03:1 against white
+     bubble text) to clear WCAG AA's 4.5:1 body-text threshold. */
+  --bg-bubble-user: #3977c9;
+
+  --border: rgba(60, 90, 130, 0.18);
+  --border-strong: rgba(60, 90, 130, 0.3);
+
+  --text: #1a1a1a;
+  --text-dim: #5a6472;
+  --text-faint: #7d8895;
+
+  --accent: #3d7fd6;
+  --accent-contrast: #ffffff;
+  --danger: #c42b1c;
+  --success: #2e7d32;
+  --warning: #a15c00;
+
+  /* Aero's glass panels leaned softly rounded. */
+  --radius-window: 6px;
+  --radius: 6px;
+  --radius-sm: 4px;
+
+  --shadow-window: none;
+  --shadow-overlay: 0 8px 24px rgba(30, 60, 100, 0.25);
 }
 
 :root[data-theme-family='light'] .message.assistant {
