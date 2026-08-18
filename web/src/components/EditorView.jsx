@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import CodeMirror from '@uiw/react-codemirror'
 import { githubLight, githubDark } from '@uiw/codemirror-theme-github'
+import { linter, lintGutter, forceLinting } from '@codemirror/lint'
 import {
   fetchEditorTree,
   fetchEditorFile,
@@ -51,6 +52,14 @@ export default function EditorView({
   const [content, setContent] = useState('')
   const [savedContent, setSavedContent] = useState('')
   const [fileStatus, setFileStatus] = useState('')
+  // Lint findings from the most recent save (see api.js's saveEditorFile —
+  // the backend lints JS/JSX files with the target project's own oxlint
+  // right after writing). Kept in a ref (read by the linter() extension's
+  // source function below) rather than only React state, since CodeMirror
+  // pulls diagnostics by calling that function itself — forceLinting()
+  // after a save is what actually triggers it to re-read the ref.
+  const lintDiagnosticsRef = useRef([])
+  const codeMirrorViewRef = useRef(null)
   const [saving, setSaving] = useState(false)
 
   const [query, setQuery] = useState('')
@@ -309,6 +318,8 @@ export default function EditorView({
       setContent(data.content)
       setSavedContent(data.content)
       setFileStatus(data.truncated ? 'File truncated (too large to fully load).' : '')
+      lintDiagnosticsRef.current = []
+      if (codeMirrorViewRef.current) forceLinting(codeMirrorViewRef.current)
     } catch (err) {
       setFileStatus(`Couldn't open this file: ${err.message}`)
     }
@@ -319,8 +330,12 @@ export default function EditorView({
     setSaving(true)
     setFileStatus('')
     try {
-      await saveEditorFile(openPath, content)
+      const res = await saveEditorFile(openPath, content)
+      if (!res.ok) throw new Error(await res.text())
+      const data = await res.json()
       setSavedContent(content)
+      lintDiagnosticsRef.current = data.diagnostics ?? []
+      if (codeMirrorViewRef.current) forceLinting(codeMirrorViewRef.current)
       refreshGitStatus()
     } catch (err) {
       setFileStatus(`Couldn't save this file: ${err.message}`)
@@ -527,7 +542,28 @@ export default function EditorView({
     }
   }
 
-  const languageExtensions = useMemo(() => (openPath ? languageExtensionFor(openPath) : []), [openPath])
+  // Stable across renders (the ref it reads is mutated in place, not
+  // replaced) so CodeMirror never needs to tear down and rebuild the
+  // linter extension on every save.
+  const oxlintExtension = useMemo(
+    () => [
+      linter(() =>
+        lintDiagnosticsRef.current.map((d) => ({
+          from: Math.max(0, d.offset),
+          to: Math.max(d.offset, d.offset + d.length),
+          severity: d.severity === 'error' ? 'error' : 'warning',
+          message: d.message,
+          source: d.rule,
+        }))
+      ),
+      lintGutter(),
+    ],
+    []
+  )
+  const languageExtensions = useMemo(
+    () => (openPath ? [...languageExtensionFor(openPath), ...oxlintExtension] : []),
+    [openPath, oxlintExtension]
+  )
   const staged = gitStatus.filter((s) => s.staged)
   const unstaged = gitStatus.filter((s) => s.unstaged)
 
@@ -825,6 +861,9 @@ export default function EditorView({
                   theme={theme === 'light' ? githubLight : githubDark}
                   extensions={languageExtensions}
                   onChange={setContent}
+                  onCreateEditor={(view) => {
+                    codeMirrorViewRef.current = view
+                  }}
                   readOnly={!canWrite}
                 />
               </div>

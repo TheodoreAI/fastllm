@@ -17,6 +17,7 @@ import (
 	"sort"
 
 	"fastllm/internal/gitrepo"
+	"fastllm/internal/lint"
 )
 
 // editorTreeEntry is one file in the editor's file tree, relative to the
@@ -137,7 +138,21 @@ func (h *Handler) EditorSaveFile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	writeJSON(w, map[string]any{"path": req.Path, "saved": true})
+
+	// Best-effort: lint the file we just saved so the editor can show
+	// inline diagnostics. Only runs for JS/JSX-family files, and only if
+	// the target project (not fastllm's own checkout) has its own oxlint
+	// installed — see internal/lint's doc comment. Any failure here
+	// (unsupported extension, no oxlint found, lint process error) is
+	// silently treated as "no diagnostics," never blocking or failing the
+	// save itself.
+	diagnostics := []lint.Diagnostic{}
+	if absPath, err := h.Files.Resolve(req.Path); err == nil {
+		if found, err := lint.Lint(r.Context(), absPath); err == nil {
+			diagnostics = found
+		}
+	}
+	writeJSON(w, map[string]any{"path": req.Path, "saved": true, "diagnostics": diagnostics})
 }
 
 type editorDeleteRequest struct {
