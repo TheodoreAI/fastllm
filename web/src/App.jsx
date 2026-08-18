@@ -143,6 +143,18 @@ export default function App() {
     return unsubscribe
   }, [])
 
+  // Native Help → About fastllm menu item (see cmd/desktop/main.go) opens
+  // the existing Settings → About sub-section instead of a separate
+  // native dialog, so it's themed like the rest of the app rather than
+  // rendering in plain OS chrome.
+  useEffect(() => {
+    if (!isWails()) return
+    const unsubscribe = window.runtime.EventsOn('menu:about', () => {
+      handleOpenSettings('about')
+    })
+    return unsubscribe
+  }, [])
+
   // Search and Git live on the main rail (see the Search/Git buttons
   // below) rather than as tabs inside EditorView's own sidebar, so
   // picking either one needs to both switch into a view that actually
