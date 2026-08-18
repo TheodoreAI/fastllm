@@ -145,6 +145,22 @@ export async function terminalWSHost() {
   return window.location.host
 }
 
+// SSE streaming has the same problem as the terminal WebSocket above: Wails'
+// in-process AssetServer bridge doesn't implement http.Flusher (see
+// cmd/desktop/main.go's termListener comment), so a chat response never
+// flushes and the request just hangs until the server 500s with "streaming
+// unsupported". Routing through the same real loopback listener the
+// terminal bridge already opens fixes it, since that listener is a genuine
+// net/http connection. Falls back to a relative URL for the plain-browser
+// build, which has no such bridge to route around.
+export async function apiOrigin() {
+  if (isWails() && window.go?.main?.terminalBridge?.TerminalPort) {
+    const port = await window.go.main.terminalBridge.TerminalPort()
+    return `http://127.0.0.1:${port}`
+  }
+  return ''
+}
+
 export function quitServer() {
   if (isWails()) {
     // cmd/desktop's OnShutdown hook (see cmd/desktop/main.go) does the
@@ -331,7 +347,8 @@ export function saveTerminalSettings(settings) {
 // the in-flight request to the LLM backend (see llm.Client.StreamChat),
 // so this genuinely stops generation rather than just hiding it.
 export async function streamChat({ message, model, skillId, conversationId, thinkLevel }, callbacks, signal) {
-  const res = await fetch('/api/chat', {
+  const origin = await apiOrigin()
+  const res = await fetch(`${origin}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({

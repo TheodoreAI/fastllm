@@ -66,24 +66,28 @@ func main() {
 	// cmd/server also calls.
 	built.Mux.HandleFunc("GET /api/screenshot", screenshotHandler)
 
-	// The terminal's WebSocket route can't work over Wails' in-process
-	// AssetServer bridge: websocket.Accept needs a real http.Hijacker, and
-	// the handler's loopback check (net/terminal/handler.go) needs a real
-	// r.RemoteAddr — neither exists on that in-process bridge, since it's
-	// not backed by an actual TCP connection. Every other route is fine
-	// in-process; only /api/terminal/ws needs a real socket, so this opens
-	// one extra loopback-only listener serving the exact same mux
-	// (identical routes, identical settings) purely so that one route has
-	// somewhere real to upgrade from. The frontend learns the port via the
-	// bound terminalBridge below and only uses it for the WS connection —
-	// every other request still goes through the in-process bridge.
+	// Some routes can't work over Wails' in-process AssetServer bridge,
+	// since it's not backed by an actual TCP connection:
+	//   - /api/terminal/ws: websocket.Accept needs a real http.Hijacker,
+	//     and the handler's loopback check (net/terminal/handler.go) needs
+	//     a real r.RemoteAddr — neither exists on the in-process bridge.
+	//   - /api/chat: SSE streaming needs a real http.Flusher to push each
+	//     token as it arrives; the in-process bridge doesn't implement
+	//     that either, so the handler's w.(http.Flusher) assertion fails
+	//     and the request 500s with "streaming unsupported".
+	// So this opens one extra loopback-only listener serving the exact
+	// same mux (identical routes, identical settings) purely so those
+	// routes have somewhere real to connect to. The frontend learns the
+	// port via the bound terminalBridge below (api.js's terminalWSHost
+	// and apiOrigin) and only routes those two kinds of request through
+	// it — everything else still goes through the in-process bridge.
 	termListener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		log.Fatalf("listen for terminal bridge: %v", err)
 	}
 	defer termListener.Close()
 	go func() {
-		if err := http.Serve(termListener, built.Mux); err != nil {
+		if err := http.Serve(termListener, corsAllowLoopback(built.Mux)); err != nil {
 			log.Printf("terminal bridge server stopped: %v", err)
 		}
 	}()
@@ -119,6 +123,27 @@ func main() {
 	if err != nil {
 		log.Fatalf("wails run: %v", err)
 	}
+}
+
+// corsAllowLoopback lets api.js's apiOrigin()/terminalWSHost() fetches reach
+// this listener: the webview's page origin (Wails' internal scheme/host) is
+// different from 127.0.0.1:<port>, so without CORS headers the browser
+// blocks the response before JS ever sees it — surfacing as a generic
+// "Failed to fetch" with no server-side trace. Wide open (any origin, no
+// credentials) is fine here since this listener is loopback-only
+// (127.0.0.1:0) and serves nothing sensitive to a random origin that
+// couldn't already reach it directly.
+func corsAllowLoopback(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // terminalBridge is bound into the webview (options.App.Bind) so the
