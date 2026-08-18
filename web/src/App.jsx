@@ -83,6 +83,11 @@ const UPLOAD_EXCLUDED_DIRS = new Set([
   '.idea', // JetBrains project metadata
   '.vs', // Visual Studio project metadata
   'obj', // MSBuild intermediate output (C++/.NET)
+  '.react-router', // React Router v7 codegen (route types/manifests), not source
+  '.svelte-kit', // SvelteKit build/codegen output
+  '.vercel', // Vercel deployment output/cache
+  '.netlify', // Netlify deployment output/cache
+  '.wrangler', // Cloudflare Workers local dev/build output
 ])
 
 function isInExcludedDir(relativePath) {
@@ -137,6 +142,14 @@ export default function App() {
   const [streaming, setStreaming] = useState(false)
   const [docText, setDocText] = useState('')
   const [docStatus, setDocStatus] = useState('')
+  // Set only while a batch upload (folder or multi-file) is running; drives
+  // the progress bar. null the rest of the time so the bar unmounts.
+  const [uploadProgress, setUploadProgress] = useState(null)
+  // Persistent per-file failures from the current/last batch — unlike
+  // docStatus (which one file's outcome overwrites the next), these stick
+  // around after the batch finishes so a failure buried in the middle of a
+  // large folder upload isn't just flashed past and lost.
+  const [uploadErrors, setUploadErrors] = useState([])
   const [documents, setDocuments] = useState([])
   const [models, setModels] = useState([])
   const [model, setModel] = useState('')
@@ -486,16 +499,33 @@ export default function App() {
     }
   }
 
+  // Returns an outcome tag rather than only setting docStatus, so callers
+  // driving a batch (indexFileList) can tell a real failure apart from a
+  // benign skip and aggregate counts/errors across the whole batch instead
+  // of only ever knowing about the very last file.
   async function indexFile(file, label) {
     setDocStatus(`Uploading ${label}…`)
     try {
       const res = await uploadFile(file)
-      if (!res.ok) throw new Error(await res.text())
+      if (!res.ok) {
+        const message = await res.text()
+        // Empty/whitespace-only files are common and harmless in a folder
+        // upload (codegen stubs, blank __init__.py, etc.) — not a real
+        // failure worth interrupting the batch for, so skip quietly rather
+        // than surfacing "Error indexing ...".
+        if (res.status === 400 && message.includes('no extractable text')) {
+          setDocStatus(`Skipped ${label}: empty file.`)
+          return { status: 'skipped' }
+        }
+        throw new Error(message)
+      }
       const data = await res.json()
       setDocStatus(`Indexed ${data.chunks} chunk(s) from ${label}.`)
       refreshDocuments()
+      return { status: 'indexed' }
     } catch (err) {
       setDocStatus(`Error indexing ${label}: ${err.message}`)
+      return { status: 'error', message: err.message }
     }
   }
 
@@ -509,8 +539,14 @@ export default function App() {
   // Shared by both the flat file picker and the folder picker: skips
   // unsupported extensions and indexes everything else one at a time
   // (sequential, so the status line stays readable and we don't flood
-  // the embedding backend with concurrent requests).
+  // the embedding backend with concurrent requests). Drives uploadProgress
+  // for the progress bar and accumulates real failures into uploadErrors —
+  // computed up front (rather than filtered inline in the loop) so the
+  // progress bar's denominator is "files actually attempted," not raw
+  // file count, which would stall visually while skipping a big excluded
+  // directory like node_modules.
   async function indexFileList(files, { relativeLabel } = {}) {
+    const candidates = []
     for (const file of files) {
       const label = relativeLabel ? file.webkitRelativePath || file.name : file.name
       // Only a folder upload has real directory segments to check —
@@ -527,11 +563,26 @@ export default function App() {
         continue
       }
       if (!UPLOAD_FILE_PATTERN.test(file.name)) {
-        setDocStatus(`Skipped ${file.name}: unsupported file type.`)
         continue
       }
-      await indexFile(file, label)
+      candidates.push({ file, label })
     }
+
+    if (candidates.length === 0) return
+
+    setUploadErrors([])
+    setUploadProgress({ total: candidates.length, completed: 0, label: candidates[0].label })
+
+    for (let i = 0; i < candidates.length; i++) {
+      const { file, label } = candidates[i]
+      setUploadProgress({ total: candidates.length, completed: i, label })
+      const outcome = await indexFile(file, label)
+      if (outcome?.status === 'error') {
+        setUploadErrors((prev) => [...prev, { label, message: outcome.message }])
+      }
+    }
+
+    setUploadProgress(null)
   }
 
   async function handleFilePicked(e) {
@@ -908,6 +959,9 @@ export default function App() {
                     onFolderPicked={handleFolderPicked}
                     docStatus={docStatus}
                     documents={documents}
+                    uploadProgress={uploadProgress}
+                    uploadErrors={uploadErrors}
+                    onDismissUploadErrors={() => setUploadErrors([])}
                   />
                 ),
               }[key]
