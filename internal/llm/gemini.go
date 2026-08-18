@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -56,10 +57,20 @@ func NewGeminiClient(apiKey string) *GeminiClient {
 // Gemini's actual API discriminates by which field is present rather than
 // a "type" tag, so one struct with omitempty on every field (rather than
 // several part types plus a wrapper) matches the wire format directly and
-// avoids writing a custom (Un)MarshalJSON.
+// avoids writing a custom (Un)MarshalJSON. ThoughtSignature is an opaque,
+// per-functionCall-part token some Gemini models (observed on the 3.x
+// generation) attach to their own function calls — required to be echoed
+// back verbatim on that same part when the call/result pair is replayed
+// in a later turn's history, or the API rejects the request with
+// "Function call is missing a thought_signature" even though nothing
+// about the call itself changed. See
+// https://ai.google.dev/gemini-api/docs/thought-signatures and
+// toGeminiToolCallID's doc comment for how it survives the round trip
+// through fastllm's provider-agnostic ToolCall.
 type geminiPart struct {
 	Text             string                `json:"text,omitempty"`
 	Thought          bool                  `json:"thought,omitempty"`
+	ThoughtSignature string                `json:"thoughtSignature,omitempty"`
 	FunctionCall     *geminiFunctionCall   `json:"functionCall,omitempty"`
 	FunctionResponse *geminiFunctionResult `json:"functionResponse,omitempty"`
 }
@@ -109,35 +120,79 @@ type geminiRequest struct {
 	Tools             []geminiTool             `json:"tools,omitempty"`
 }
 
-// geminiCallIDsToNames recovers, for one assistant turn's tool calls,
-// which function name each fastllm-internal call ID (see
-// toGeminiFunctionCallID) refers to — needed because a later "tool" role
-// Message in fastllm's flat history carries only a ToolCallID, but
-// Gemini's functionResponse part needs the function Name instead (Gemini
-// has no separate call-ID concept the way OpenAI/Anthropic do). Built
-// fresh from the message list on every request rather than threaded
-// through as extra state, since toGeminiRequest already has to walk the
-// whole list once anyway.
-func geminiCallIDsToNames(messages []Message) map[string]string {
-	names := make(map[string]string)
-	for _, m := range messages {
-		for _, call := range m.ToolCalls {
-			names[call.ID] = call.Function.Name
-		}
-	}
-	return names
+// geminiToolCallMeta is everything about a Gemini functionCall part that
+// fastllm's provider-agnostic ToolCall (just ID/Type/Function.Name/
+// Function.Arguments — see client.go) has nowhere to carry: the function
+// Name (needed again for the matching functionResponse part later — see
+// toGeminiRequest's "tool" case) and the ThoughtSignature Gemini requires
+// echoed back verbatim on replay (see geminiPart's doc comment). Rather
+// than adding Gemini-specific fields to the shared ToolCall type fastllm
+// uses for every provider, this rides along packed into ToolCall.ID
+// itself (see toGeminiToolCallID/parseGeminiToolCallID) — ID is already a
+// synthesized, Gemini-only-meaningful string with no format any other
+// caller depends on.
+type geminiToolCallMeta struct {
+	Name             string
+	ThoughtSignature string
 }
 
-// toGeminiFunctionCallID synthesizes a fastllm-internal ToolCall.ID for a
-// functionCall part in Gemini's response — Gemini doesn't hand back an ID
-// of its own the way OpenAI/Anthropic do, only the function name and
-// args, but fastllm's shared runFileTools loop (internal/chat/handler.go)
-// keys everything (including the matching "tool" role reply) by
-// ToolCall.ID. Index is the part's position within the candidate's
-// content, which is enough to keep IDs unique within one turn even if the
-// same function is called more than once.
-func toGeminiFunctionCallID(name string, index int) string {
-	return fmt.Sprintf("gemini_%s_%d", name, index)
+// geminiToolCallIDPrefix marks a ToolCall.ID as one of these packed
+// IDs — used defensively in parseGeminiToolCallID so a plain, unpacked ID
+// (from a code path that doesn't go through toGeminiToolCallID) decodes
+// to a zero-value geminiToolCallMeta instead of panicking or silently
+// misparsing.
+const geminiToolCallIDPrefix = "gemini:"
+
+// toGeminiToolCallID packs a geminiToolCallMeta into a fastllm-internal
+// ToolCall.ID string, base64-encoding the pieces so neither the function
+// name nor the opaque, format-unspecified ThoughtSignature can break the
+// encoding regardless of what characters they contain. index (the part's
+// position within the candidate's content) is folded in too, purely to
+// keep IDs unique within one turn if the same function is called more
+// than once — it plays no role in decoding.
+func toGeminiToolCallID(name, thoughtSignature string, index int) string {
+	payload := fmt.Sprintf("%d\x1f%s\x1f%s", index, name, thoughtSignature)
+	return geminiToolCallIDPrefix + base64.RawURLEncoding.EncodeToString([]byte(payload))
+}
+
+// parseGeminiToolCallID reverses toGeminiToolCallID. Returns the
+// zero-value geminiToolCallMeta if id isn't one of these packed IDs (e.g.
+// it's blank, or came from a different code path) — callers treat that
+// the same as "no name/signature known", not an error, since the two
+// fields this recovers are both optional context, not required for the
+// tool call to function at all.
+func parseGeminiToolCallID(id string) geminiToolCallMeta {
+	encoded, ok := strings.CutPrefix(id, geminiToolCallIDPrefix)
+	if !ok {
+		return geminiToolCallMeta{}
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		return geminiToolCallMeta{}
+	}
+	parts := strings.SplitN(string(decoded), "\x1f", 3)
+	if len(parts) != 3 {
+		return geminiToolCallMeta{}
+	}
+	return geminiToolCallMeta{Name: parts[1], ThoughtSignature: parts[2]}
+}
+
+// geminiCallIDMeta recovers, for one assistant turn's tool calls, the
+// geminiToolCallMeta packed into each fastllm-internal call ID — needed
+// because a later "tool" role Message in fastllm's flat history carries
+// only a ToolCallID, but reconstructing that turn's functionCall part
+// (see toGeminiRequest's "assistant" case) needs the function Name and
+// ThoughtSignature back out of it. Built fresh from the message list on
+// every request rather than threaded through as extra state, since
+// toGeminiRequest already has to walk the whole list once anyway.
+func geminiCallIDMeta(messages []Message) map[string]geminiToolCallMeta {
+	meta := make(map[string]geminiToolCallMeta)
+	for _, m := range messages {
+		for _, call := range m.ToolCalls {
+			meta[call.ID] = parseGeminiToolCallID(call.ID)
+		}
+	}
+	return meta
 }
 
 // toGeminiRequest converts fastllm's flat message list into Gemini's
@@ -156,7 +211,7 @@ func toGeminiFunctionCallID(name string, index int) string {
 // rejecting the request over an unrecognized field, so it's left off
 // entirely rather than assuming the API will just ignore it.
 func toGeminiRequest(model string, messages []Message, tools []Tool, thinkLevel string) geminiRequest {
-	callNames := geminiCallIDsToNames(messages)
+	callMeta := geminiCallIDMeta(messages)
 
 	var systemParts []geminiPart
 	contents := make([]geminiContent, 0, len(messages))
@@ -173,7 +228,15 @@ func toGeminiRequest(model string, messages []Message, tools []Tool, thinkLevel 
 			for _, call := range m.ToolCalls {
 				var args map[string]any
 				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
-				parts = append(parts, geminiPart{FunctionCall: &geminiFunctionCall{Name: call.Function.Name, Args: args}})
+				// ThoughtSignature must be echoed back verbatim on this
+				// same part for the API to accept the replayed history —
+				// see geminiPart's doc comment. callMeta[call.ID] recovers
+				// it from the packed ID this same call.ID was minted with
+				// in GeminiClient.Chat.
+				parts = append(parts, geminiPart{
+					FunctionCall:     &geminiFunctionCall{Name: call.Function.Name, Args: args},
+					ThoughtSignature: callMeta[call.ID].ThoughtSignature,
+				})
 			}
 			contents = append(contents, geminiContent{Role: "model", Parts: parts})
 
@@ -186,7 +249,7 @@ func toGeminiRequest(model string, messages []Message, tools []Tool, thinkLevel 
 			contents = append(contents, geminiContent{
 				Role: "user",
 				Parts: []geminiPart{{FunctionResponse: &geminiFunctionResult{
-					Name:     callNames[m.ToolCallID],
+					Name:     callMeta[m.ToolCallID].Name,
 					Response: map[string]any{"result": m.Content},
 				}}},
 			})
@@ -354,7 +417,7 @@ func (c *GeminiClient) Chat(ctx context.Context, model string, messages []Messag
 			switch {
 			case part.FunctionCall != nil:
 				argsJSON, _ := json.Marshal(part.FunctionCall.Args)
-				call := ToolCall{ID: toGeminiFunctionCallID(part.FunctionCall.Name, i), Type: "function"}
+				call := ToolCall{ID: toGeminiToolCallID(part.FunctionCall.Name, part.ThoughtSignature, i), Type: "function"}
 				call.Function.Name = part.FunctionCall.Name
 				call.Function.Arguments = string(argsJSON)
 				calls = append(calls, call)

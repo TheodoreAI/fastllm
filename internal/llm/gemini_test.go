@@ -6,13 +6,20 @@ import (
 )
 
 func TestToGeminiRequestTranslatesToolCallRoundTrip(t *testing.T) {
+	// ID is built via toGeminiToolCallID exactly as GeminiClient.Chat would
+	// construct it from a real API response, not a hand-written literal —
+	// the whole point under test is that the packed name+thoughtSignature
+	// survives being carried in Message history and comes back out
+	// correctly on the next request (both here and in the ThoughtSignature
+	// assertion below).
+	callID := toGeminiToolCallID("read_file", "opaque-signature-abc123", 0)
 	messages := []Message{
 		{Role: "system", Content: "You are a helpful assistant."},
 		{Role: "user", Content: "Read foo.txt"},
 		{
 			Role: "assistant",
 			ToolCalls: []ToolCall{{
-				ID:   "gemini_read_file_0",
+				ID:   callID,
 				Type: "function",
 				Function: struct {
 					Name      string `json:"name"`
@@ -20,7 +27,7 @@ func TestToGeminiRequestTranslatesToolCallRoundTrip(t *testing.T) {
 				}{Name: "read_file", Arguments: `{"path":"foo.txt"}`},
 			}},
 		},
-		{Role: "tool", ToolCallID: "gemini_read_file_0", Content: "file contents here"},
+		{Role: "tool", ToolCallID: callID, Content: "file contents here"},
 	}
 
 	req := toGeminiRequest("gemini-flash-latest", messages, []Tool{
@@ -56,6 +63,9 @@ func TestToGeminiRequestTranslatesToolCallRoundTrip(t *testing.T) {
 	if modelMsg.Parts[0].FunctionCall.Args["path"] != "foo.txt" {
 		t.Fatalf("got function call args %+v", modelMsg.Parts[0].FunctionCall.Args)
 	}
+	if modelMsg.Parts[0].ThoughtSignature != "opaque-signature-abc123" {
+		t.Fatalf("thoughtSignature should be echoed back on replay, got %q", modelMsg.Parts[0].ThoughtSignature)
+	}
 
 	toolReplyMsg := req.Contents[2]
 	if toolReplyMsg.Role != "user" {
@@ -69,6 +79,37 @@ func TestToGeminiRequestTranslatesToolCallRoundTrip(t *testing.T) {
 	}
 	if toolReplyMsg.Parts[0].FunctionResponse.Response["result"] != "file contents here" {
 		t.Fatalf("got functionResponse response %+v", toolReplyMsg.Parts[0].FunctionResponse.Response)
+	}
+}
+
+func TestGeminiToolCallIDRoundTrip(t *testing.T) {
+	cases := []struct {
+		name      string
+		signature string
+	}{
+		{"read_file", "abc123=="},
+		{"write_file", ""},                      // some responses omit thoughtSignature entirely
+		{"name_with_underscores", "a/b+c=\x1f"}, // exercises the delimiter byte appearing inside the signature itself
+	}
+	for _, c := range cases {
+		id := toGeminiToolCallID(c.name, c.signature, 0)
+		meta := parseGeminiToolCallID(id)
+		if meta.Name != c.name {
+			t.Errorf("name: got %q, want %q", meta.Name, c.name)
+		}
+		if meta.ThoughtSignature != c.signature {
+			t.Errorf("signature: got %q, want %q", meta.ThoughtSignature, c.signature)
+		}
+	}
+}
+
+func TestParseGeminiToolCallIDHandlesUnpackedIDs(t *testing.T) {
+	// A plain, non-packed ID (e.g. hand-constructed by a test, or from a
+	// hypothetical future caller) should decode to the zero value rather
+	// than error or panic — see parseGeminiToolCallID's doc comment.
+	meta := parseGeminiToolCallID("not-a-packed-id")
+	if meta != (geminiToolCallMeta{}) {
+		t.Fatalf("expected zero value for a non-packed ID, got %+v", meta)
 	}
 }
 
