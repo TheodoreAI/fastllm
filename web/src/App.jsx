@@ -23,6 +23,8 @@ import { useSplitWidth } from './useSplitWidth'
 import { useConnectionStatus } from './useConnectionStatus'
 import { useModel } from './useModel'
 import { useSkillId } from './useSkillId'
+import { useActiveView } from './useActiveView'
+import { useEditorPanel } from './useEditorPanel'
 import {
   fetchConversations,
   fetchMessages,
@@ -211,10 +213,10 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useSidebarCollapsed()
   const [editorSidebarCollapsed, setEditorSidebarCollapsed] = useEditorSidebarCollapsed()
   const [terminalCollapsed, setTerminalCollapsed] = useTerminalCollapsed()
-  const [activeView, setActiveView] = useState('chat')
+  const [activeView, setActiveView] = useActiveView()
   const [tweakBarOpen, setTweakBarOpen] = useState(false)
   const [openFolderSignal, setOpenFolderSignal] = useState(0)
-  const [editorPanel, setEditorPanel] = useState('files')
+  const [editorPanel, setEditorPanel] = useEditorPanel()
   const [gitChangeCount, setGitChangeCount] = useState(0)
   const [splitWidth, setSplitWidth] = useSplitWidth()
   const splitContainerRef = useRef(null)
