@@ -23,6 +23,7 @@ import (
 	"fastllm/internal/buildcheck"
 	"fastllm/internal/files"
 	"fastllm/internal/folderpicker"
+	"fastllm/internal/gitrepo"
 	"fastllm/internal/llm"
 	"fastllm/internal/store"
 	"fastllm/internal/terminal"
@@ -41,6 +42,28 @@ const defaultWorkspace = "default"
 const systemPrompt = `You are a helpful assistant. Use the provided context to answer
 the user's question when it's relevant. If the context doesn't contain the
 answer, say so and answer from general knowledge instead.`
+
+// listFilesTool is the schema advertised alongside read_file when file
+// access is enabled, so the model can discover what's in the sandboxed
+// project directory instead of only being able to act on paths the user
+// already told it — see listFilesMaxEntries's doc comment for the size
+// cap. Read-only, same sandboxed root as read_file/write_file.
+var listFilesTool = llm.Tool{
+	Type: "function",
+	Function: llm.ToolFunction{
+		Name:        "list_files",
+		Description: "List files in the local project directory, recursively. Use this to discover what files exist before reading one, or to explore a subdirectory. Returns paths relative to the project root.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]any{
+					"type":        "string",
+					"description": "Subdirectory to list, relative to the project root (e.g. \"src\" or \"src/utils\"). Omit or use \"\" to list the entire project.",
+				},
+			},
+		},
+	},
+}
 
 // readFileTool is the schema advertised to the model when file access is
 // enabled. Read-only, sandboxed to Handler.Files's configured root — see
@@ -412,7 +435,7 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 	pendingByPath := map[string]string{}
 
 	for round := 0; round < maxToolRounds; round++ {
-		tools := []llm.Tool{readFileTool}
+		tools := []llm.Tool{readFileTool, listFilesTool}
 		if writesEnabled {
 			tools = append(tools, writeFileTool)
 			if hasGoModule && len(pendingByPath) > 0 {
@@ -436,6 +459,13 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 		results := make(map[string]string, len(reply.ToolCalls))
 		for _, call := range reply.ToolCalls {
 			switch call.Function.Name {
+			case "list_files":
+				var args struct {
+					Path string `json:"path"`
+				}
+				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+				results[call.ID] = h.listFiles(ctx, root, args.Path)
+
 			case "read_file":
 				var args struct {
 					Path string `json:"path"`
@@ -536,6 +566,61 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 	// inject a summarize-what-happened instruction before the final
 	// streamed answer.
 	return reads, pending, buildChecks, true
+}
+
+// listFilesMaxEntries caps how many paths listFiles hands back in one
+// call — a large repo's full recursive listing could otherwise blow past
+// what's reasonable to put in front of a model in one tool result (both
+// context-window size and the model's own ability to usefully digest a
+// multi-thousand-line file list). The model is told when the list was
+// truncated so it can narrow with a subdirectory path instead of assuming
+// it saw everything.
+const listFilesMaxEntries = 500
+
+// listFiles implements the list_files tool: the same git-aware listing
+// (falling back to a plain walk for a non-git folder) that backs the
+// Editor tab's file tree — see walkFiles and gitrepo.ListFiles in
+// editor.go, reused here rather than duplicated so the model and the
+// human editor agree on what "the project's files" means. requestedPath,
+// if non-empty, filters the full listing down to that subdirectory
+// (matched as a path prefix) rather than doing a second, separately-
+// rooted walk — simpler, and root has already been validated/snapshotted
+// by the caller (runFileTools) so nothing here does its own sandbox
+// escape checking; filtering an already-sandboxed list can't introduce
+// one.
+func (h *Handler) listFiles(ctx context.Context, root, requestedPath string) string {
+	all, err := gitrepo.ListFiles(ctx, root)
+	if errors.Is(err, gitrepo.ErrNotARepo) {
+		all, err = walkFiles(root)
+	}
+	if err != nil {
+		return "Error listing files: " + err.Error()
+	}
+
+	prefix := path.Clean(strings.Trim(requestedPath, "/"))
+	var matched []string
+	for _, f := range all {
+		if prefix == "" || prefix == "." || f == prefix || strings.HasPrefix(f, prefix+"/") {
+			matched = append(matched, f)
+		}
+	}
+
+	if len(matched) == 0 {
+		if prefix == "" || prefix == "." {
+			return "(no files found)"
+		}
+		return fmt.Sprintf("No files found under %q.", requestedPath)
+	}
+
+	truncated := len(matched) > listFilesMaxEntries
+	if truncated {
+		matched = matched[:listFilesMaxEntries]
+	}
+	result := strings.Join(matched, "\n")
+	if truncated {
+		result += fmt.Sprintf("\n\n[truncated to %d of more entries — narrow with a subdirectory path]", listFilesMaxEntries)
+	}
+	return result
 }
 
 // takePendingWrite removes and returns a pending write by ID, or nil if
