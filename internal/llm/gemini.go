@@ -73,6 +73,15 @@ type geminiPart struct {
 	ThoughtSignature string                `json:"thoughtSignature,omitempty"`
 	FunctionCall     *geminiFunctionCall   `json:"functionCall,omitempty"`
 	FunctionResponse *geminiFunctionResult `json:"functionResponse,omitempty"`
+	InlineData       *geminiInlineData     `json:"inlineData,omitempty"`
+}
+
+// geminiInlineData is Gemini's image-part shape — the API's own field
+// names (mime_type/data, base64 payload with no data: URI prefix), unlike
+// OpenAI's single data-URI string or Anthropic's {type,media_type,data}.
+type geminiInlineData struct {
+	MimeType string `json:"mimeType"`
+	Data     string `json:"data"`
 }
 
 type geminiFunctionCall struct {
@@ -255,7 +264,18 @@ func toGeminiRequest(model string, messages []Message, tools []Tool, thinkLevel 
 			})
 
 		default: // "user"
-			contents = append(contents, geminiContent{Role: "user", Parts: []geminiPart{{Text: m.Content}}})
+			var parts []geminiPart
+			if m.Content != "" {
+				parts = append(parts, geminiPart{Text: m.Content})
+			}
+			for _, img := range m.Images {
+				mediaType, data, ok := splitDataURI(img.DataURI)
+				if !ok {
+					continue
+				}
+				parts = append(parts, geminiPart{InlineData: &geminiInlineData{MimeType: mediaType, Data: data}})
+			}
+			contents = append(contents, geminiContent{Role: "user", Parts: parts})
 		}
 	}
 

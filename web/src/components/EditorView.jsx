@@ -26,6 +26,7 @@ import {
   saveFileAccessSettings,
 } from '../api'
 import { languageExtensionFor, languageNameFor } from '../editorLanguages'
+import { parseDiff } from '../diffFormat'
 import { aiCompletionExtension } from '../aiCompletion'
 import { useEditorSidebarWidth } from '../useEditorSidebarWidth'
 import { useTerminalPanelHeight } from '../useTerminalPanelHeight'
@@ -72,6 +73,7 @@ export default function EditorView({
   const [selectedPaths, setSelectedPaths] = useState(new Set())
   const [diffPath, setDiffPath] = useState(null)
   const [diffText, setDiffText] = useState('')
+  const diffLines = useMemo(() => parseDiff(diffText), [diffText])
   const [commitMessage, setCommitMessage] = useState('')
   const [gitBusy, setGitBusy] = useState(false)
   // Commit/Stage/Unstage share one gitBusy flag (they're already mutually
@@ -198,21 +200,29 @@ export default function EditorView({
     refreshBranches()
   }, [enabled])
 
-  // Git state also changes from outside this panel entirely — most
-  // commonly the user typing `git commit`/`git branch`/etc. directly into
-  // the Editor's own Terminal panel, but really any external tool could
-  // touch .git while fastllm is open. Rather than poll on a timer (which
-  // has an idle cost even when nothing changes, and up to a full interval
-  // of lag when something does), this subscribes to the backend's
-  // GET /api/editor/git/watch SSE stream — internal/chat.EditorGitWatch —
-  // which is itself backed by a real filesystem watcher on .git/HEAD,
+  // Git state also changes from outside this panel entirely — the chat
+  // model's write_file tool, the user typing `git commit`/`git branch`/etc.
+  // directly into the Editor's own Terminal panel, or really any external
+  // tool touching the working tree or .git while fastllm is open. Rather
+  // than poll on a timer (which has an idle cost even when nothing
+  // changes, and up to a full interval of lag when something does), this
+  // subscribes to the backend's GET /api/editor/git/watch SSE stream —
+  // internal/chat.EditorGitWatch — which is itself backed by a real
+  // filesystem watcher on the whole working tree plus .git/HEAD,
   // .git/refs, and .git/index (see internal/gitrepo.Watch), the same
   // "notified, not polled" approach VS Code and other IDEs use for git
   // status. Only subscribes while the git sub-panel is the one actually
-  // visible (no point refreshing status the user isn't looking at), and
-  // only while file access is enabled at all.
+  // visible (no point watching for changes the user isn't looking at),
+  // and only while file access is enabled at all — which means a change
+  // that happens while the user is on a different panel (e.g. mid-chat
+  // with the model while sitting on the Files panel) is missed by the
+  // live stream entirely, so switching back to the Git panel always does
+  // one immediate refetch first, independent of whatever the SSE stream
+  // reports afterward.
   useEffect(() => {
     if (!enabled || !visible || panel !== 'git') return
+    refreshGitStatus()
+    refreshBranches()
     const source = new EventSource('/api/editor/git/watch')
     source.addEventListener('changed', () => {
       refreshGitStatus()
@@ -957,9 +967,18 @@ export default function EditorView({
             <>
               <div className="editor-file-header">
                 <span className="editor-file-path">Diff: {diffPath}</span>
-                <button type="button" onClick={() => setDiffPath(null)}>Close</button>
+                <button type="button" className="editor-diff-close" onClick={() => setDiffPath(null)}>Close</button>
               </div>
-              <pre className="editor-diff">{diffText}</pre>
+              <div className="editor-diff">
+                {diffLines.map((line, i) => (
+                  <div key={i} className={`editor-diff-line editor-diff-line--${line.type}`}>
+                    <span className="editor-diff-gutter">
+                      {line.type === 'add' ? '+' : line.type === 'del' ? '−' : ''}
+                    </span>
+                    <span className="editor-diff-text">{line.text}</span>
+                  </div>
+                ))}
+              </div>
             </>
           ) : (
             <div className="editor-empty-state">

@@ -15,6 +15,11 @@ export default function ChatPanel({
   userDisplayName,
   onRequestApproveWrite,
   onRejectWrite,
+  pendingImages,
+  composerImageError,
+  onComposerPaste,
+  onRemovePendingImage,
+  visionSupported,
 }) {
   // Shell-style prompt recall: ArrowUp/ArrowDown step through this
   // conversation's past user messages. historyIndex counts back from the
@@ -103,6 +108,13 @@ export default function ChatPanel({
                 ))}
               </ul>
             )}
+            {m.images && m.images.length > 0 && (
+              <div className="message-images">
+                {m.images.map((src, ii) => (
+                  <img key={ii} src={src} alt="Attached" className="message-image" />
+                ))}
+              </div>
+            )}
             <MessageContent content={m.content} />
             {m.pendingWrites && m.pendingWrites.length > 0 && (
               <div className="pending-writes">
@@ -126,23 +138,51 @@ export default function ChatPanel({
         <div ref={bottomRef} />
       </div>
 
-      <form className="composer" onSubmit={handleSubmit}>
-        <input
-          value={input}
-          onChange={(e) => handleComposerChange(e.target.value)}
-          onKeyDown={handleComposerKeyDown}
-          placeholder="Ask something…"
-          disabled={streaming}
-        />
-        {streaming ? (
-          <button type="button" className="btn-primary btn-stop" onClick={onStop}>
-            ⏹ Stop
-          </button>
-        ) : (
-          <button type="submit" className="btn-primary" disabled={!input.trim()}>
-            Send
-          </button>
+      <form className="composer-form" onSubmit={handleSubmit}>
+        {composerImageError && <p className="composer-image-error">{composerImageError}</p>}
+        {pendingImages && pendingImages.length > 0 && (
+          <div className="composer-image-previews">
+            {pendingImages.map((img, i) => (
+              <div key={i} className="composer-image-preview">
+                <img src={img.dataUri} alt={img.name} />
+                <button
+                  type="button"
+                  className="composer-image-remove"
+                  onClick={() => onRemovePendingImage(i)}
+                  title="Remove image"
+                  aria-label="Remove image"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
         )}
+        <div className="composer">
+          <span
+            className={`composer-vision-flag ${visionSupported ? 'is-supported' : 'is-unsupported'}`}
+            title={visionSupported ? 'This model accepts pasted images.' : "This model doesn't accept images — paste is disabled."}
+          >
+            🖼{visionSupported ? '' : '🚫'}
+          </span>
+          <input
+            value={input}
+            onChange={(e) => handleComposerChange(e.target.value)}
+            onKeyDown={handleComposerKeyDown}
+            onPaste={onComposerPaste}
+            placeholder={visionSupported ? 'Ask something… (paste an image to attach it)' : 'Ask something…'}
+            disabled={streaming}
+          />
+          {streaming ? (
+            <button type="button" className="btn-primary btn-stop" onClick={onStop}>
+              ⏹ Stop
+            </button>
+          ) : (
+            <button type="submit" className="btn-primary" disabled={!input.trim() && (!pendingImages || pendingImages.length === 0)}>
+              Send
+            </button>
+          )}
+        </div>
       </form>
     </main>
   )

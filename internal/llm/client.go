@@ -14,11 +14,85 @@ import (
 	"time"
 )
 
+// Message is fastllm's provider-agnostic chat message. Content stays a
+// plain string for every existing call site (system prompts, tool
+// results, loaded history) — Images is the only addition, and is empty
+// for the overwhelming majority of messages. MarshalJSON below is what
+// actually turns a message carrying images into the OpenAI-compatible
+// wire format's content-block array; every other field here is untouched
+// by that.
 type Message struct {
 	Role       string     `json:"role"`
 	Content    string     `json:"content"`
+	Images     []Image    `json:"-"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
+}
+
+// Image is one pasted/attached image, carried as a data URI end to end —
+// the same representation the browser's FileReader.readAsDataURL already
+// produces client-side, stored as-is in SQLite, and split back into
+// media type + base64 payload only at the point each provider's wire
+// format needs them (see anthropic.go/gemini.go's toAnthropicRequest/
+// toGeminiRequest, and MarshalJSON below for the OpenAI-compatible path).
+type Image struct {
+	DataURI string `json:"data_uri"`
+}
+
+// splitDataURI pulls the media type and base64 payload out of a
+// "data:<mediaType>;base64,<data>" string, for providers (Anthropic,
+// Gemini) whose image content blocks want those two parts separately
+// rather than a single URL string the way OpenAI's image_url block does.
+// Returns ok=false for anything that isn't a well-formed base64 data URI.
+func splitDataURI(dataURI string) (mediaType, data string, ok bool) {
+	const prefix = "data:"
+	if !strings.HasPrefix(dataURI, prefix) {
+		return "", "", false
+	}
+	rest := dataURI[len(prefix):]
+	comma := strings.IndexByte(rest, ',')
+	if comma < 0 {
+		return "", "", false
+	}
+	meta, payload := rest[:comma], rest[comma+1:]
+	meta, isBase64 := strings.CutSuffix(meta, ";base64")
+	if !isBase64 || meta == "" || payload == "" {
+		return "", "", false
+	}
+	return meta, payload, true
+}
+
+// MarshalJSON emits the OpenAI-compatible wire format: a plain content
+// string when there are no images (identical to this type's previous,
+// pre-image-support JSON shape — every non-image call site is
+// unaffected), or an array of {"type":"text"|"image_url",...} content
+// blocks when there are, per OpenAI's (and Ollama's, and DeepSeek's)
+// multimodal content-block convention. This only needs to exist once,
+// here, rather than in every caller that marshals a chatRequest, since
+// Go's encoding/json calls a type's own MarshalJSON automatically
+// wherever that type appears — including nested in []Message.
+func (m Message) MarshalJSON() ([]byte, error) {
+	type alias Message // avoids infinite recursion into this MarshalJSON
+	if len(m.Images) == 0 {
+		return json.Marshal(struct {
+			alias
+			Content string `json:"content"`
+		}{alias: alias(m), Content: m.Content})
+	}
+	blocks := make([]any, 0, len(m.Images)+1)
+	if m.Content != "" {
+		blocks = append(blocks, map[string]string{"type": "text", "text": m.Content})
+	}
+	for _, img := range m.Images {
+		blocks = append(blocks, map[string]any{
+			"type":      "image_url",
+			"image_url": map[string]string{"url": img.DataURI},
+		})
+	}
+	return json.Marshal(struct {
+		alias
+		Content []any `json:"content"`
+	}{alias: alias(m), Content: blocks})
 }
 
 // Tool describes one function the model may call, in OpenAI's tool schema.
@@ -75,6 +149,7 @@ type Model struct {
 	Name              string   `json:"name"`
 	Capabilities      []string `json:"capabilities,omitempty"`
 	SupportsFileTools bool     `json:"supports_file_tools"`
+	SupportsVision    bool     `json:"supports_vision"`
 	// Provider is "anthropic"/"openai"/"gemini" for a cloud model, or ""
 	// for a local Ollama model — the frontend model picker groups options
 	// by this field instead of re-deriving it from Name's "provider:"
@@ -155,7 +230,7 @@ func (c *Client) ListModels(ctx context.Context) ([]Model, error) {
 		if containsString(m.Capabilities, "embedding") && !containsString(m.Capabilities, "completion") {
 			continue // embedding-only model, not usable for chat
 		}
-		out = append(out, Model{Name: m.Name, Capabilities: m.Capabilities, SupportsFileTools: SupportsTools(m.Name)})
+		out = append(out, Model{Name: m.Name, Capabilities: m.Capabilities, SupportsFileTools: SupportsTools(m.Name), SupportsVision: SupportsVisionForModel(m.Name)})
 	}
 	return out, nil
 }
@@ -208,6 +283,46 @@ func SupportsToolsForModel(model string) bool {
 // offer file read/write tools at all.
 func SupportsTools(model string) bool {
 	for _, prefix := range toolCapableModelPrefixes {
+		if strings.HasPrefix(model, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// visionCapableModelPrefixes lists the local Ollama model families known
+// to accept image input, matched by name prefix the same way
+// toolCapableModelPrefixes gates tool support — Ollama's /api/tags
+// "capabilities" field does actually include "vision" for these, but the
+// prefix list is kept as a second, explicit source of truth for the same
+// reason toolCapableModelPrefixes exists: a hand-maintained list is easy
+// to reason about and doesn't silently change behavior if a future Ollama
+// version starts reporting capabilities differently.
+var visionCapableModelPrefixes = []string{
+	"llava",
+	"llama3.2-vision",
+	"qwen2.5vl",
+	"qwen3-vl",
+	"minicpm-v",
+	"moondream",
+	"bakllava",
+	"gemma3", // Gemma 3 (and later Gemma releases run locally) are multimodal
+	"gemma4",
+}
+
+// SupportsVisionForModel reports whether model (bare local name, or a
+// "provider:"-prefixed cloud model) can accept image input at all — the
+// gate the chat composer uses to decide whether pasting/attaching an
+// image is even offered for the currently selected model. Cloud: every
+// current Anthropic/OpenAI/Gemini model family fastllm offers supports
+// vision; DeepSeek's current hosted chat models (deepseek-v4-flash/-pro)
+// do not. Local: matched against visionCapableModelPrefixes, mirroring
+// SupportsToolsForModel/SupportsTools's local-model gating.
+func SupportsVisionForModel(model string) bool {
+	if _, provider, ok := stripProviderPrefix(model); ok {
+		return provider == "anthropic" || provider == "openai" || provider == "gemini"
+	}
+	for _, prefix := range visionCapableModelPrefixes {
 		if strings.HasPrefix(model, prefix) {
 			return true
 		}

@@ -23,6 +23,7 @@ import { useSplitWidth } from './useSplitWidth'
 import { useConnectionStatus } from './useConnectionStatus'
 import { useModel } from './useModel'
 import { useSkillId } from './useSkillId'
+import { useEditorPanel } from './useEditorPanel'
 import {
   fetchConversations,
   fetchMessages,
@@ -147,6 +148,17 @@ export default function App() {
   const [messages, setMessages] = useState([])
   const [messagesLoading, setMessagesLoading] = useState(false)
   const [input, setInput] = useState('')
+  // Images pasted/dropped into the composer, waiting to be sent with the
+  // next message — [{ dataUri, name }]. Cleared on send, same lifecycle
+  // as `input`. Not persisted (unlike model/skill/theme): an in-progress
+  // attachment is exactly the kind of ephemeral draft state localStorage
+  // is deliberately NOT used for elsewhere in this app either.
+  const [pendingImages, setPendingImages] = useState([])
+  // Set when a paste/attach is rejected (wrong model, bad file, too
+  // large) so the composer can show why nothing was attached — cleared
+  // on the next successful attach or on send, same lifecycle as
+  // pendingImages itself.
+  const [composerImageError, setComposerImageError] = useState('')
   const [streaming, setStreaming] = useState(false)
   const [docText, setDocText] = useState('')
   const [docStatus, setDocStatus] = useState('')
@@ -161,6 +173,14 @@ export default function App() {
   const [documents, setDocuments] = useState([])
   const [models, setModels] = useState([])
   const [model, setModel] = useModel()
+  // A composer image-attach rejection ("X doesn't support images") is
+  // specific to whichever model was selected at paste time — switching
+  // to a vision-capable model should drop it immediately rather than
+  // leaving a now-stale error sitting above the composer until the next
+  // paste attempt overwrites it.
+  useEffect(() => {
+    setComposerImageError('')
+  }, [model])
   const [skills, setSkills] = useState([])
   const [skillId, setSkillId] = useSkillId()
   const [skillFormOpen, setSkillFormOpen] = useState(false)
@@ -211,10 +231,9 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useSidebarCollapsed()
   const [editorSidebarCollapsed, setEditorSidebarCollapsed] = useEditorSidebarCollapsed()
   const [terminalCollapsed, setTerminalCollapsed] = useTerminalCollapsed()
-  const [activeView, setActiveView] = useState('chat')
   const [tweakBarOpen, setTweakBarOpen] = useState(false)
   const [openFolderSignal, setOpenFolderSignal] = useState(0)
-  const [editorPanel, setEditorPanel] = useState('files')
+  const [editorPanel, setEditorPanel] = useEditorPanel()
   const [gitChangeCount, setGitChangeCount] = useState(0)
   const [splitWidth, setSplitWidth] = useSplitWidth()
   const splitContainerRef = useRef(null)
@@ -248,13 +267,12 @@ export default function App() {
   // window.runtime only exists in the desktop build, hence the isWails()
   // guard — matches how the rest of this file feature-detects Wails (see
   // api.js's isWails doc comment) rather than importing @wailsjs/runtime.
-  // Switches to the Editor tab (where the folder dialog's result — tree,
-  // git status/branches — is actually visible) and bumps openFolderSignal,
-  // which EditorView watches to re-run its own handleOpenFolder.
+  // Bumps openFolderSignal, which EditorView watches to re-run its own
+  // handleOpenFolder — the editor pane is always visible (split is the
+  // only layout), so there's no view to switch into first.
   useEffect(() => {
     if (!isWails()) return
     const unsubscribe = window.runtime.EventsOn('menu:open-folder', () => {
-      setActiveView((v) => (v === 'chat' ? 'editor' : v))
       setOpenFolderSignal((n) => n + 1)
     })
     return unsubscribe
@@ -272,26 +290,24 @@ export default function App() {
     return unsubscribe
   }, [])
 
-  // VS Code-style global panel shortcuts: Ctrl+B (Files panel) and Ctrl+J
-  // (terminal) only mean something while the Editor is showing, so both
-  // also switch into it — mirroring how VS Code's own Ctrl+B works from
-  // anywhere in the window, not just while its explorer is already
-  // focused. Ctrl+Shift+M toggles the right-hand model-settings panel;
-  // plain Ctrl+M was avoided as a pairing with Ctrl+B/Ctrl+J since VS
-  // Code itself reserves unshifted Ctrl+M for focus-tabbing, and Ctrl+C
-  // (as literally requested) was ruled out because it's the OS copy
-  // shortcut used throughout chat, the code editor, and the terminal.
+  // VS Code-style global panel shortcuts: Ctrl+B toggles the Files
+  // sidebar, Ctrl+J toggles the terminal — both panels are always part
+  // of the (permanently split) layout, so this is a plain toggle with no
+  // view to switch into first. Ctrl+Shift+M toggles the right-hand
+  // model-settings panel; plain Ctrl+M was avoided as a pairing with
+  // Ctrl+B/Ctrl+J since VS Code itself reserves unshifted Ctrl+M for
+  // focus-tabbing, and Ctrl+C (as literally requested) was ruled out
+  // because it's the OS copy shortcut used throughout chat, the code
+  // editor, and the terminal.
   useEffect(() => {
     function handleKeyDown(e) {
       if (!(e.ctrlKey || e.metaKey)) return
       const key = e.key.toLowerCase()
       if (key === 'b' && !e.shiftKey) {
         e.preventDefault()
-        setActiveView((v) => (v === 'chat' ? 'editor' : v))
         setEditorSidebarCollapsed((c) => !c)
       } else if (key === 'j' && !e.shiftKey) {
         e.preventDefault()
-        setActiveView((v) => (v === 'chat' ? 'editor' : v))
         setTerminalCollapsed((c) => !c)
       } else if (key === 'm' && e.shiftKey) {
         e.preventDefault()
@@ -303,29 +319,36 @@ export default function App() {
   }, [setEditorSidebarCollapsed, setTerminalCollapsed, setSidebarCollapsed])
 
   // Search and Git live on the main rail (see the Search/Git buttons
-  // below) rather than as tabs inside EditorView's own sidebar, so
-  // picking either one needs to both switch into a view that actually
-  // renders EditorView and select the panel within it — a plain
-  // setEditorPanel call would do nothing if the user is still on Chat.
+  // below) rather than as tabs inside EditorView's own sidebar. Mirrors
+  // toggleFilesPanel's behavior below: clicking the button for the panel
+  // that's already open collapses the sidebar (a second click re-expands,
+  // same toggle Ctrl+B already does); clicking it from anywhere else
+  // selects that panel and makes sure the sidebar is actually expanded to
+  // show it, rather than leaving it collapsed from an earlier
+  // Ctrl+B/manual collapse.
   function openEditorPanel(panel) {
-    setActiveView((v) => (v === 'chat' ? 'editor' : v))
+    const alreadyShowingPanel = editorPanel === panel && !editorSidebarCollapsed
+    if (alreadyShowingPanel) {
+      setEditorSidebarCollapsed(true)
+      return
+    }
     setEditorPanel(panel)
+    setEditorSidebarCollapsed(false)
   }
 
   // The Files rail button mirrors VS Code's Explorer icon: clicking it
   // while Files is already the visible panel collapses the sidebar
   // (a second click re-expands, same toggle Ctrl+B already does — see
-  // the keydown handler above); clicking it from anywhere else switches
-  // into a real view, selects the Files panel, and makes sure the
-  // sidebar is actually expanded to show it, rather than leaving it
-  // collapsed from an earlier Ctrl+B/manual collapse.
+  // the keydown handler above); clicking it from anywhere else selects
+  // the Files panel and makes sure the sidebar is actually expanded to
+  // show it, rather than leaving it collapsed from an earlier
+  // Ctrl+B/manual collapse.
   function toggleFilesPanel() {
-    const alreadyShowingFiles = activeView !== 'chat' && editorPanel === 'files' && !editorSidebarCollapsed
+    const alreadyShowingFiles = editorPanel === 'files' && !editorSidebarCollapsed
     if (alreadyShowingFiles) {
       setEditorSidebarCollapsed(true)
       return
     }
-    setActiveView((v) => (v === 'chat' ? 'editor' : v))
     setEditorPanel('files')
     setEditorSidebarCollapsed(false)
   }
@@ -426,21 +449,86 @@ export default function App() {
     fetchSkills().then(setSkills)
   }
 
+  // maxPendingImages/maxImageBytes bound what the composer will accept —
+  // a vision request with many/huge images costs real latency and (for
+  // cloud providers) real money per token, and there's no resizing/
+  // compression step here, so the cap has to be conservative enough that
+  // even several full-resolution screenshots stay reasonable.
+  const maxPendingImages = 4
+  const maxImageBytes = 8 * 1024 * 1024
+
+  const visionSupported = !!models.find((m) => m.name === model)?.supports_vision
+
+  function addPendingImage(file) {
+    if (!file.type.startsWith('image/')) return
+    if (file.size > maxImageBytes) {
+      setComposerImageError(`"${file.name || 'pasted image'}" is too large to attach (max 8 MB).`)
+      return
+    }
+    setComposerImageError('')
+    const reader = new FileReader()
+    reader.onload = () => {
+      setPendingImages((prev) => {
+        if (prev.length >= maxPendingImages) return prev
+        return [...prev, { dataUri: reader.result, name: file.name || 'pasted-image' }]
+      })
+    }
+    reader.readAsDataURL(file)
+  }
+
+  function removePendingImage(index) {
+    setPendingImages((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  // Wired to the composer's onPaste — Ctrl+V with an image on the
+  // clipboard (a screenshot, a copied image from a browser/file explorer)
+  // attaches it instead of the browser trying to paste it as text (which
+  // it can't, so nothing would happen otherwise). Text pastes are left
+  // completely alone: only clipboard items whose type starts with
+  // "image/" are intercepted, so a normal text paste never even reaches
+  // this branch, let alone gets preventDefault'd — and never rejected for
+  // vision support, since a plain-text paste is always valid regardless
+  // of which model is selected.
+  //
+  // A model that doesn't support vision (per visionSupported, derived
+  // from llm.SupportsVisionForModel via GET /api/models) rejects the
+  // image outright rather than silently attaching it and letting the
+  // request fail (or be silently dropped) deep inside whichever
+  // provider's API receives it — see llm.Message's Images field and each
+  // provider's request translation for what would otherwise happen.
+  function handleComposerPaste(e) {
+    const items = Array.from(e.clipboardData?.items || [])
+    const imageItems = items.filter((item) => item.type.startsWith('image/'))
+    if (imageItems.length === 0) return
+    e.preventDefault()
+    if (!visionSupported) {
+      setComposerImageError(`"${model || 'This model'}" doesn't support images.`)
+      return
+    }
+    for (const item of imageItems) {
+      const file = item.getAsFile()
+      if (file) addPendingImage(file)
+    }
+  }
+
   async function sendMessage(e) {
     e.preventDefault()
     const text = input.trim()
-    if (!text || streaming) return
+    if ((!text && pendingImages.length === 0) || streaming) return
 
+    const images = pendingImages.map((img) => img.dataUri)
     setInput('')
+    setPendingImages([])
+    setComposerImageError('')
     setStreaming(true)
-    setMessages((prev) => [...prev, { role: 'user', content: text }, { role: 'assistant', content: '', sources: [], reasoning: '', toolCalls: [], pendingWrites: [], buildChecks: [] }])
+    setMessages((prev) => [...prev, { role: 'user', content: text, images }, { role: 'assistant', content: '', sources: [], reasoning: '', toolCalls: [], pendingWrites: [], buildChecks: [] }])
 
     const controller = new AbortController()
     abortControllerRef.current = controller
 
     try {
       await streamChat(
-        { message: text, model, skillId, conversationId, thinkLevel },
+        { message: text, model, skillId, conversationId, thinkLevel, images },
         {
           onConversation: (id) => {
             setConversationId(id)
@@ -866,39 +954,7 @@ export default function App() {
       <nav className="view-rail">
         <button
           type="button"
-          className={activeView === 'chat' ? 'is-active' : ''}
-          title="Chat"
-          onClick={() => setActiveView('chat')}
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M4 4h16v12H8l-4 4V4Z" />
-          </svg>
-        </button>
-        <button
-          type="button"
-          className={activeView === 'editor' ? 'is-active' : ''}
-          title="Editor"
-          onClick={() => setActiveView('editor')}
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9l-6-6Z" />
-            <path d="M14 3v6h6" />
-          </svg>
-        </button>
-        <button
-          type="button"
-          className={activeView === 'split' ? 'is-active' : ''}
-          title="Split"
-          onClick={() => setActiveView('split')}
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <rect x="3" y="4" width="18" height="16" rx="2" />
-            <path d="M12 4v16" />
-          </svg>
-        </button>
-        <button
-          type="button"
-          className={activeView !== 'chat' && editorPanel === 'files' && !editorSidebarCollapsed ? 'is-active' : ''}
+          className={editorPanel === 'files' && !editorSidebarCollapsed ? 'is-active' : ''}
           title="Files"
           onClick={toggleFilesPanel}
         >
@@ -908,7 +964,7 @@ export default function App() {
         </button>
         <button
           type="button"
-          className={activeView !== 'chat' && editorPanel === 'search' ? 'is-active' : ''}
+          className={editorPanel === 'search' ? 'is-active' : ''}
           title="Search"
           onClick={() => openEditorPanel('search')}
         >
@@ -919,7 +975,7 @@ export default function App() {
         </button>
         <button
           type="button"
-          className={`view-rail-git ${activeView !== 'chat' && editorPanel === 'git' ? 'is-active' : ''}`}
+          className={`view-rail-git ${editorPanel === 'git' ? 'is-active' : ''}`}
           title="Git"
           onClick={() => openEditorPanel('git')}
         >
@@ -975,17 +1031,14 @@ export default function App() {
       <div className="split-container" ref={splitContainerRef}>
       <div
         className="editor-pane"
-        style={{
-          display: activeView === 'editor' || activeView === 'split' ? undefined : 'none',
-          flex: activeView === 'split' ? `0 0 ${splitWidth * 100}%` : undefined,
-        }}
+        style={{ flex: `0 0 ${splitWidth * 100}%` }}
       >
         <EditorView
           fileAccessSettings={fileAccessSettings}
           onFileAccessSettingsChange={setFileAccessSettings}
           theme={theme}
           terminalEnabled={terminalSettings.enabled}
-          visible={activeView === 'editor' || activeView === 'split'}
+          visible
           openFolderSignal={openFolderSignal}
           panel={editorPanel}
           onPanelChange={setEditorPanel}
@@ -997,14 +1050,9 @@ export default function App() {
         />
       </div>
 
-      {activeView === 'split' && (
-        <div className="split-divider" onMouseDown={handleSplitDragStart} />
-      )}
+      <div className="split-divider" onMouseDown={handleSplitDragStart} />
 
-      <div
-        className="body"
-        style={{ display: activeView === 'chat' || activeView === 'split' ? undefined : 'none' }}
-      >
+      <div className="body">
         <ChatPanel
           messages={messages}
           messagesLoading={messagesLoading}
@@ -1018,6 +1066,11 @@ export default function App() {
           userDisplayName={settings?.username}
           onRequestApproveWrite={requestApproveWrite}
           onRejectWrite={handleRejectWrite}
+          pendingImages={pendingImages}
+          composerImageError={composerImageError}
+          onComposerPaste={handleComposerPaste}
+          onRemovePendingImage={removePendingImage}
+          visionSupported={visionSupported}
         />
       </div>
       </div>
