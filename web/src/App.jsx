@@ -835,7 +835,8 @@ export default function App() {
     <div className="app">
       {offline && !offlineDismissed && (
         <div className="offline-banner">
-          <span>Can't reach the fastllm backend — showing the last data that loaded.</span>
+          <span className="offline-banner-dot" aria-hidden="true" />
+          <span className="offline-banner-text">Can't reach the fastllm backend — showing the last data that loaded.</span>
           <button type="button" className="offline-banner-close" title="Dismiss" onClick={() => setOfflineDismissed(true)}>
             ✕
           </button>
