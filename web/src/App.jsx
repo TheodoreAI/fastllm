@@ -174,6 +174,14 @@ export default function App() {
   const [documents, setDocuments] = useState([])
   const [models, setModels] = useState([])
   const [model, setModel] = useModel()
+  // A composer image-attach rejection ("X doesn't support images") is
+  // specific to whichever model was selected at paste time — switching
+  // to a vision-capable model should drop it immediately rather than
+  // leaving a now-stale error sitting above the composer until the next
+  // paste attempt overwrites it.
+  useEffect(() => {
+    setComposerImageError('')
+  }, [model])
   const [skills, setSkills] = useState([])
   const [skillId, setSkillId] = useSkillId()
   const [skillFormOpen, setSkillFormOpen] = useState(false)
