@@ -24,7 +24,8 @@ import {
   browseForFolder,
   saveFileAccessSettings,
 } from '../api'
-import { languageExtensionFor } from '../editorLanguages'
+import { languageExtensionFor, languageNameFor } from '../editorLanguages'
+import { aiCompletionExtension } from '../aiCompletion'
 import { useEditorSidebarWidth } from '../useEditorSidebarWidth'
 import { useTerminalPanelHeight } from '../useTerminalPanelHeight'
 import FileTree from './FileTree'
@@ -188,6 +189,33 @@ export default function EditorView({
     refreshGitStatus()
     refreshBranches()
   }, [enabled])
+
+  // Git state also changes from outside this panel entirely — most
+  // commonly the user typing `git commit`/`git branch`/etc. directly into
+  // the Editor's own Terminal panel, but really any external tool could
+  // touch .git while fastllm is open. Rather than poll on a timer (which
+  // has an idle cost even when nothing changes, and up to a full interval
+  // of lag when something does), this subscribes to the backend's
+  // GET /api/editor/git/watch SSE stream — internal/chat.EditorGitWatch —
+  // which is itself backed by a real filesystem watcher on .git/HEAD,
+  // .git/refs, and .git/index (see internal/gitrepo.Watch), the same
+  // "notified, not polled" approach VS Code and other IDEs use for git
+  // status. Only subscribes while the git sub-panel is the one actually
+  // visible (no point refreshing status the user isn't looking at), and
+  // only while file access is enabled at all.
+  useEffect(() => {
+    if (!enabled || !visible || panel !== 'git') return
+    const source = new EventSource('/api/editor/git/watch')
+    source.addEventListener('changed', () => {
+      refreshGitStatus()
+      refreshBranches()
+    })
+    // EventSource retries on its own after a drop (e.g. the sandbox root
+    // changed in Settings, closing the stream server-side) — no manual
+    // reconnect logic needed here, same as the browser's default SSE
+    // behavior anywhere else.
+    return () => source.close()
+  }, [enabled, visible, panel])
 
   // Git's change count now surfaces as a badge on App.jsx's rail button
   // (see the Git button there) rather than only inside this component's
@@ -563,9 +591,20 @@ export default function EditorView({
     ],
     []
   )
+  // Rebuilt whenever openPath changes (new language label, and — more
+  // importantly — aiCompletionExtension's ViewPlugin.destroy() cancels
+  // any pending debounce/in-flight request for the file that was just
+  // closed, so switching files can't have a stale suggestion from the
+  // previous file arrive and get applied to the new one). Gated on
+  // canWrite the same way Save is — completion is pointless in a
+  // read-only file access configuration.
+  const aiCompletion = useMemo(
+    () => aiCompletionExtension(openPath ? languageNameFor(openPath) : '', canWrite),
+    [openPath, canWrite]
+  )
   const languageExtensions = useMemo(
-    () => (openPath ? [...languageExtensionFor(openPath), ...oxlintExtension] : []),
-    [openPath, oxlintExtension]
+    () => (openPath ? [...languageExtensionFor(openPath), ...oxlintExtension, ...aiCompletion] : []),
+    [openPath, oxlintExtension, aiCompletion]
   )
   const staged = gitStatus.filter((s) => s.staged)
   const unstaged = gitStatus.filter((s) => s.unstaged)

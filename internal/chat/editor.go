@@ -9,15 +9,21 @@
 package chat
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"path/filepath"
 	"sort"
+	"strings"
+	"time"
 
 	"fastllm/internal/gitrepo"
 	"fastllm/internal/lint"
+	"fastllm/internal/store"
+	"fastllm/internal/llm"
 )
 
 // editorTreeEntry is one file in the editor's file tree, relative to the
@@ -155,6 +161,136 @@ func (h *Handler) EditorSaveFile(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"path": req.Path, "saved": true, "diagnostics": diagnostics})
 }
 
+// editorCompleteTimeout bounds how long a single completion request may
+// run — this fires on a debounce timer while the user is actively
+// typing, so a slow/hung local model must not be allowed to pile up
+// requests or leave the editor waiting indefinitely for ghost text that
+// will be stale by the time it arrives.
+const editorCompleteTimeout = 8 * time.Second
+
+// editorCompletePrefixCap/editorCompleteSuffixCap bound how much
+// surrounding code is sent per request — enough for real local context
+// (the current function, nearby imports) without either blowing up
+// latency on a large file or costing meaningfully more than a single
+// short chat turn, since this fires on every pause in typing.
+const (
+	editorCompletePrefixCap = 4000
+	editorCompleteSuffixCap = 2000
+)
+
+type editorCompleteRequest struct {
+	Prefix   string `json:"prefix"`
+	Suffix   string `json:"suffix"`
+	Language string `json:"language"`
+}
+
+// EditorComplete returns a single inline code-completion suggestion —
+// the editor's "ghost text" as you type (see EditorView.jsx's
+// autocompletion wiring). Deliberately simple and fast rather than
+// running through the full chat pipeline: no conversation history, no
+// RAG retrieval, no tool-calling loop, no streaming — just one
+// non-streaming completion from a LOCAL model (the pinned
+// store.EditorSettings.CompletionModel if one's set, else
+// h.LLM.ChatModel() — see the completionModel lookup below), always
+// independent of whatever cloud/local model is selected in the chat
+// Model picker, since this fires on a debounce timer while the user is
+// actively typing and a cloud model would mean a real API call — and
+// real cost/latency/rate-limit exposure — on every pause. Uses
+// Router.Chat (non-streaming) rather than StreamChat since a single
+// short completion has nothing worth streaming token-by-token.
+func (h *Handler) EditorComplete(w http.ResponseWriter, r *http.Request) {
+	if !h.Files.Enabled() {
+		http.Error(w, "file access is not enabled", http.StatusForbidden)
+		return
+	}
+	var req editorCompleteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid completion request", http.StatusBadRequest)
+		return
+	}
+
+	prefix := req.Prefix
+	if len(prefix) > editorCompletePrefixCap {
+		prefix = prefix[len(prefix)-editorCompletePrefixCap:]
+	}
+	suffix := req.Suffix
+	if len(suffix) > editorCompleteSuffixCap {
+		suffix = suffix[:editorCompleteSuffixCap]
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), editorCompleteTimeout)
+	defer cancel()
+
+	// A pinned completion model (Settings → Model → "Completion model",
+	// store.EditorSettings.CompletionModel) always wins over the backend's
+	// default chat model — this is the whole point of the setting: a fast
+	// non-reasoning model for snappy ghost text, independent of whichever
+	// model chat is currently using. Always a bare local model name (the
+	// picker only ever offers local models — see EditorSettingsPanel.jsx),
+	// never a "provider:"-prefixed cloud model, since ghost text firing on
+	// every pause in typing must never become a cloud API call (see this
+	// handler's doc comment above).
+	completionModel := h.LLM.ChatModel()
+	if editorSettings, err := store.GetEditorSettings(h.DB); err == nil && editorSettings.CompletionModel != "" {
+		completionModel = editorSettings.CompletionModel
+	}
+
+	prompt := buildCompletionPrompt(prefix, suffix, req.Language)
+	resp, err := h.LLM.Chat(ctx, completionModel, []llm.Message{
+		{Role: "system", Content: completionSystemPrompt},
+		{Role: "user", Content: prompt},
+	}, nil, "")
+	if err != nil {
+		// A completion failing (model unreachable, timed out, etc.) is not
+		// something the editor should surface as an error banner — typing
+		// just continues without a suggestion, same as any IDE's
+		// autocomplete silently having nothing to offer. Empty completion,
+		// 200 OK, not an error status.
+		writeJSON(w, map[string]any{"completion": ""})
+		return
+	}
+	writeJSON(w, map[string]any{"completion": cleanCompletion(resp.Content)})
+}
+
+// completionSystemPrompt keeps the model from wrapping its answer in
+// markdown code fences or adding commentary — both would need stripping
+// before the raw text could be inserted into the editor, and a model
+// that ignores this instruction is exactly what cleanCompletion's fence
+// stripping is a backstop for.
+const completionSystemPrompt = "You are a code completion engine. Given code before and after the cursor, output ONLY the text that should be inserted at the cursor to continue it naturally. No explanation, no markdown code fences, no repeating the given code. Stop after a few lines or at the end of the current statement/block — do not write more than one function or a large chunk of unrelated code."
+
+func buildCompletionPrompt(prefix, suffix, language string) string {
+	lang := language
+	if lang == "" {
+		lang = "code"
+	}
+	if suffix == "" {
+		return fmt.Sprintf("Language: %s\n\nCode before the cursor:\n%s\n\nContinue from the cursor:", lang, prefix)
+	}
+	return fmt.Sprintf("Language: %s\n\nCode before the cursor:\n%s\n\nCode after the cursor:\n%s\n\nText to insert at the cursor:", lang, prefix, suffix)
+}
+
+// cleanCompletion strips markdown code fences/inline-code backticks a
+// model adds despite completionSystemPrompt's instruction not to — cheap
+// insurance since local models vary in how strictly they follow a system
+// prompt (observed live: qwen2.5-coder:7b wraps a short completion in
+// single backticks, e.g. "`a + b`", even though the prompt says not to
+// add markdown).
+func cleanCompletion(s string) string {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "```") {
+		if nl := strings.IndexByte(s, '\n'); nl != -1 {
+			s = s[nl+1:]
+		}
+		s = strings.TrimSuffix(strings.TrimSpace(s), "```")
+		return strings.TrimSpace(s)
+	}
+	if strings.HasPrefix(s, "`") && strings.HasSuffix(s, "`") && len(s) >= 2 {
+		s = strings.TrimSuffix(strings.TrimPrefix(s, "`"), "`")
+	}
+	return s
+}
+
 type editorDeleteRequest struct {
 	Path string `json:"path"`
 }
@@ -287,6 +423,62 @@ func (h *Handler) EditorGitStatus(w http.ResponseWriter, r *http.Request) {
 		statuses = []gitrepo.FileStatus{}
 	}
 	writeJSON(w, statuses)
+}
+
+// EditorGitWatch streams a "changed" SSE event every time something in
+// the sandboxed root's .git directory changes — a commit, branch switch,
+// staging, or any other update to HEAD/refs/the index, from any source
+// (this app's own git actions, a `git` command typed into the Terminal
+// panel, or an external tool touching the same repo). The frontend's git
+// panel subscribes to this instead of polling on a timer, matching how
+// desktop IDEs like VS Code pick up out-of-band git changes: a
+// filesystem watcher (see gitrepo.Watch) rather than a fixed-interval
+// refetch, so there's no cost while nothing is happening and no polling
+// lag when something does. The event carries no payload — like the rest
+// of this app's SSE endpoints, the client already knows how to refetch
+// (see EditorGitStatus/EditorGitBranches); this only tells it when to.
+func (h *Handler) EditorGitWatch(w http.ResponseWriter, r *http.Request) {
+	root, ok := h.editorRoot(w)
+	if !ok {
+		return
+	}
+	ctx := r.Context()
+	if !gitrepo.IsRepo(ctx, root) {
+		h.writeGitError(w, gitrepo.ErrNotARepo)
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	changes, stop, err := gitrepo.Watch(root)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer stop()
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case _, ok := <-changes:
+			if !ok {
+				return
+			}
+			fmt.Fprint(w, "event: changed\ndata: {}\n\n")
+			flusher.Flush()
+		}
+	}
 }
 
 // EditorGitDiff returns the diff for one file — worktree-vs-index by

@@ -53,3 +53,47 @@ export function languageExtensionFor(path) {
   const factory = ext ? EXTENSION_MAP[ext] : undefined
   return factory ? [factory()] : []
 }
+
+// LANGUAGE_NAMES maps an extension to a human-readable label — used only
+// to tell the AI completion backend (see aiCompletion.js) what language
+// it's completing, not by CodeMirror itself. Deliberately a separate,
+// smaller map from EXTENSION_MAP rather than deriving a name from the
+// CodeMirror language object: EXTENSION_MAP's factories return configured
+// LanguageSupport instances (e.g. javascript({jsx:true})), not a plain
+// name, and reverse-deriving "TypeScript" from that object is more
+// fragile than just writing the label once here.
+const LANGUAGE_NAMES = {
+  js: 'JavaScript',
+  jsx: 'JavaScript (JSX)',
+  mjs: 'JavaScript',
+  cjs: 'JavaScript',
+  ts: 'TypeScript',
+  tsx: 'TypeScript (TSX)',
+  py: 'Python',
+  md: 'Markdown',
+  markdown: 'Markdown',
+  mdx: 'Markdown',
+  css: 'CSS',
+  html: 'HTML',
+  htm: 'HTML',
+  json: 'JSON',
+  go: 'Go',
+  c: 'C',
+  h: 'C',
+  cc: 'C++',
+  cpp: 'C++',
+  hpp: 'C++',
+  rs: 'Rust',
+  yaml: 'YAML',
+  yml: 'YAML',
+  sql: 'SQL',
+  xml: 'XML',
+  svg: 'XML',
+}
+
+// languageNameFor returns a human-readable language name for a file
+// path, or '' for an unrecognized extension.
+export function languageNameFor(path) {
+  const ext = path.split('.').pop()?.toLowerCase()
+  return (ext && LANGUAGE_NAMES[ext]) || ''
+}

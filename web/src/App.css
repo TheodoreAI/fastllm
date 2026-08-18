@@ -1395,6 +1395,18 @@ body {
   opacity: 0.5;
 }
 
+.model-completion-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.model-completion-field > span {
+  font-size: 0.6875rem;
+  color: var(--text-faint);
+}
+
 .file-access-status {
   margin-top: 8px;
   width: 100%;
@@ -3110,6 +3122,17 @@ body {
 
 .editor-codemirror .cm-editor {
   height: 100%;
+}
+
+/* AI ghost-text completion (see aiCompletion.js) — a dimmed, non-selectable
+   inline suggestion after the cursor, matching the visual convention
+   Copilot/Cursor/etc. use so it reads as "not yet part of your code"
+   rather than as an actual character in the buffer. */
+.ai-ghost-text {
+  opacity: 0.5;
+  font-style: italic;
+  pointer-events: none;
+  user-select: none;
 }
 
 .editor-diff {
