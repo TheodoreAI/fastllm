@@ -331,6 +331,161 @@ html {
   --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.4);
 }
 
+:root[data-theme='dracula'] {
+  /* Dracula — the widely-ported "purple on near-black" editor/terminal
+     theme (background #282a36, the signature pink accent), one of the
+     most-installed themes across every major editor. */
+  --bg-window: #282a36;
+  --bg-titlebar: #21222c;
+  --bg-sidebar: #21222c;
+  --bg-sidebar-tint: rgba(40, 42, 54, 0.78);
+  --bg-panel: #343746;
+  --bg-chat: #282a36;
+  --bg-input: #44475a;
+  --bg-bubble: #44475a;
+  --bg-bubble-user: #ff79c6;
+
+  --border: rgba(248, 248, 242, 0.1);
+  --border-strong: rgba(248, 248, 242, 0.18);
+
+  --text: #f8f8f2;
+  --text-dim: #bfbfd9;
+  --text-faint: #6272a4;
+
+  --accent: #bd93f9;
+  --accent-contrast: #282a36;
+  --danger: #ff5555;
+  --success: #50fa7b;
+  --warning: #f1fa8c;
+
+  --shadow-window: none;
+  --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+:root[data-theme='gruvbox'] {
+  /* Gruvbox (dark) — retro, warm-toned "groove box" palette (dark0
+     background, cream foreground, muted earthy accents) popular in the
+     vim/terminal-multiplexer world for its low eye-strain contrast. */
+  --bg-window: #282828;
+  --bg-titlebar: #1d2021;
+  --bg-sidebar: #1d2021;
+  --bg-sidebar-tint: rgba(40, 40, 40, 0.78);
+  --bg-panel: #3c3836;
+  --bg-chat: #282828;
+  --bg-input: #504945;
+  --bg-bubble: #504945;
+  --bg-bubble-user: #d65d0e;
+
+  --border: rgba(235, 219, 178, 0.1);
+  --border-strong: rgba(235, 219, 178, 0.18);
+
+  --text: #ebdbb2;
+  --text-dim: #bdae93;
+  --text-faint: #928374;
+
+  --accent: #fabd2f;
+  --accent-contrast: #282828;
+  --danger: #fb4934;
+  --success: #b8bb26;
+  --warning: #fabd2f;
+
+  --shadow-window: none;
+  --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+:root[data-theme='tokyo-night'] {
+  /* Tokyo Night — the very popular VS Code/Neovim theme evoking Tokyo's
+     neon skyline at night: deep blue-black background, vivid
+     blue/purple accents against otherwise muted surfaces. */
+  --bg-window: #1a1b26;
+  --bg-titlebar: #16161e;
+  --bg-sidebar: #16161e;
+  --bg-sidebar-tint: rgba(26, 27, 38, 0.78);
+  --bg-panel: #24283b;
+  --bg-chat: #1a1b26;
+  --bg-input: #292e42;
+  --bg-bubble: #292e42;
+  --bg-bubble-user: #7aa2f7;
+
+  --border: rgba(169, 177, 214, 0.1);
+  --border-strong: rgba(169, 177, 214, 0.18);
+
+  --text: #c0caf5;
+  --text-dim: #9aa5ce;
+  --text-faint: #565f89;
+
+  --accent: #bb9af7;
+  --accent-contrast: #1a1b26;
+  --danger: #f7768e;
+  --success: #9ece6a;
+  --warning: #e0af68;
+
+  --shadow-window: none;
+  --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+:root[data-theme='one-dark'] {
+  /* One Dark — Atom's flagship theme (later ported everywhere, including
+     as VS Code's default dark theme's namesake): balanced blue-gray
+     background with a cool blue accent, comfortable neutral contrast. */
+  --bg-window: #282c34;
+  --bg-titlebar: #21252b;
+  --bg-sidebar: #21252b;
+  --bg-sidebar-tint: rgba(40, 44, 52, 0.78);
+  --bg-panel: #2c313a;
+  --bg-chat: #282c34;
+  --bg-input: #3a3f4b;
+  --bg-bubble: #3a3f4b;
+  --bg-bubble-user: #61afef;
+
+  --border: rgba(171, 178, 191, 0.1);
+  --border-strong: rgba(171, 178, 191, 0.18);
+
+  --text: #abb2bf;
+  --text-dim: #828a9a;
+  --text-faint: #5c6370;
+
+  --accent: #61afef;
+  --accent-contrast: #282c34;
+  --danger: #e06c75;
+  --success: #98c379;
+  --warning: #e5c07b;
+
+  --shadow-window: none;
+  --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+:root[data-theme='monokai'] {
+  /* Monokai — Wimer Hazenberg's iconic Sublime Text/TextMate theme: near-
+     black background with the unmistakable hot-pink/green/orange trio,
+     among the highest-contrast, most saturated editor themes ever made. */
+  --bg-window: #272822;
+  --bg-titlebar: #1e1f1a;
+  --bg-sidebar: #1e1f1a;
+  --bg-sidebar-tint: rgba(39, 40, 34, 0.78);
+  --bg-panel: #34352d;
+  --bg-chat: #272822;
+  --bg-input: #49483e;
+  --bg-bubble: #49483e;
+  --bg-bubble-user: #f92672;
+
+  --border: rgba(248, 248, 242, 0.1);
+  --border-strong: rgba(248, 248, 242, 0.18);
+
+  --text: #f8f8f2;
+  --text-dim: #c2c1bc;
+  --text-faint: #75715e;
+
+  --accent: #a6e22e;
+  --accent-contrast: #272822;
+  --danger: #f92672;
+  --success: #a6e22e;
+  --warning: #e6db74;
+
+  --shadow-window: none;
+  --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
 :root[data-theme-family='light'] .message.assistant {
   border: 1px solid var(--border);
 }

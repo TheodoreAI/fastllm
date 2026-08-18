@@ -16,6 +16,11 @@ export const THEMES = [
   { id: 'nord', label: 'Nord', family: 'dark' },
   { id: 'big-sur', label: 'Big Sur', family: 'light' },
   { id: 'catppuccin', label: 'Catppuccin', family: 'dark' },
+  { id: 'dracula', label: 'Dracula', family: 'dark' },
+  { id: 'gruvbox', label: 'Gruvbox', family: 'dark' },
+  { id: 'tokyo-night', label: 'Tokyo Night', family: 'dark' },
+  { id: 'one-dark', label: 'One Dark', family: 'dark' },
+  { id: 'monokai', label: 'Monokai', family: 'dark' },
 ]
 
 const THEME_IDS = THEMES.map((t) => t.id)
