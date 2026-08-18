@@ -18,6 +18,7 @@ import {
   unstageGitPaths,
   commitGit,
   pushGit,
+  pushSetUpstreamGit,
   fetchGitBranches,
   switchGitBranch,
   createGitBranch,
@@ -83,6 +84,13 @@ export default function EditorView({
   const [gitError, setGitError] = useState('')
   const [pushing, setPushing] = useState(false)
   const [pushStatus, setPushStatus] = useState('')
+  // True only for the one specific push failure with a single unambiguous
+  // fix (see internal/gitrepo.ErrNoUpstream) — shows a "Set upstream &
+  // push" button alongside the error instead of leaving the user to run
+  // the git command by hand in a terminal. Cleared on every new push
+  // attempt so a later, different failure doesn't keep showing a button
+  // for a problem that's no longer the one in front of them.
+  const [pushNeedsUpstream, setPushNeedsUpstream] = useState(false)
 
   const [branches, setBranches] = useState([])
   const [branchBusy, setBranchBusy] = useState(false)
@@ -554,15 +562,45 @@ export default function EditorView({
   // Push is a separate, explicit action from Commit — never fired
   // automatically after a commit. A plain `git push`: if the remote has
   // diverged, this fails and the error (surfaced via gitError) is shown
-  // as-is rather than silently force-pushing or resolving it any way.
+  // as-is rather than silently force-pushing or resolving it any way. The
+  // one exception is "this branch has never been pushed before" (no
+  // upstream configured) — the backend flags that specific, unambiguous
+  // case with { no_upstream: true } (see internal/chat.EditorGitPush), so
+  // this offers a "Set upstream & push" button rather than only showing
+  // the raw git error and leaving the fix to a terminal.
   async function handlePush() {
     setPushing(true)
     setGitError('')
     setPushStatus('')
+    setPushNeedsUpstream(false)
     try {
       const res = await pushGit()
-      if (!res.ok) throw new Error(await res.text())
+      if (!res.ok) {
+        const body = await res.json().catch(() => null)
+        if (body?.no_upstream) {
+          setGitError(body.error)
+          setPushNeedsUpstream(true)
+          return
+        }
+        throw new Error(body?.error ?? (await res.text().catch(() => res.statusText)))
+      }
       setPushStatus('Pushed.')
+    } catch (err) {
+      setGitError(`Couldn't push: ${err.message}`)
+    } finally {
+      setPushing(false)
+    }
+  }
+
+  async function handlePushSetUpstream() {
+    setPushing(true)
+    setGitError('')
+    setPushStatus('')
+    try {
+      const res = await pushSetUpstreamGit()
+      if (!res.ok) throw new Error(await res.text())
+      setPushNeedsUpstream(false)
+      setPushStatus('Pushed, and set as the upstream for this branch.')
     } catch (err) {
       setGitError(`Couldn't push: ${err.message}`)
     } finally {
@@ -812,6 +850,11 @@ export default function EditorView({
               <button type="button" className="btn-secondary" onClick={handlePush} disabled={pushing}>
                 {pushing ? 'Pushing…' : 'Push'}
               </button>
+              {pushNeedsUpstream && (
+                <button type="button" className="btn-primary" onClick={handlePushSetUpstream} disabled={pushing}>
+                  {pushing ? 'Pushing…' : 'Set upstream & push'}
+                </button>
+              )}
               {pushStatus && <span className="editor-push-status">{pushStatus}</span>}
             </div>
 

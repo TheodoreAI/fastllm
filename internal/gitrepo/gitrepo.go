@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -254,7 +255,43 @@ func Push(ctx context.Context, root string) (string, error) {
 	if !IsRepo(ctx, root) {
 		return "", ErrNotARepo
 	}
-	return run(ctx, root, "push")
+	out, err := run(ctx, root, "push")
+	if err != nil && strings.Contains(err.Error(), "has no upstream branch") {
+		// Wrap rather than replace: %w keeps errors.Is(err, ErrNoUpstream)
+		// working for the caller that wants to offer the "set upstream and
+		// push" fix, while %s keeps git's own full message (which names
+		// the exact branch and suggests the exact command) intact for
+		// anyone just displaying the error as-is.
+		return out, fmt.Errorf("%s: %w", err.Error(), ErrNoUpstream)
+	}
+	return out, err
+}
+
+// ErrNoUpstream means a plain Push failed specifically because the
+// current branch has never been pushed before and has no configured
+// upstream — the one Push failure mode with a single unambiguous fix
+// (set the upstream to origin/<branch>, the same remote/name a bare
+// `git push -u origin HEAD` would use), unlike a diverged-history
+// failure, which could mean several different things depending on why
+// the remote has commits this branch doesn't. Detected by matching
+// git's own message rather than parsing exit codes, since git doesn't
+// give this case a distinct one.
+var ErrNoUpstream = errors.New("gitrepo: current branch has no upstream")
+
+// PushSetUpstream runs `git push -u origin HEAD` — pushes the currently
+// checked-out branch and records it as tracking origin/<that branch>, so
+// a plain Push works from then on. HEAD (not a separately-looked-up
+// branch name) is what's pushed, so there's no window between reading
+// "what's the current branch" and actually pushing where a concurrent
+// checkout could push the wrong one. Only ever called from the editor's
+// "Set upstream & push" button, shown specifically when Push fails with
+// ErrNoUpstream — never automatically, same "caller decides, this
+// package never guesses" rule Push itself follows.
+func PushSetUpstream(ctx context.Context, root string) (string, error) {
+	if !IsRepo(ctx, root) {
+		return "", ErrNotARepo
+	}
+	return run(ctx, root, "push", "-u", "origin", "HEAD")
 }
 
 // SearchMatch is one line matched by Search.
