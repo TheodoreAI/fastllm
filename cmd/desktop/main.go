@@ -21,6 +21,8 @@ import (
 	"fastllm/internal/terminal"
 
 	"github.com/wailsapp/wails/v2"
+	"github.com/wailsapp/wails/v2/pkg/menu"
+	"github.com/wailsapp/wails/v2/pkg/menu/keys"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -98,6 +100,7 @@ func main() {
 		},
 		BackgroundColour: &options.RGBA{R: 30, G: 30, B: 30, A: 1},
 		Bind:             []interface{}{bridge},
+		Menu:             app.menu(),
 		OnStartup:        app.startup,
 		OnBeforeClose:    app.beforeClose,
 		OnShutdown:       app.shutdown,
@@ -138,6 +141,30 @@ type desktopApp struct {
 	ctx      context.Context
 	registry *terminal.Registry
 	handler  *chat.Handler
+}
+
+// menu builds fastllm's native Windows menu bar — just File → Open
+// Folder… for now. This runs as a real native menu (not an in-app
+// dropdown) because an in-app "File" button/dropdown, built the same way
+// as the working Chat/Editor/Split tabs right next to it, was reliably
+// unclickable specifically in the production build (worked fine under
+// `wails dev`, in a plain browser serving the same built assets, and by
+// every static check of the compiled JS/CSS — never isolated to a single
+// root cause, so this sidesteps the whole class of problem rather than
+// keep chasing it). The click handler can't call the folder-open flow
+// directly — that logic (browseForFolder → save settings → refresh
+// tree/git) lives in React state inside EditorView — so it emits a Wails
+// event instead and lets the frontend react.
+func (a *desktopApp) menu() *menu.Menu {
+	m := menu.NewMenu()
+	fileMenu := m.AddSubmenu("File")
+	fileMenu.AddText("Open Folder…", keys.CmdOrCtrl("o"), func(_ *menu.CallbackData) {
+		if a.ctx == nil {
+			return
+		}
+		wailsruntime.EventsEmit(a.ctx, "menu:open-folder")
+	})
+	return m
 }
 
 func (a *desktopApp) startup(ctx context.Context) {

@@ -100,6 +100,7 @@ export default function App() {
   const [sectionOrder, moveSection] = useSectionOrder(DEFAULT_SECTION_ORDER)
   const [sidebarCollapsed, setSidebarCollapsed] = useSidebarCollapsed()
   const [activeView, setActiveView] = useState('chat')
+  const [openFolderSignal, setOpenFolderSignal] = useState(0)
   const [splitWidth, setSplitWidth] = useSplitWidth()
   const splitContainerRef = useRef(null)
   const bottomRef = useRef(null)
@@ -121,6 +122,23 @@ export default function App() {
     fetchRagSettings().then(setRagSettings)
     fetchFileAccessSettings().then((settings) => setFileAccessSettings(settings ?? { root: '', read_enabled: false, write_enabled: false }))
     fetchTerminalSettings().then((settings) => setTerminalSettings(settings ?? { enabled: false }))
+  }, [])
+
+  // Native File → Open Folder… menu item (see cmd/desktop/main.go) has no
+  // direct line to React state, so it emits a Wails runtime event instead;
+  // window.runtime only exists in the desktop build, hence the isWails()
+  // guard — matches how the rest of this file feature-detects Wails (see
+  // api.js's isWails doc comment) rather than importing @wailsjs/runtime.
+  // Switches to the Editor tab (where the folder dialog's result — tree,
+  // git status/branches — is actually visible) and bumps openFolderSignal,
+  // which EditorView watches to re-run its own handleOpenFolder.
+  useEffect(() => {
+    if (!isWails()) return
+    const unsubscribe = window.runtime.EventsOn('menu:open-folder', () => {
+      setActiveView((v) => (v === 'chat' ? 'editor' : v))
+      setOpenFolderSignal((n) => n + 1)
+    })
+    return unsubscribe
   }, [])
 
   useEffect(() => {
@@ -620,6 +638,7 @@ export default function App() {
           theme={theme}
           terminalEnabled={terminalSettings.enabled}
           visible={activeView === 'editor' || activeView === 'split'}
+          openFolderSignal={openFolderSignal}
         />
       </div>
 
