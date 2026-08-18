@@ -226,7 +226,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	if effectiveModel == "" {
 		effectiveModel = h.LLM.ChatModel()
 	}
-	if h.Files.Enabled() && !llm.IsCloudModel(effectiveModel) && llm.SupportsTools(effectiveModel) {
+	if h.Files.Enabled() && llm.SupportsToolsForModel(effectiveModel) {
 		reads, writes, buildChecks, budgetExhausted := h.runFileTools(ctx, req.Model, &messages, normalizeThinkLevel(req.ThinkLevel))
 		for _, fr := range reads {
 			payload, _ := json.Marshal(fr)

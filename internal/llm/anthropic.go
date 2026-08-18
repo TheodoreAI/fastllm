@@ -205,10 +205,12 @@ type anthropicResponse struct {
 }
 
 // Chat sends a single non-streaming completion request and returns the
-// model's reply as plain text. Cloud providers don't participate in
-// fastllm's file-tool loop yet (see llm.SupportsTools), so unlike
-// Client.Chat this never needs to carry Tools or parse a tool call back
-// out of the response.
+// model's reply as plain text. Anthropic tool-calling isn't implemented
+// yet (see SupportsToolsForModel), so unlike Client.Chat/GeminiClient.Chat
+// this never needs to carry Tools or parse a tool call back out of the
+// response — Router.Chat never reaches this method with tools to pass
+// along, since SupportsToolsForModel already excludes "anthropic:"
+// models from the file-tool loop before it ever calls in.
 func (c *AnthropicClient) Chat(ctx context.Context, model string, messages []Message, thinkLevel string) (Message, error) {
 	body, err := json.Marshal(toAnthropicRequest(model, messages, false, thinkLevel))
 	if err != nil {

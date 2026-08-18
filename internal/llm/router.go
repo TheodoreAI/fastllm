@@ -103,15 +103,6 @@ func stripProviderPrefix(model string) (bare, provider string, ok bool) {
 	}
 }
 
-// IsCloudModel reports whether model names a configured cloud provider —
-// used by internal/chat.Handler to skip the file-tool loop entirely for
-// cloud models (see llm.SupportsTools's doc comment: cloud providers
-// don't participate in that loop yet).
-func IsCloudModel(model string) bool {
-	_, _, ok := stripProviderPrefix(model)
-	return ok
-}
-
 func (r *Router) StreamChat(ctx context.Context, model string, messages []Message, thinkLevel string, onToken func(string), onReasoning func(string)) error {
 	bare, provider, ok := stripProviderPrefix(model)
 	if !ok {
@@ -142,12 +133,41 @@ func (r *Router) StreamChat(ctx context.Context, model string, messages []Messag
 	return fmt.Errorf("llm: unknown provider for model %q", model)
 }
 
-// Chat is only ever reached for local models — internal/chat.Handler
-// gates its whole file-tool loop (the only caller of Client.Chat) behind
-// !llm.IsCloudModel, so a cloud model name here would indicate a caller
-// bug rather than a real runtime case.
+// Chat is the non-streaming, tool-capable half of the interface (see
+// StreamChat above) — internal/chat.Handler's runFileTools loop is the
+// only caller, used as a pre-flight step before the user-facing answer
+// streams. OpenAI's real hosted API already speaks the same tool-call
+// wire format Client.Chat implements (see OpenAIModels's doc comment), so
+// it's routed straight there with no translation needed, same as
+// StreamChat does. Anthropic tool-calling isn't implemented yet — see
+// llm.SupportsToolsForModel, which is what keeps internal/chat.Handler
+// from ever reaching this case for an "anthropic:" model in practice;
+// the error here is a backstop, not the primary gate.
 func (r *Router) Chat(ctx context.Context, model string, messages []Message, tools []Tool, thinkLevel string) (Message, error) {
-	return r.Local.Chat(ctx, model, messages, tools, thinkLevel)
+	bare, provider, ok := stripProviderPrefix(model)
+	if !ok {
+		return r.Local.Chat(ctx, model, messages, tools, thinkLevel)
+	}
+
+	r.mu.RLock()
+	clouds := r.clouds
+	r.mu.RUnlock()
+
+	switch provider {
+	case "openai":
+		if clouds.openai == nil {
+			return Message{}, fmt.Errorf("llm: OpenAI isn't configured — add an API key in Settings → Cloud providers")
+		}
+		return clouds.openai.Chat(ctx, bare, messages, tools, thinkLevel)
+	case "gemini":
+		if clouds.gemini == nil {
+			return Message{}, fmt.Errorf("llm: Gemini isn't configured — add an API key in Settings → Cloud providers")
+		}
+		return clouds.gemini.Chat(ctx, bare, messages, tools, thinkLevel)
+	case "anthropic":
+		return Message{}, fmt.Errorf("llm: file read/write tools aren't supported for Anthropic models yet")
+	}
+	return Message{}, fmt.Errorf("llm: unknown provider for model %q", model)
 }
 
 // Embed always goes to the local backend — cloud chat providers are
@@ -183,17 +203,20 @@ func (r *Router) ListModels(ctx context.Context) ([]Model, error) {
 	}
 	if clouds.anthropic != nil {
 		for _, name := range AnthropicModels {
-			out = append(out, Model{Name: AnthropicPrefix + name})
+			full := AnthropicPrefix + name
+			out = append(out, Model{Name: full, SupportsFileTools: SupportsToolsForModel(full)})
 		}
 	}
 	if clouds.openai != nil {
 		for _, name := range OpenAIModels {
-			out = append(out, Model{Name: OpenAIPrefix + name})
+			full := OpenAIPrefix + name
+			out = append(out, Model{Name: full, SupportsFileTools: SupportsToolsForModel(full)})
 		}
 	}
 	if clouds.gemini != nil {
 		for _, name := range GeminiModels {
-			out = append(out, Model{Name: GeminiPrefix + name})
+			full := GeminiPrefix + name
+			out = append(out, Model{Name: full, SupportsFileTools: SupportsToolsForModel(full)})
 		}
 	}
 	return out, nil

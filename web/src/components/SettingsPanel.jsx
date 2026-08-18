@@ -446,7 +446,7 @@ export default function SettingsPanel({
       <SubSection id="cloudProviders" label="Cloud providers" expanded={!!expanded.cloudProviders} onToggle={toggleSection}>
         <form onSubmit={handleSaveCloudProviders} className="rag-form">
           <p className="settings-hint">
-            Add your own API key for a cloud provider to use its models from the Model picker alongside your local models. Keys are stored on this machine and sent only to that provider. Cloud models don't yet support file read/write tools — those stay local-model-only for now.
+            Add your own API key for a cloud provider to use its models from the Model picker alongside your local models. Keys are stored on this machine and sent only to that provider. Gemini and OpenAI models support file read/write tools when file access is enabled below; Anthropic (Claude) models don't yet.
           </p>
           {[
             { id: 'anthropic', label: 'Anthropic (Claude)', configured: cloudProviderSettings?.anthropic_configured },

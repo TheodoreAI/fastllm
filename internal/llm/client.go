@@ -159,6 +159,26 @@ var toolCapableModelPrefixes = []string{
 	"gpt-oss",
 }
 
+// SupportsToolsForModel reports whether model (bare local name, or a
+// "provider:"-prefixed cloud model — see Router) can be offered file
+// read/write tools at all. Cloud providers each need their own tool-call
+// wire-format translation (see e.g. GeminiClient.Chat) — implemented for
+// Gemini and OpenAI (OpenAI's hosted API already speaks Client's tool
+// format natively) but not yet Anthropic, so an "anthropic:" model is
+// excluded here even though Claude models are generally excellent at
+// tool use — this is a "not implemented in fastllm yet" gate, not a
+// judgment about the model. Unlike local models (see SupportsTools's
+// allowlist below), a configured cloud provider needs no per-model
+// allowlist: the uncertainty SupportsTools guards against is whether a
+// given local model reliably emits real tool_calls at all, which doesn't
+// apply to hosted providers fastllm has implemented tool support for.
+func SupportsToolsForModel(model string) bool {
+	if _, provider, ok := stripProviderPrefix(model); ok {
+		return provider == "gemini" || provider == "openai"
+	}
+	return SupportsTools(model)
+}
+
 // SupportsTools reports whether model is on the allowlist of models
 // confirmed to reliably use tool_calls, so callers can decide whether to
 // offer file read/write tools at all.
