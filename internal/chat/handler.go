@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/user"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -883,6 +884,15 @@ const maxUploadSize = 25 << 20 // 25MB
 // UploadFile accepts one real file via multipart/form-data (field "file"),
 // extracting text server-side for PDFs and indexing it the same way as
 // pasted text. Used by the file picker and folder/drag-and-drop upload.
+//
+// An optional "path" field carries the file's folder-relative path (e.g.
+// "app/routes/home.tsx") for folder uploads, used as the stored filename
+// in place of the bare basename — this can't just be the multipart
+// filename field itself, since Go's mime/multipart deliberately runs that
+// through filepath.Base() while parsing (path-traversal hardening), so
+// any directory component in header.Filename is already gone by the time
+// it reaches this handler. Validated against traversal here because,
+// unlike header.Filename, this field isn't sanitized upstream.
 func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
 	if err := r.ParseMultipartForm(maxUploadSize); err != nil {
@@ -895,6 +905,16 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
+
+	filename := header.Filename
+	if p := strings.TrimSpace(r.FormValue("path")); p != "" {
+		clean := path.Clean(p)
+		if path.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, "../") {
+			http.Error(w, "invalid path", http.StatusBadRequest)
+			return
+		}
+		filename = clean
+	}
 
 	data, err := io.ReadAll(file)
 	if err != nil {
@@ -918,7 +938,7 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	n, err := h.indexText(r.Context(), header.Filename, text)
+	n, err := h.indexText(r.Context(), filename, text)
 	if err != nil {
 		writeIndexError(w, err)
 		return

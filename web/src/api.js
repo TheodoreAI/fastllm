@@ -87,15 +87,21 @@ export function indexDocument(filename, content) {
 // plain-browser build was never affected, since it always talks to a real
 // net/http listener).
 //
-// filename defaults to file.name (just the basename) but callers doing a
-// folder upload pass the full webkitRelativePath instead, so the stored
-// document filename carries its folder — that's what lets
-// KnowledgeBasePanel group the list by directory instead of showing a
-// flat pile of same-looking basenames (multiple index.ts, etc.).
-export async function uploadFile(file, filename = file.name) {
+// relativePath, when given (folder uploads pass webkitRelativePath), is
+// sent as a separate "path" field rather than as the multipart filename
+// itself — Go's mime/multipart runs the filename field through
+// filepath.Base() while parsing (path-traversal hardening on their end),
+// so any '/' in it is silently dropped before the handler ever sees it.
+// The server prefers this field when present (see UploadFile in
+// internal/chat/handler.go), which is what lets the stored document
+// filename carry its folder — KnowledgeBasePanel groups the list by
+// directory instead of showing a flat pile of same-looking basenames
+// (multiple index.ts, etc.).
+export async function uploadFile(file, relativePath) {
   const origin = await apiOrigin()
   const form = new FormData()
-  form.append('file', file, filename)
+  form.append('file', file, file.name)
+  if (relativePath) form.append('path', relativePath)
   return fetch(`${origin}/api/documents/upload`, { method: 'POST', body: form })
 }
 
