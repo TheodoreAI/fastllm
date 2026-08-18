@@ -90,6 +90,37 @@ function isInExcludedDir(relativePath) {
   return segments.some((segment) => UPLOAD_EXCLUDED_DIRS.has(segment))
 }
 
+// Lockfiles are the single worst case for folder upload: a single
+// package-lock.json can be several hundred KB of near-random dependency
+// hashes, which at the default 800-character chunk size chunks into the
+// hundreds — each chunk needs its own sequential embedding call (see
+// indexText in internal/chat/handler.go), so one lockfile can dominate an
+// entire folder upload's total time while contributing nothing anyone
+// would ever semantically search for. Matched by exact filename rather
+// than extension, since most of these are .json/.lock/.toml — formats
+// that are otherwise perfectly legitimate to index.
+const UPLOAD_EXCLUDED_FILENAMES = new Set([
+  'package-lock.json',
+  'yarn.lock',
+  'pnpm-lock.yaml',
+  'bun.lockb',
+  'bun.lock',
+  'go.sum',
+  'Cargo.lock',
+  'poetry.lock',
+  'Pipfile.lock',
+  'composer.lock',
+  'mix.lock',
+  'Gemfile.lock',
+  'pubspec.lock', // Dart/Flutter
+  'stack.yaml.lock', // Haskell
+  'cabal.project.freeze', // Haskell
+])
+
+function isExcludedFilename(filename) {
+  return UPLOAD_EXCLUDED_FILENAMES.has(filename)
+}
+
 const DEFAULT_SECTION_ORDER = ['conversations', 'model', 'skills', 'knowledge']
 
 const SECTION_LABELS = {
@@ -487,6 +518,12 @@ export default function App() {
       // isInExcludedDir would never match there anyway, but relativeLabel
       // makes the intent explicit rather than relying on that being empty.
       if (relativeLabel && isInExcludedDir(label)) {
+        continue
+      }
+      // Applies to the flat picker too, not just folder uploads — someone
+      // multi-selecting files by hand is just as unlikely to want a
+      // lockfile semantically indexed as someone uploading a whole folder.
+      if (isExcludedFilename(file.name)) {
         continue
       }
       if (!UPLOAD_FILE_PATTERN.test(file.name)) {
