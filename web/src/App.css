@@ -108,6 +108,12 @@ html {
   --success: #4ee44e;
   --warning: #ffd23f;
 
+  /* Sharp, undecorated corners — accessibility themes favor crisp,
+     unambiguous edges over softening. */
+  --radius-window: 0px;
+  --radius: 0px;
+  --radius-sm: 0px;
+
   --shadow-window: none;
   --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.6);
 }
@@ -139,6 +145,11 @@ html {
   --danger: #c1442e;
   --success: #4f7942;
   --warning: #b8860b;
+
+  /* Softer, book-like corners. */
+  --radius-window: 6px;
+  --radius: 6px;
+  --radius-sm: 4px;
 
   --shadow-window: none;
   --shadow-overlay: 0 8px 24px rgba(74, 56, 38, 0.18);
@@ -201,6 +212,11 @@ html {
   --success: #4caf50;
   --warning: #efb73e;
 
+  /* Yaru (Ubuntu's GTK theme) leans noticeably rounded. */
+  --radius-window: 8px;
+  --radius: 8px;
+  --radius-sm: 6px;
+
   --shadow-window: none;
   --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.45);
 }
@@ -233,6 +249,11 @@ html {
   --success: #859900;
   --warning: #b58900;
 
+  /* Terminal/vim heritage — sharp, minimal corners. */
+  --radius-window: 2px;
+  --radius: 2px;
+  --radius-sm: 1px;
+
   --shadow-window: none;
   --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.4);
 }
@@ -264,15 +285,20 @@ html {
   --success: #a3be8c;
   --warning: #ebcb8b;
 
+  /* Nord's own design language is minimal and mostly square. */
+  --radius-window: 2px;
+  --radius: 2px;
+  --radius-sm: 1px;
+
   --shadow-window: none;
   --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.4);
 }
 
 :root[data-theme='big-sur'] {
   /* macOS Big Sur — the modern flat macOS look introduced in 11.0: crisp
-     white/light-gray surfaces, systemBlue accent, softer corner radii in
-     spirit (radius tokens stay shared across themes, see :root above) —
-     the lightest, airiest theme in this set. */
+     white/light-gray surfaces, systemBlue accent, and the soft
+     "continuous corner" radius macOS is known for (see --radius-window
+     etc. below) — the lightest, airiest theme in this set. */
   --bg-window: #f5f5f7;
   --bg-titlebar: #ececef;
   --bg-sidebar: #efeff2;
@@ -295,6 +321,10 @@ html {
   --danger: #ff3b30;
   --success: #28cd41;
   --warning: #ff9500;
+
+  --radius-window: 10px;
+  --radius: 10px;
+  --radius-sm: 6px;
 
   --shadow-window: none;
   --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.14);
@@ -327,6 +357,11 @@ html {
   --success: #a6e3a1;
   --warning: #f9e2af;
 
+  /* Catppuccin's community styling leans soft and rounded. */
+  --radius-window: 8px;
+  --radius: 8px;
+  --radius-sm: 5px;
+
   --shadow-window: none;
   --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.4);
 }
@@ -357,6 +392,10 @@ html {
   --danger: #ff5555;
   --success: #50fa7b;
   --warning: #f1fa8c;
+
+  --radius-window: 4px;
+  --radius: 4px;
+  --radius-sm: 3px;
 
   --shadow-window: none;
   --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.45);
@@ -389,6 +428,11 @@ html {
   --success: #b8bb26;
   --warning: #fabd2f;
 
+  /* Retro/blocky — sharp corners to match Gruvbox's terminal roots. */
+  --radius-window: 1px;
+  --radius: 1px;
+  --radius-sm: 1px;
+
   --shadow-window: none;
   --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.4);
 }
@@ -419,6 +463,10 @@ html {
   --danger: #f7768e;
   --success: #9ece6a;
   --warning: #e0af68;
+
+  --radius-window: 5px;
+  --radius: 5px;
+  --radius-sm: 3px;
 
   --shadow-window: none;
   --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.45);
@@ -451,6 +499,11 @@ html {
   --success: #98c379;
   --warning: #e5c07b;
 
+  /* Atom's own UI chrome was fairly sharp-edged. */
+  --radius-window: 3px;
+  --radius: 3px;
+  --radius-sm: 2px;
+
   --shadow-window: none;
   --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.4);
 }
@@ -481,6 +534,11 @@ html {
   --danger: #f92672;
   --success: #a6e22e;
   --warning: #e6db74;
+
+  /* Sublime Text's classic UI is sharp and minimal. */
+  --radius-window: 2px;
+  --radius: 2px;
+  --radius-sm: 1px;
 
   --shadow-window: none;
   --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.45);
