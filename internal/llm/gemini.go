@@ -11,14 +11,30 @@ import (
 	"time"
 )
 
-// GeminiModels lists the Gemini models offered in the model picker when a
-// Gemini API key is configured — see AnthropicModels's doc comment for
-// why this is a fixed list rather than a live query.
+// GeminiModels lists the Gemini/Gemma chat models offered in the model
+// picker when a Gemini API key is configured — see AnthropicModels's doc
+// comment for why this is a fixed list rather than a live query. Confirmed
+// against a real key's ListModels response (2026-08) rather than
+// guessed — that response also included several TTS/image/video/robotics/
+// research preview models, deliberately left out here since they aren't
+// plain chat models. The whole 2.5 generation was dropped after Google's
+// API started rejecting gemini-2.5-flash for this key with "no longer
+// available to new users... use models/gemini-3.6-flash" — the
+// "-latest" aliases below exist specifically so this list doesn't need
+// hand-updating every time Google rotates which dated snapshot is
+// current; the explicit 3.x versions are kept alongside them only as a
+// pinned fallback. Includes the Gemma 4 open-weight models (served
+// through the same Gemini API, on the same free tier as the hosted Gemini
+// models) alongside the hosted Gemini models themselves.
 var GeminiModels = []string{
-	"gemini-3-pro",
-	"gemini-3-flash",
-	"gemini-2.5-pro",
-	"gemini-2.5-flash",
+	"gemini-pro-latest",
+	"gemini-flash-latest",
+	"gemini-flash-lite-latest",
+	"gemini-3.6-flash",
+	"gemini-3.5-flash",
+	"gemini-3.1-pro-preview",
+	"gemma-4-31b-it",
+	"gemma-4-26b-a4b-it",
 }
 
 // GeminiClient talks to Google's Generative Language API
@@ -68,8 +84,13 @@ type geminiRequest struct {
 // contents/systemInstruction shape. Gemini uses "model" (not
 // "assistant") as the assistant role name, and — like Anthropic — expects
 // a single system instruction rather than a system-role message
-// interleaved into the turn sequence.
-func toGeminiRequest(messages []Message, thinkLevel string) geminiRequest {
+// interleaved into the turn sequence. model selects whether a
+// thinkingConfig is included at all: it's a hosted-Gemini-only feature,
+// not part of the open-weight Gemma models also served through this same
+// API (see GeminiModels) — sending it for a "gemma-*" model risks the API
+// rejecting the request over an unrecognized field, so it's left off
+// entirely rather than assuming the API will just ignore it.
+func toGeminiRequest(model string, messages []Message, thinkLevel string) geminiRequest {
 	var systemParts []geminiPart
 	contents := make([]geminiContent, 0, len(messages))
 	for _, m := range messages {
@@ -88,7 +109,7 @@ func toGeminiRequest(messages []Message, thinkLevel string) geminiRequest {
 	if len(systemParts) > 0 {
 		req.SystemInstruction = &geminiSystemInstruction{Parts: systemParts}
 	}
-	if thinkLevel != "" {
+	if thinkLevel != "" && !strings.HasPrefix(model, "gemma-") {
 		budget := map[string]int{"low": 1024, "medium": 4096, "high": 16384}[thinkLevel]
 		if budget > 0 {
 			req.GenerationConfig = &geminiGenerationConfig{
@@ -132,7 +153,7 @@ type geminiStreamChunk struct {
 // clients'. A part is reasoning text (not the visible answer) when its
 // "thought" flag is set.
 func (c *GeminiClient) StreamChat(ctx context.Context, model string, messages []Message, thinkLevel string, onToken func(string), onReasoning func(string)) error {
-	body, err := json.Marshal(toGeminiRequest(messages, thinkLevel))
+	body, err := json.Marshal(toGeminiRequest(model, messages, thinkLevel))
 	if err != nil {
 		return err
 	}
@@ -200,7 +221,7 @@ type geminiResponse struct {
 // model's reply as plain text — see AnthropicClient.Chat's doc comment
 // for why this never needs to carry tool schemas.
 func (c *GeminiClient) Chat(ctx context.Context, model string, messages []Message, thinkLevel string) (Message, error) {
-	body, err := json.Marshal(toGeminiRequest(messages, thinkLevel))
+	body, err := json.Marshal(toGeminiRequest(model, messages, thinkLevel))
 	if err != nil {
 		return Message{}, err
 	}
