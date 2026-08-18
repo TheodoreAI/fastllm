@@ -1619,6 +1619,35 @@ body {
   font-size: 0.6875rem;
 }
 
+/* Folder grouping (KnowledgeBasePanel.jsx) — reuses FileTree.jsx's
+   .tree-row/.tree-chevron/.tree-icon/.tree-label classes for the group
+   header so a folder upload's collapsed groups look like the editor's
+   file tree, but overrides the header's background/radius/padding to
+   match .doc-item's card look instead of the tree's flush rows. */
+.doc-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.doc-group-header {
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-panel), var(--text) 6%);
+  padding: 7px 8px;
+}
+
+.doc-group-header .doc-count {
+  margin-left: auto;
+}
+
+.doc-group-list {
+  list-style: none;
+  margin: 4px 0 0 20px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 /* ---------- conversations ---------- */
 
 .conversation-list {

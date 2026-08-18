@@ -79,10 +79,30 @@ export function indexDocument(filename, content) {
 
 // Uploads one real file (used for PDFs and any file coming from a folder
 // drop) via multipart/form-data so the server can extract text itself.
-export function uploadFile(file) {
+// Routed through apiOrigin() for the same reason streamChat is: Wails'
+// in-process AssetServer bridge (see cmd/desktop/main.go) doesn't handle
+// multipart/binary POST bodies reliably — file uploads over it can arrive
+// truncated or empty server-side, which is what surfaced as every folder
+// upload's files being wrongly flagged "empty" in the desktop build (the
+// plain-browser build was never affected, since it always talks to a real
+// net/http listener).
+//
+// relativePath, when given (folder uploads pass webkitRelativePath), is
+// sent as a separate "path" field rather than as the multipart filename
+// itself — Go's mime/multipart runs the filename field through
+// filepath.Base() while parsing (path-traversal hardening on their end),
+// so any '/' in it is silently dropped before the handler ever sees it.
+// The server prefers this field when present (see UploadFile in
+// internal/chat/handler.go), which is what lets the stored document
+// filename carry its folder — KnowledgeBasePanel groups the list by
+// directory instead of showing a flat pile of same-looking basenames
+// (multiple index.ts, etc.).
+export async function uploadFile(file, relativePath) {
+  const origin = await apiOrigin()
   const form = new FormData()
   form.append('file', file, file.name)
-  return fetch('/api/documents/upload', { method: 'POST', body: form })
+  if (relativePath) form.append('path', relativePath)
+  return fetch(`${origin}/api/documents/upload`, { method: 'POST', body: form })
 }
 
 export function clearKnowledgeBase() {
