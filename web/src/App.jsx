@@ -20,6 +20,7 @@ import { useSidebarCollapsed } from './useSidebarCollapsed'
 import { useEditorSidebarCollapsed } from './useEditorSidebarCollapsed'
 import { useTerminalCollapsed } from './useTerminalCollapsed'
 import { useSplitWidth } from './useSplitWidth'
+import { useConnectionStatus } from './useConnectionStatus'
 import {
   fetchConversations,
   fetchMessages,
@@ -161,6 +162,12 @@ export default function App() {
   const [skillPrompt, setSkillPrompt] = useState('')
   const [skillToDelete, setSkillToDelete] = useState(null)
   const [skillError, setSkillError] = useState('')
+  // Holds the pending write awaiting confirmation before it's actually
+  // written to disk — unlike Reject (which only discards a proposal),
+  // Approve touches a real file with no undo, so it gets the same
+  // confirm-modal gate as conversation/skill delete rather than
+  // executing on a single click.
+  const [writeToConfirm, setWriteToConfirm] = useState(null)
   const [conversations, setConversations] = useState([])
   const [conversationId, setConversationId] = useState(null)
   const [conversationToDelete, setConversationToDelete] = useState(null)
@@ -181,6 +188,7 @@ export default function App() {
   const [terminalSettings, setTerminalSettings] = useState({ enabled: false })
   const [thinkLevel, setThinkLevel] = useState('medium')
   const [theme, setTheme] = useTheme()
+  const offline = useConnectionStatus()
   const [fontFamily, setFontFamily] = useFontFamily()
   const [fontScale, setFontScale] = useFontScale()
   const [sectionOrder, moveSection] = useSectionOrder(DEFAULT_SECTION_ORDER)
@@ -497,7 +505,7 @@ export default function App() {
       setDocStatus(`Indexed ${data.chunks} chunk(s) from ${filename}.`)
       refreshDocuments()
     } catch (err) {
-      setDocStatus(`Error indexing ${filename}: ${err.message}`)
+      setDocStatus(`Couldn't index ${filename}: ${err.message}`)
     }
   }
 
@@ -526,7 +534,7 @@ export default function App() {
       refreshDocuments()
       return { status: 'indexed' }
     } catch (err) {
-      setDocStatus(`Error indexing ${label}: ${err.message}`)
+      setDocStatus(`Couldn't index ${label}: ${err.message}`)
       return { status: 'error', message: err.message }
     }
   }
@@ -606,7 +614,7 @@ export default function App() {
       setDocStatus('Knowledge base cleared.')
       refreshDocuments()
     } catch (err) {
-      setDocStatus(`Error clearing knowledge base: ${err.message}`)
+      setDocStatus(`Couldn't clear the knowledge base: ${err.message}`)
       throw err
     }
   }
@@ -647,6 +655,7 @@ export default function App() {
   async function createSkill(e) {
     e.preventDefault()
     if (!skillName.trim() || !skillPrompt.trim()) return
+    setSkillError('')
     try {
       const res = await apiCreateSkill(skillName, skillPrompt)
       if (!res.ok) throw new Error(await res.text())
@@ -654,8 +663,11 @@ export default function App() {
       setSkillPrompt('')
       setSkillFormOpen(false)
       refreshSkills()
-    } catch {
-      // Best-effort: leave the form open with the user's input intact.
+    } catch (err) {
+      // Leaves the form open with the user's input intact, but now says
+      // why instead of just doing nothing — same phrasing family as the
+      // delete-skill error a few lines below.
+      setSkillError(`Couldn't create this skill: ${err.message}`)
     }
   }
 
@@ -681,10 +693,14 @@ export default function App() {
     try {
       const blob = await captureScreenshot()
       setScreenshotBlob(blob)
-    } catch {
-      // Nothing to recover into beyond leaving the preview modal unopened
-      // — mirrors this codebase's other fetch-failure handling (e.g.
-      // confirmQuit above), no separate error UI for a capture failure.
+    } catch (err) {
+      // A native alert rather than an inline status line: this button
+      // lives in the icon-only view-rail with no room for status text
+      // nearby, and the failure needs to be visible regardless of which
+      // tab (Chat/Editor) is currently active — same reasoning EditorView
+      // uses window.confirm() for its own dialogs rather than inventing
+      // a toast system for one-off cases.
+      alert(`Couldn't capture a screenshot: ${err.message}`)
     } finally {
       setCapturingScreenshot(false)
     }
@@ -720,7 +736,25 @@ export default function App() {
     )
   }
 
-  async function handleApproveWrite(id) {
+  // Only an overwrite (file_exists) goes through the confirm modal — that's
+  // the one case with real prior content to lose and no undo. Creating a
+  // brand-new file has nothing to overwrite, so it stays a single click,
+  // same risk level as it always was.
+  function requestApproveWrite(write) {
+    if (write.file_exists) {
+      setWriteToConfirm(write)
+    } else {
+      runApproveWrite(write.id)
+    }
+  }
+
+  async function confirmApproveWrite() {
+    const id = writeToConfirm.id
+    setWriteToConfirm(null)
+    await runApproveWrite(id)
+  }
+
+  async function runApproveWrite(id) {
     updatePendingWrite(id, { status: 'applying' })
     try {
       const res = await approveWrite(id)
@@ -755,6 +789,9 @@ export default function App() {
 
   return (
     <div className="app">
+      {offline && (
+        <div className="offline-banner">Can't reach the fastllm backend — showing the last data that loaded.</div>
+      )}
       <nav className="view-rail">
         <button
           type="button"
@@ -898,7 +935,7 @@ export default function App() {
           onSendMessage={sendMessage}
           onStop={stopStreaming}
           userDisplayName={settings?.username}
-          onApproveWrite={handleApproveWrite}
+          onRequestApproveWrite={requestApproveWrite}
           onRejectWrite={handleRejectWrite}
         />
       </div>
@@ -1008,6 +1045,16 @@ export default function App() {
           confirmLabel="Delete"
           onCancel={() => setSkillToDelete(null)}
           onConfirm={confirmDeleteSkill}
+        />
+      )}
+
+      {writeToConfirm != null && (
+        <ConfirmDeleteModal
+          heading="Overwrite this file?"
+          description={`This overwrites "${writeToConfirm.path}" on disk with the version shown above. This can't be undone.`}
+          confirmLabel="Overwrite"
+          onCancel={() => setWriteToConfirm(null)}
+          onConfirm={confirmApproveWrite}
         />
       )}
 

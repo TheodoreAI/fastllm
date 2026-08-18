@@ -150,7 +150,9 @@ export default function KnowledgeBasePanel({
         </div>
       )}
 
-      {docStatus && <p className="status">{docStatus}</p>}
+      {docStatus && (
+        <p className={`status ${docStatus.startsWith("Couldn't") ? 'status-error' : ''}`}>{docStatus}</p>
+      )}
 
       {uploadErrors.length > 0 && (
         <div className="upload-errors">
