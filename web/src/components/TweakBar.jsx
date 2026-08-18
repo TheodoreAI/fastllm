@@ -23,9 +23,9 @@ import {
 // Every custom-property override below therefore carries !important.
 //
 // The panel-open toggle lives in App.jsx's own view-rail (a plain SVG
-// button matching Chat/Editor/Split/Search/Git), not inside this
-// component — `open`/`onToggle` are lifted up so App.jsx can own that
-// button the same way it owns every other rail button's active state.
+// button matching Files/Search/Git), not inside this component —
+// `open`/`onToggle` are lifted up so App.jsx can own that button the
+// same way it owns every other rail button's active state.
 export default function TweakBar({ open, onToggle }) {
   const [state, setState] = useState(() => loadInitialState())
   const styleTagRef = useRef(null)

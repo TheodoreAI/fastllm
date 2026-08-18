@@ -23,7 +23,6 @@ import { useSplitWidth } from './useSplitWidth'
 import { useConnectionStatus } from './useConnectionStatus'
 import { useModel } from './useModel'
 import { useSkillId } from './useSkillId'
-import { useActiveView } from './useActiveView'
 import { useEditorPanel } from './useEditorPanel'
 import {
   fetchConversations,
@@ -232,7 +231,6 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useSidebarCollapsed()
   const [editorSidebarCollapsed, setEditorSidebarCollapsed] = useEditorSidebarCollapsed()
   const [terminalCollapsed, setTerminalCollapsed] = useTerminalCollapsed()
-  const [activeView, setActiveView] = useActiveView()
   const [tweakBarOpen, setTweakBarOpen] = useState(false)
   const [openFolderSignal, setOpenFolderSignal] = useState(0)
   const [editorPanel, setEditorPanel] = useEditorPanel()
@@ -269,13 +267,12 @@ export default function App() {
   // window.runtime only exists in the desktop build, hence the isWails()
   // guard — matches how the rest of this file feature-detects Wails (see
   // api.js's isWails doc comment) rather than importing @wailsjs/runtime.
-  // Switches to the Editor tab (where the folder dialog's result — tree,
-  // git status/branches — is actually visible) and bumps openFolderSignal,
-  // which EditorView watches to re-run its own handleOpenFolder.
+  // Bumps openFolderSignal, which EditorView watches to re-run its own
+  // handleOpenFolder — the editor pane is always visible (split is the
+  // only layout), so there's no view to switch into first.
   useEffect(() => {
     if (!isWails()) return
     const unsubscribe = window.runtime.EventsOn('menu:open-folder', () => {
-      setActiveView((v) => (v === 'chat' ? 'editor' : v))
       setOpenFolderSignal((n) => n + 1)
     })
     return unsubscribe
@@ -293,26 +290,24 @@ export default function App() {
     return unsubscribe
   }, [])
 
-  // VS Code-style global panel shortcuts: Ctrl+B (Files panel) and Ctrl+J
-  // (terminal) only mean something while the Editor is showing, so both
-  // also switch into it — mirroring how VS Code's own Ctrl+B works from
-  // anywhere in the window, not just while its explorer is already
-  // focused. Ctrl+Shift+M toggles the right-hand model-settings panel;
-  // plain Ctrl+M was avoided as a pairing with Ctrl+B/Ctrl+J since VS
-  // Code itself reserves unshifted Ctrl+M for focus-tabbing, and Ctrl+C
-  // (as literally requested) was ruled out because it's the OS copy
-  // shortcut used throughout chat, the code editor, and the terminal.
+  // VS Code-style global panel shortcuts: Ctrl+B toggles the Files
+  // sidebar, Ctrl+J toggles the terminal — both panels are always part
+  // of the (permanently split) layout, so this is a plain toggle with no
+  // view to switch into first. Ctrl+Shift+M toggles the right-hand
+  // model-settings panel; plain Ctrl+M was avoided as a pairing with
+  // Ctrl+B/Ctrl+J since VS Code itself reserves unshifted Ctrl+M for
+  // focus-tabbing, and Ctrl+C (as literally requested) was ruled out
+  // because it's the OS copy shortcut used throughout chat, the code
+  // editor, and the terminal.
   useEffect(() => {
     function handleKeyDown(e) {
       if (!(e.ctrlKey || e.metaKey)) return
       const key = e.key.toLowerCase()
       if (key === 'b' && !e.shiftKey) {
         e.preventDefault()
-        setActiveView((v) => (v === 'chat' ? 'editor' : v))
         setEditorSidebarCollapsed((c) => !c)
       } else if (key === 'j' && !e.shiftKey) {
         e.preventDefault()
-        setActiveView((v) => (v === 'chat' ? 'editor' : v))
         setTerminalCollapsed((c) => !c)
       } else if (key === 'm' && e.shiftKey) {
         e.preventDefault()
@@ -324,29 +319,24 @@ export default function App() {
   }, [setEditorSidebarCollapsed, setTerminalCollapsed, setSidebarCollapsed])
 
   // Search and Git live on the main rail (see the Search/Git buttons
-  // below) rather than as tabs inside EditorView's own sidebar, so
-  // picking either one needs to both switch into a view that actually
-  // renders EditorView and select the panel within it — a plain
-  // setEditorPanel call would do nothing if the user is still on Chat.
+  // below) rather than as tabs inside EditorView's own sidebar.
   function openEditorPanel(panel) {
-    setActiveView((v) => (v === 'chat' ? 'editor' : v))
     setEditorPanel(panel)
   }
 
   // The Files rail button mirrors VS Code's Explorer icon: clicking it
   // while Files is already the visible panel collapses the sidebar
   // (a second click re-expands, same toggle Ctrl+B already does — see
-  // the keydown handler above); clicking it from anywhere else switches
-  // into a real view, selects the Files panel, and makes sure the
-  // sidebar is actually expanded to show it, rather than leaving it
-  // collapsed from an earlier Ctrl+B/manual collapse.
+  // the keydown handler above); clicking it from anywhere else selects
+  // the Files panel and makes sure the sidebar is actually expanded to
+  // show it, rather than leaving it collapsed from an earlier
+  // Ctrl+B/manual collapse.
   function toggleFilesPanel() {
-    const alreadyShowingFiles = activeView !== 'chat' && editorPanel === 'files' && !editorSidebarCollapsed
+    const alreadyShowingFiles = editorPanel === 'files' && !editorSidebarCollapsed
     if (alreadyShowingFiles) {
       setEditorSidebarCollapsed(true)
       return
     }
-    setActiveView((v) => (v === 'chat' ? 'editor' : v))
     setEditorPanel('files')
     setEditorSidebarCollapsed(false)
   }
@@ -952,39 +942,7 @@ export default function App() {
       <nav className="view-rail">
         <button
           type="button"
-          className={activeView === 'chat' ? 'is-active' : ''}
-          title="Chat"
-          onClick={() => setActiveView('chat')}
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M4 4h16v12H8l-4 4V4Z" />
-          </svg>
-        </button>
-        <button
-          type="button"
-          className={activeView === 'editor' ? 'is-active' : ''}
-          title="Editor"
-          onClick={() => setActiveView('editor')}
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9l-6-6Z" />
-            <path d="M14 3v6h6" />
-          </svg>
-        </button>
-        <button
-          type="button"
-          className={activeView === 'split' ? 'is-active' : ''}
-          title="Split"
-          onClick={() => setActiveView('split')}
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <rect x="3" y="4" width="18" height="16" rx="2" />
-            <path d="M12 4v16" />
-          </svg>
-        </button>
-        <button
-          type="button"
-          className={activeView !== 'chat' && editorPanel === 'files' && !editorSidebarCollapsed ? 'is-active' : ''}
+          className={editorPanel === 'files' && !editorSidebarCollapsed ? 'is-active' : ''}
           title="Files"
           onClick={toggleFilesPanel}
         >
@@ -994,7 +952,7 @@ export default function App() {
         </button>
         <button
           type="button"
-          className={activeView !== 'chat' && editorPanel === 'search' ? 'is-active' : ''}
+          className={editorPanel === 'search' ? 'is-active' : ''}
           title="Search"
           onClick={() => openEditorPanel('search')}
         >
@@ -1005,7 +963,7 @@ export default function App() {
         </button>
         <button
           type="button"
-          className={`view-rail-git ${activeView !== 'chat' && editorPanel === 'git' ? 'is-active' : ''}`}
+          className={`view-rail-git ${editorPanel === 'git' ? 'is-active' : ''}`}
           title="Git"
           onClick={() => openEditorPanel('git')}
         >
@@ -1061,17 +1019,14 @@ export default function App() {
       <div className="split-container" ref={splitContainerRef}>
       <div
         className="editor-pane"
-        style={{
-          display: activeView === 'editor' || activeView === 'split' ? undefined : 'none',
-          flex: activeView === 'split' ? `0 0 ${splitWidth * 100}%` : undefined,
-        }}
+        style={{ flex: `0 0 ${splitWidth * 100}%` }}
       >
         <EditorView
           fileAccessSettings={fileAccessSettings}
           onFileAccessSettingsChange={setFileAccessSettings}
           theme={theme}
           terminalEnabled={terminalSettings.enabled}
-          visible={activeView === 'editor' || activeView === 'split'}
+          visible
           openFolderSignal={openFolderSignal}
           panel={editorPanel}
           onPanelChange={setEditorPanel}
@@ -1083,14 +1038,9 @@ export default function App() {
         />
       </div>
 
-      {activeView === 'split' && (
-        <div className="split-divider" onMouseDown={handleSplitDragStart} />
-      )}
+      <div className="split-divider" onMouseDown={handleSplitDragStart} />
 
-      <div
-        className="body"
-        style={{ display: activeView === 'chat' || activeView === 'split' ? undefined : 'none' }}
-      >
+      <div className="body">
         <ChatPanel
           messages={messages}
           messagesLoading={messagesLoading}

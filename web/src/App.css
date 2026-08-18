@@ -908,10 +908,10 @@ body {
 
 .view-rail {
   /* Single source of truth for every icon on this rail — an SVG icon
-     (Chat/Editor/Split/Search/Git/Screenshot) reads --view-rail-icon-size
-     via width/height below; the Settings gear (a text glyph, not an SVG)
+     (Files/Search/Git/Screenshot) reads --view-rail-icon-size via
+     width/height below; the Settings gear (a text glyph, not an SVG)
      reads the same value as its font-size so both scale together from
-     one place instead of six separately-tuned numbers. */
+     one place instead of separately-tuned numbers. */
   --view-rail-icon-size: 20px;
   width: 44px;
   min-width: 44px;
