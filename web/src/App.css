@@ -1990,7 +1990,8 @@ body {
   border-radius: var(--radius-sm);
   background: #16171c;
   border: 1px solid var(--border);
-  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .code-copy-btn {
