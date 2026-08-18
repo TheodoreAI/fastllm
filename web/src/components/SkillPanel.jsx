@@ -22,7 +22,7 @@ export default function SkillPanel({
           value={skillId}
           onChange={(e) => onSkillIdChange(e.target.value)}
         >
-          <option value="">General assistant</option>
+          <option value="">Default (no saved skill)</option>
           {skills.map((s) => (
             <option key={s.id} value={s.id}>
               {s.name}

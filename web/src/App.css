@@ -803,7 +803,7 @@ body {
 .app {
   position: relative;
   display: flex;
-  flex-direction: row;
+  flex-direction: column;
   height: 100vh;
   background: var(--bg-window);
   color: var(--text);
@@ -812,17 +812,70 @@ body {
   border: 1px solid var(--border-strong);
 }
 
+/* Holds everything the offline banner used to overlay (rail, editor/chat,
+   right sidebar) — a normal flex row now that .app itself is a column, so
+   the banner sits above it as its own full-width strip instead of an
+   absolutely-positioned overlay competing with the rail's icon buttons
+   for the same pixels. */
+.app-body {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  min-height: 0;
+}
+
 .offline-banner {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
+  flex: 0 0 auto;
   z-index: 50;
-  padding: 6px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 7px 12px;
   text-align: center;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 14%, var(--bg));
+  border-bottom: 1px solid color-mix(in srgb, var(--warning) 30%, transparent);
+}
+
+.offline-banner-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warning);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 22%, transparent);
+}
+
+.offline-banner-text {
+  color: var(--text);
+  opacity: 0.92;
+}
+
+.offline-banner-close {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--warning);
   font-size: 0.75rem;
-  color: var(--accent-contrast);
-  background: var(--danger);
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.offline-banner-close:hover {
+  opacity: 1;
+  background: color-mix(in srgb, var(--warning) 18%, transparent);
 }
 
 .app::before {

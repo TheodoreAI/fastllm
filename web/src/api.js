@@ -5,13 +5,21 @@ import { reportFetchFailure, reportFetchSuccess } from './connectionStatus'
 // sends as a plain-text error body, not JSON) throws an opaque
 // SyntaxError that masks the real error message. Logs the real failure
 // so it's at least visible in devtools instead of being fully silent.
+//
+// Reaching this function at all means the backend was reachable and
+// responded — a 4xx/5xx (e.g. "not a git repo", bad request) is a
+// business-logic error, not a connectivity problem, so it reports
+// success here rather than letting swallowNetworkError's catch treat it
+// as the backend being down. Only an actual fetch() rejection (network
+// unreachable, DNS failure, etc. — thrown before okJson ever runs) should
+// flip the offline banner.
 async function okJson(res, context) {
+  reportFetchSuccess()
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText)
     console.error(`${context} failed (${res.status}): ${text}`)
     throw new Error(text || `request failed with ${res.status}`)
   }
-  reportFetchSuccess()
   return res.json()
 }
 
@@ -26,10 +34,19 @@ async function okJson(res, context) {
 // flip the shared connection-status signal (see connectionStatus.js),
 // which useConnectionStatus/App.jsx surface as a banner, without changing
 // any of their resolved-value contracts.
+//
+// Only a genuine fetch() rejection (network unreachable, DNS failure —
+// a plain TypeError, thrown before the request ever reaches okJson)
+// should flip the banner. A response that reached okJson already called
+// reportFetchSuccess() there — the backend answered, so it isn't
+// offline, even if that answer was a 4xx/5xx business error (e.g.
+// fetchGitStatus's "not a git repo" 409, which used to falsely trip the
+// offline banner on every editor save). Detect that case via the
+// TypeError fetch() itself throws for network failures.
 function swallowNetworkError(fallback) {
   return (err) => {
     console.error(err)
-    reportFetchFailure()
+    if (err instanceof TypeError) reportFetchFailure()
     return fallback
   }
 }
@@ -153,6 +170,12 @@ export function fetchTerminalSettings() {
     .catch(swallowNetworkError({ enabled: false }))
 }
 
+export function fetchCloudProviderSettings() {
+  return fetch('/api/settings/cloud-providers')
+    .then((r) => okJson(r, 'fetchCloudProviderSettings'))
+    .catch(swallowNetworkError({ anthropic_configured: false, openai_configured: false, gemini_configured: false, deepseek_configured: false }))
+}
+
 // Opens a native OS folder-picker dialog on the machine running the
 // server (not the browser) and resolves with the chosen absolute path.
 // The request blocks server-side until the user picks a folder or
@@ -256,6 +279,19 @@ export function createEditorFile(path, content = '') {
 
 export function deleteEditorFile(path) {
   return fetch('/api/editor/file', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  })
+}
+
+export function fetchEditorFolderFileCount(path) {
+  return fetch(`/api/editor/folder/file-count?path=${encodeURIComponent(path)}`)
+    .then((r) => okJson(r, 'fetchEditorFolderFileCount'))
+}
+
+export function deleteEditorFolder(path) {
+  return fetch('/api/editor/folder', {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ path }),
@@ -375,6 +411,14 @@ export function saveFileAccessSettings(settings) {
 
 export function saveTerminalSettings(settings) {
   return fetch('/api/settings/terminal', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settings),
+  })
+}
+
+export function saveCloudProviderSettings(settings) {
+  return fetch('/api/settings/cloud-providers', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(settings),

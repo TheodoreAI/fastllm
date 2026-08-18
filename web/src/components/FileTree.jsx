@@ -149,7 +149,7 @@ function RenameInput({ initialValue, onSubmit, onCancel }) {
   )
 }
 
-function DirRow({ name, node, depth, openPath, expanded, onToggle, onOpenFile, canWrite, renamingPath, onRequestRename, onSubmitRename, onCancelRename, onContextMenu, dropTarget, onDragStartFile, onDragOverTarget, onDragLeaveTarget, onDropTarget }) {
+function DirRow({ name, node, depth, openPath, expanded, onToggle, onOpenFile, canWrite, renamingPath, onRequestRename, onSubmitRename, onCancelRename, onContextMenu, onDeleteFolder, dropTarget, onDragStartFile, onDragOverTarget, onDragLeaveTarget, onDropTarget }) {
   const dirPath = node.__path
   const isOpen = expanded.has(dirPath)
   const isRenaming = renamingPath === dirPath
@@ -175,7 +175,9 @@ function DirRow({ name, node, depth, openPath, expanded, onToggle, onOpenFile, c
           ) : (
             <>
               <span className="tree-label">{name}</span>
-              {canWrite && <RowActions onRename={() => onRequestRename(dirPath)} />}
+              {canWrite && (
+                <RowActions onRename={() => onRequestRename(dirPath)} onDelete={() => onDeleteFolder(dirPath)} />
+              )}
             </>
           )}
         </div>
@@ -194,6 +196,7 @@ function DirRow({ name, node, depth, openPath, expanded, onToggle, onOpenFile, c
           onSubmitRename={onSubmitRename}
           onCancelRename={onCancelRename}
           onContextMenu={onContextMenu}
+          onDeleteFolder={onDeleteFolder}
           dropTarget={dropTarget}
           onDragStartFile={onDragStartFile}
           onDragOverTarget={onDragOverTarget}
@@ -205,7 +208,7 @@ function DirRow({ name, node, depth, openPath, expanded, onToggle, onOpenFile, c
   )
 }
 
-function TreeChildren({ node, depth, openPath, expanded, onToggle, onOpenFile, canWrite, renamingPath, onRequestRename, onSubmitRename, onCancelRename, onContextMenu, onDeleteFile, dropTarget, onDragStartFile, onDragOverTarget, onDragLeaveTarget, onDropTarget }) {
+function TreeChildren({ node, depth, openPath, expanded, onToggle, onOpenFile, canWrite, renamingPath, onRequestRename, onSubmitRename, onCancelRename, onContextMenu, onDeleteFile, onDeleteFolder, dropTarget, onDragStartFile, onDragOverTarget, onDragLeaveTarget, onDropTarget }) {
   const dirNames = [...node.dirs.keys()].sort((a, b) => a.localeCompare(b))
   const files = [...node.files].sort((a, b) => a.name.localeCompare(b.name))
   return (
@@ -226,6 +229,7 @@ function TreeChildren({ node, depth, openPath, expanded, onToggle, onOpenFile, c
           onSubmitRename={onSubmitRename}
           onCancelRename={onCancelRename}
           onContextMenu={onContextMenu}
+          onDeleteFolder={onDeleteFolder}
           dropTarget={dropTarget}
           onDragStartFile={onDragStartFile}
           onDragOverTarget={onDragOverTarget}
@@ -283,7 +287,7 @@ function stampPaths(node, prefix) {
 // menu (New File/New Folder/Rename/Delete); rename and create-file are
 // resolved here, delete and the actual create are delegated up since
 // they need confirmation UI / API calls that live in EditorView.
-export default function FileTree({ paths, openPath, onOpenFile, canWrite, onCreateFile, onDeleteFile, onRenameFile }) {
+export default function FileTree({ paths, openPath, onOpenFile, canWrite, onCreateFile, onDeleteFile, onDeleteFolder, onRenameFile }) {
   const [expanded, setExpanded] = useState(() => new Set())
   const [renamingPath, setRenamingPath] = useState(null)
   const [menu, setMenu] = useState(null) // { x, y, type: 'file'|'dir'|'root', path, name }
@@ -470,6 +474,7 @@ export default function FileTree({ paths, openPath, onOpenFile, canWrite, onCrea
           onCancelRename={() => setRenamingPath(null)}
           onContextMenu={openContextMenu}
           onDeleteFile={onDeleteFile}
+          onDeleteFolder={onDeleteFolder}
           dropTarget={dropTarget}
           onDragStartFile={handleDragStartFile}
           onDragOverTarget={handleDragOverTarget}
@@ -540,6 +545,20 @@ export default function FileTree({ paths, openPath, onOpenFile, canWrite, onCrea
                 onClick={() => {
                   setMenu(null)
                   onDeleteFile(menu.path)
+                }}
+              >
+                Delete
+              </button>
+            </li>
+          )}
+          {menu.type === 'dir' && (
+            <li>
+              <button
+                type="button"
+                className="tree-context-danger"
+                onClick={() => {
+                  setMenu(null)
+                  onDeleteFolder(menu.path)
                 }}
               >
                 Delete

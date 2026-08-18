@@ -351,10 +351,69 @@ func (r *Reader) Delete(requested string) error {
 	return os.Remove(path)
 }
 
-// Rename moves a file from one sandboxed path to another — used for both
-// renaming in place and moving to a different folder within the root.
-// The destination must not already exist (no silent overwrite) and its
-// parent directories are created as needed, same as Write.
+// CountFilesUnder returns how many files (not directories themselves)
+// exist under the sandboxed directory at requested — used to populate the
+// "delete this folder and its N files?" confirmation copy before
+// DeleteFolder is actually called, so the UI can tell the human what
+// they're about to lose. Read-only; doesn't require write access.
+func (r *Reader) CountFilesUnder(requested string) (int, error) {
+	path, err := r.Resolve(requested)
+	if err != nil {
+		return 0, err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, err
+	}
+	if !info.IsDir() {
+		return 0, fmt.Errorf("%q is not a directory", requested)
+	}
+	count := 0
+	err = filepath.WalkDir(path, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			count++
+		}
+		return nil
+	})
+	return count, err
+}
+
+// DeleteFolder recursively removes every file and subdirectory under the
+// sandboxed directory at requested. Requires write access, same as
+// Delete/Write. Unlike Delete (which explicitly refuses a directory
+// target — see that method's doc comment), this is folder-only and
+// refuses a plain file target instead, so the two methods can't be
+// confused for one another at a call site.
+func (r *Reader) DeleteFolder(requested string) error {
+	path, err := r.Resolve(requested)
+	if err != nil {
+		return err
+	}
+	_, allowWrites := r.Snapshot()
+	if !allowWrites {
+		return errors.New("file writes are not enabled")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%q is not a directory", requested)
+	}
+	return os.RemoveAll(path)
+}
+
+// Rename moves a file OR a folder (recursively, since a move is a single
+// os.Rename syscall regardless of what's on either end) from one
+// sandboxed path to another — used for renaming in place, moving to a
+// different folder within the root, and the file tree's drag-and-drop
+// (see FileTree.jsx's movePath, the only caller that ever passes a
+// directory source). The destination must not already exist (no silent
+// overwrite) and its parent directories are created as needed, same as
+// Write.
 func (r *Reader) Rename(fromRequested, toRequested string) error {
 	from, err := r.Resolve(fromRequested)
 	if err != nil {
@@ -364,12 +423,8 @@ func (r *Reader) Rename(fromRequested, toRequested string) error {
 	if !allowWrites {
 		return errors.New("file writes are not enabled")
 	}
-	info, err := os.Stat(from)
-	if err != nil {
+	if _, err := os.Stat(from); err != nil {
 		return err
-	}
-	if info.IsDir() {
-		return fmt.Errorf("%q is a directory, not a file", fromRequested)
 	}
 	to, err := r.ResolveForWrite(toRequested)
 	if err != nil {

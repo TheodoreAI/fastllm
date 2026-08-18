@@ -35,6 +35,8 @@ import {
   saveFileAccessSettings,
   fetchTerminalSettings,
   saveTerminalSettings,
+  fetchCloudProviderSettings,
+  saveCloudProviderSettings,
   clearKnowledgeBase,
   clearConversations,
   createSkill as apiCreateSkill,
@@ -186,9 +188,18 @@ export default function App() {
   const [ragSettings, setRagSettings] = useState(null)
   const [fileAccessSettings, setFileAccessSettings] = useState({ root: '', read_enabled: false, write_enabled: false })
   const [terminalSettings, setTerminalSettings] = useState({ enabled: false })
+  const [cloudProviderSettings, setCloudProviderSettings] = useState({ anthropic_configured: false, openai_configured: false, gemini_configured: false })
   const [thinkLevel, setThinkLevel] = useState('medium')
   const [theme, setTheme] = useTheme()
   const offline = useConnectionStatus()
+  // Dismissing the banner only hides it for the CURRENT outage — reset by
+  // the effect below as soon as offline flips back to false, so a later,
+  // genuinely new disconnect isn't silently suppressed by a dismissal the
+  // user gave for a previous, already-resolved one.
+  const [offlineDismissed, setOfflineDismissed] = useState(false)
+  useEffect(() => {
+    if (!offline) setOfflineDismissed(false)
+  }, [offline])
   const [fontFamily, setFontFamily] = useFontFamily()
   const [fontScale, setFontScale] = useFontScale()
   const [sectionOrder, moveSection] = useSectionOrder(DEFAULT_SECTION_ORDER)
@@ -221,6 +232,9 @@ export default function App() {
     fetchRagSettings().then(setRagSettings)
     fetchFileAccessSettings().then((settings) => setFileAccessSettings(settings ?? { root: '', read_enabled: false, write_enabled: false }))
     fetchTerminalSettings().then((settings) => setTerminalSettings(settings ?? { enabled: false }))
+    fetchCloudProviderSettings().then((settings) =>
+      setCloudProviderSettings(settings ?? { anthropic_configured: false, openai_configured: false, gemini_configured: false }),
+    )
   }, [])
 
   // Native File → Open Folder… menu item (see cmd/desktop/main.go) has no
@@ -290,6 +304,24 @@ export default function App() {
   function openEditorPanel(panel) {
     setActiveView((v) => (v === 'chat' ? 'editor' : v))
     setEditorPanel(panel)
+  }
+
+  // The Files rail button mirrors VS Code's Explorer icon: clicking it
+  // while Files is already the visible panel collapses the sidebar
+  // (a second click re-expands, same toggle Ctrl+B already does — see
+  // the keydown handler above); clicking it from anywhere else switches
+  // into a real view, selects the Files panel, and makes sure the
+  // sidebar is actually expanded to show it, rather than leaving it
+  // collapsed from an earlier Ctrl+B/manual collapse.
+  function toggleFilesPanel() {
+    const alreadyShowingFiles = activeView !== 'chat' && editorPanel === 'files' && !editorSidebarCollapsed
+    if (alreadyShowingFiles) {
+      setEditorSidebarCollapsed(true)
+      return
+    }
+    setActiveView((v) => (v === 'chat' ? 'editor' : v))
+    setEditorPanel('files')
+    setEditorSidebarCollapsed(false)
   }
 
   useEffect(() => {
@@ -644,6 +676,18 @@ export default function App() {
     return saved
   }
 
+  // On success, re-fetches the model list — a newly-configured provider's
+  // models should show up in the picker immediately, without waiting for
+  // some other unrelated refresh to happen to run first.
+  async function handleSaveCloudProviderSettings(next) {
+    const res = await saveCloudProviderSettings(next)
+    if (!res.ok) throw new Error(await res.text())
+    const saved = await res.json()
+    setCloudProviderSettings(saved)
+    fetchModels().then(setModels)
+    return saved
+  }
+
   async function handleSaveTerminalSettings(next) {
     const res = await saveTerminalSettings(next)
     if (!res.ok) throw new Error(await res.text())
@@ -789,9 +833,16 @@ export default function App() {
 
   return (
     <div className="app">
-      {offline && (
-        <div className="offline-banner">Can't reach the fastllm backend — showing the last data that loaded.</div>
+      {offline && !offlineDismissed && (
+        <div className="offline-banner">
+          <span className="offline-banner-dot" aria-hidden="true" />
+          <span className="offline-banner-text">Can't reach the fastllm backend — showing the last data that loaded.</span>
+          <button type="button" className="offline-banner-close" title="Dismiss" onClick={() => setOfflineDismissed(true)}>
+            ✕
+          </button>
+        </div>
       )}
+      <div className="app-body">
       <nav className="view-rail">
         <button
           type="button"
@@ -823,6 +874,16 @@ export default function App() {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <rect x="3" y="4" width="18" height="16" rx="2" />
             <path d="M12 4v16" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          className={activeView !== 'chat' && editorPanel === 'files' && !editorSidebarCollapsed ? 'is-active' : ''}
+          title="Files"
+          onClick={toggleFilesPanel}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4l1.7 2H19.5A1.5 1.5 0 0 1 21 9.5v8A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5v-10Z" />
           </svg>
         </button>
         <button
@@ -1027,6 +1088,7 @@ export default function App() {
             })}
       </aside>
       </div>
+      </div>
 
       {conversationToDelete != null && (
         <ConfirmDeleteModal
@@ -1087,6 +1149,8 @@ export default function App() {
           onSaveFileAccessSettings={handleSaveFileAccessSettings}
           terminalSettings={terminalSettings}
           onSaveTerminalSettings={handleSaveTerminalSettings}
+          cloudProviderSettings={cloudProviderSettings}
+          onSaveCloudProviderSettings={handleSaveCloudProviderSettings}
           thinkLevel={thinkLevel}
           onThinkLevelChange={setThinkLevel}
           onClearKnowledgeBase={handleClearKnowledgeBase}

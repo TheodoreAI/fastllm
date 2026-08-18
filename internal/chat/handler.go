@@ -23,6 +23,7 @@ import (
 	"fastllm/internal/buildcheck"
 	"fastllm/internal/files"
 	"fastllm/internal/folderpicker"
+	"fastllm/internal/gitrepo"
 	"fastllm/internal/llm"
 	"fastllm/internal/store"
 	"fastllm/internal/terminal"
@@ -38,9 +39,29 @@ const maxToolRounds = 4
 
 const defaultWorkspace = "default"
 
-const systemPrompt = `You are a helpful assistant. Use the provided context to answer
-the user's question when it's relevant. If the context doesn't contain the
-answer, say so and answer from general knowledge instead.`
+const systemPrompt = `You are an expert programmer acting as a copilot-style code assistant. Default to succinct answers: lead with the fix or the direct answer, skip preamble and restating the question, and don't pad with obvious explanation. Use the provided context when it's relevant. If you don't know something or the context doesn't cover it, say so plainly instead of guessing — then either answer from general knowledge if that's good enough, or ask a targeted follow-up question to get what you need. Prefer a short code snippet or a one-line answer over a paragraph when either would do; expand only when the problem genuinely needs it.`
+
+// listFilesTool is the schema advertised alongside read_file when file
+// access is enabled, so the model can discover what's in the sandboxed
+// project directory instead of only being able to act on paths the user
+// already told it — see listFilesMaxEntries's doc comment for the size
+// cap. Read-only, same sandboxed root as read_file/write_file.
+var listFilesTool = llm.Tool{
+	Type: "function",
+	Function: llm.ToolFunction{
+		Name:        "list_files",
+		Description: "List files in the local project directory, recursively. Use this to discover what files exist before reading one, or to explore a subdirectory. Returns paths relative to the project root.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]any{
+					"type":        "string",
+					"description": "Subdirectory to list, relative to the project root (e.g. \"src\" or \"src/utils\"). Omit or use \"\" to list the entire project.",
+				},
+			},
+		},
+	},
+}
 
 // readFileTool is the schema advertised to the model when file access is
 // enabled. Read-only, sandboxed to Handler.Files's configured root — see
@@ -129,7 +150,7 @@ type PendingWrite struct {
 
 type Handler struct {
 	DB       *sql.DB
-	LLM      *llm.Client
+	LLM      *llm.Router
 	Vector   *vector.Store
 	Files    *files.Reader
 	Terminal *terminal.Gate
@@ -150,8 +171,8 @@ type Handler struct {
 	writes   map[string]*PendingWrite
 }
 
-func New(db *sql.DB, llmClient *llm.Client, vec *vector.Store, fileReader *files.Reader, terminalGate *terminal.Gate) *Handler {
-	return &Handler{DB: db, LLM: llmClient, Vector: vec, Files: fileReader, Terminal: terminalGate, FolderChooser: folderpicker.Choose, writes: make(map[string]*PendingWrite)}
+func New(db *sql.DB, llmRouter *llm.Router, vec *vector.Store, fileReader *files.Reader, terminalGate *terminal.Gate) *Handler {
+	return &Handler{DB: db, LLM: llmRouter, Vector: vec, Files: fileReader, Terminal: terminalGate, FolderChooser: folderpicker.Choose, writes: make(map[string]*PendingWrite)}
 }
 
 func newWriteID() string {
@@ -224,9 +245,9 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 
 	effectiveModel := req.Model
 	if effectiveModel == "" {
-		effectiveModel = h.LLM.ChatModel
+		effectiveModel = h.LLM.ChatModel()
 	}
-	if h.Files.Enabled() && llm.SupportsTools(effectiveModel) {
+	if h.Files.Enabled() && llm.SupportsToolsForModel(effectiveModel) {
 		reads, writes, buildChecks, budgetExhausted := h.runFileTools(ctx, req.Model, &messages, normalizeThinkLevel(req.ThinkLevel))
 		for _, fr := range reads {
 			payload, _ := json.Marshal(fr)
@@ -325,7 +346,7 @@ func (h *Handler) buildPrompt(ctx context.Context, conversationID int64, questio
 	messages := []llm.Message{{Role: "system", Content: prompt}}
 	var sources []source
 
-	if h.LLM.EmbedModel != "" {
+	if h.LLM.EmbedModel() != "" {
 		if embedding, err := h.LLM.Embed(ctx, question); err == nil {
 			topK := store.DefaultRAGSettings.TopK
 			if rag, err := store.GetRAGSettings(h.DB); err == nil {
@@ -412,7 +433,7 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 	pendingByPath := map[string]string{}
 
 	for round := 0; round < maxToolRounds; round++ {
-		tools := []llm.Tool{readFileTool}
+		tools := []llm.Tool{readFileTool, listFilesTool}
 		if writesEnabled {
 			tools = append(tools, writeFileTool)
 			if hasGoModule && len(pendingByPath) > 0 {
@@ -436,6 +457,13 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 		results := make(map[string]string, len(reply.ToolCalls))
 		for _, call := range reply.ToolCalls {
 			switch call.Function.Name {
+			case "list_files":
+				var args struct {
+					Path string `json:"path"`
+				}
+				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+				results[call.ID] = h.listFiles(ctx, root, args.Path)
+
 			case "read_file":
 				var args struct {
 					Path string `json:"path"`
@@ -538,6 +566,61 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 	return reads, pending, buildChecks, true
 }
 
+// listFilesMaxEntries caps how many paths listFiles hands back in one
+// call — a large repo's full recursive listing could otherwise blow past
+// what's reasonable to put in front of a model in one tool result (both
+// context-window size and the model's own ability to usefully digest a
+// multi-thousand-line file list). The model is told when the list was
+// truncated so it can narrow with a subdirectory path instead of assuming
+// it saw everything.
+const listFilesMaxEntries = 500
+
+// listFiles implements the list_files tool: the same git-aware listing
+// (falling back to a plain walk for a non-git folder) that backs the
+// Editor tab's file tree — see walkFiles and gitrepo.ListFiles in
+// editor.go, reused here rather than duplicated so the model and the
+// human editor agree on what "the project's files" means. requestedPath,
+// if non-empty, filters the full listing down to that subdirectory
+// (matched as a path prefix) rather than doing a second, separately-
+// rooted walk — simpler, and root has already been validated/snapshotted
+// by the caller (runFileTools) so nothing here does its own sandbox
+// escape checking; filtering an already-sandboxed list can't introduce
+// one.
+func (h *Handler) listFiles(ctx context.Context, root, requestedPath string) string {
+	all, err := gitrepo.ListFiles(ctx, root)
+	if errors.Is(err, gitrepo.ErrNotARepo) {
+		all, err = walkFiles(root)
+	}
+	if err != nil {
+		return "Error listing files: " + err.Error()
+	}
+
+	prefix := path.Clean(strings.Trim(requestedPath, "/"))
+	var matched []string
+	for _, f := range all {
+		if prefix == "" || prefix == "." || f == prefix || strings.HasPrefix(f, prefix+"/") {
+			matched = append(matched, f)
+		}
+	}
+
+	if len(matched) == 0 {
+		if prefix == "" || prefix == "." {
+			return "(no files found)"
+		}
+		return fmt.Sprintf("No files found under %q.", requestedPath)
+	}
+
+	truncated := len(matched) > listFilesMaxEntries
+	if truncated {
+		matched = matched[:listFilesMaxEntries]
+	}
+	result := strings.Join(matched, "\n")
+	if truncated {
+		result += fmt.Sprintf("\n\n[truncated to %d of more entries — narrow with a subdirectory path]", listFilesMaxEntries)
+	}
+	return result
+}
+
 // takePendingWrite removes and returns a pending write by ID, or nil if
 // it doesn't exist or was already resolved (approve/reject is one-shot).
 func (h *Handler) takePendingWrite(id string) *PendingWrite {
@@ -625,9 +708,9 @@ func (h *Handler) Settings(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, settingsResponse{
 		Username:   username,
-		ChatModel:  h.LLM.ChatModel,
-		EmbedModel: h.LLM.EmbedModel,
-		LLMBaseURL: h.LLM.BaseURL,
+		ChatModel:  h.LLM.ChatModel(),
+		EmbedModel: h.LLM.EmbedModel(),
+		LLMBaseURL: h.LLM.BaseURL(),
 	})
 }
 
@@ -641,6 +724,11 @@ func (h *Handler) GetRAGSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, rag)
 }
 
+// normalizeThinkLevel validates a client-supplied thinking-effort level.
+// The three accepted values are also hardcoded as <option>s in
+// SettingsPanel.jsx's "Reasoning effort" select — if a level is ever
+// added/removed/renamed here, that select needs the matching edit, since
+// nothing currently derives one list from the other.
 func normalizeThinkLevel(level string) string {
 	switch strings.ToLower(strings.TrimSpace(level)) {
 	case "low", "medium", "high":
@@ -674,6 +762,102 @@ func (h *Handler) UpdateFileAccessSettings(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, settings)
+}
+
+// GetCloudProviderSettings returns whether each cloud provider has an API
+// key configured, WITHOUT ever sending the keys themselves back to the
+// browser — see cloudProviderSettingsResponse's doc comment.
+func (h *Handler) GetCloudProviderSettings(w http.ResponseWriter, r *http.Request) {
+	settings, err := store.GetCloudProviderSettings(h.DB)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, toCloudProviderSettingsResponse(settings))
+}
+
+// cloudProviderSettingsResponse reports only whether a key is set, not
+// its value — once saved, a key has no reason to ever round-trip back to
+// the browser again (the Settings form shows a masked placeholder for an
+// already-configured provider instead of the real key; see
+// SettingsPanel.jsx). Saving still goes through the real
+// store.CloudProviderSettings shape (see UpdateCloudProviderSettings).
+type cloudProviderSettingsResponse struct {
+	AnthropicConfigured bool `json:"anthropic_configured"`
+	OpenAIConfigured    bool `json:"openai_configured"`
+	GeminiConfigured    bool `json:"gemini_configured"`
+	DeepSeekConfigured  bool `json:"deepseek_configured"`
+}
+
+func toCloudProviderSettingsResponse(s store.CloudProviderSettings) cloudProviderSettingsResponse {
+	return cloudProviderSettingsResponse{
+		AnthropicConfigured: s.AnthropicAPIKey != "",
+		OpenAIConfigured:    s.OpenAIAPIKey != "",
+		GeminiConfigured:    s.GeminiAPIKey != "",
+		DeepSeekConfigured:  s.DeepSeekAPIKey != "",
+	}
+}
+
+// cloudProviderSettingsRequest uses *string (rather than plain string, as
+// the persisted store.CloudProviderSettings does) specifically so
+// UpdateCloudProviderSettings can tell "field omitted" (nil — leave
+// whatever key is already saved alone) apart from "field sent as an empty
+// string" (non-nil, points at "" — explicitly clear that key). A plain
+// string field can't distinguish those two cases, but the form needs to:
+// GetCloudProviderSettings never sends real key values back to the
+// browser (see that handler), so the only way an already-configured
+// provider's key survives an unrelated field's edit is for "didn't send
+// it" to mean "don't touch it" rather than "clear it".
+type cloudProviderSettingsRequest struct {
+	AnthropicAPIKey *string `json:"anthropic_api_key"`
+	OpenAIAPIKey    *string `json:"openai_api_key"`
+	GeminiAPIKey    *string `json:"gemini_api_key"`
+	DeepSeekAPIKey  *string `json:"deepseek_api_key"`
+}
+
+// UpdateCloudProviderSettings merges the given fields into the persisted
+// API keys (see cloudProviderSettingsRequest's doc comment for the
+// omitted-vs-empty distinction that makes "merge" the right verb here)
+// and immediately rebuilds h.LLM's cloud clients around the result, so a
+// newly-entered key is usable for the very next chat message without a
+// server restart — same save-then-apply-live pattern as
+// UpdateFileAccessSettings/UpdateTerminalSettings.
+func (h *Handler) UpdateCloudProviderSettings(w http.ResponseWriter, r *http.Request) {
+	var req cloudProviderSettingsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid cloud provider settings payload", http.StatusBadRequest)
+		return
+	}
+
+	settings, err := store.GetCloudProviderSettings(h.DB)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if req.AnthropicAPIKey != nil {
+		settings.AnthropicAPIKey = *req.AnthropicAPIKey
+	}
+	if req.OpenAIAPIKey != nil {
+		settings.OpenAIAPIKey = *req.OpenAIAPIKey
+	}
+	if req.GeminiAPIKey != nil {
+		settings.GeminiAPIKey = *req.GeminiAPIKey
+	}
+	if req.DeepSeekAPIKey != nil {
+		settings.DeepSeekAPIKey = *req.DeepSeekAPIKey
+	}
+
+	if err := store.SaveCloudProviderSettings(h.DB, settings); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	h.LLM.SetCloudProviders(llm.CloudProviderConfig{
+		AnthropicAPIKey: settings.AnthropicAPIKey,
+		OpenAIAPIKey:    settings.OpenAIAPIKey,
+		GeminiAPIKey:    settings.GeminiAPIKey,
+		DeepSeekAPIKey:  settings.DeepSeekAPIKey,
+	})
+	writeJSON(w, toCloudProviderSettingsResponse(settings))
 }
 
 func (h *Handler) GetTerminalSettings(w http.ResponseWriter, r *http.Request) {
