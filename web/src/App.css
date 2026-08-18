@@ -213,7 +213,7 @@ body {
 .app {
   position: relative;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   height: 100vh;
   background: var(--bg-window);
   color: var(--text);
@@ -232,32 +232,51 @@ body {
   pointer-events: none;
 }
 
-.titlebar,
 .body {
   position: relative;
   z-index: 1;
 }
 
-.titlebar {
-  height: 38px;
-  min-height: 38px;
+.view-rail {
+  width: 44px;
+  min-width: 44px;
   display: flex;
+  flex-direction: column;
   align-items: center;
+  gap: 2px;
+  padding: var(--space-2) 0;
   background: var(--bg-titlebar);
-  border-bottom: 1px solid var(--border);
-  padding: 0 var(--space-2);
+  border-right: 1px solid var(--border);
   position: relative;
-  -webkit-app-region: drag;
+  z-index: 1;
 }
 
-.titlebar-title {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 0.8125rem;
-  font-weight: 600;
+.view-rail-spacer {
+  flex: 1;
+}
+
+.view-rail button {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--text-dim);
-  letter-spacing: 0.2px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.1rem;
+}
+
+.view-rail button:hover {
+  background: rgba(128, 128, 128, 0.18);
+  color: var(--text);
+}
+
+.view-rail button.is-active {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .main-row {
@@ -1494,65 +1513,6 @@ body {
 .stopped-hint {
   font-size: 0.8125rem;
   margin: 0;
-}
-
-/* ---------- titlebar actions / settings ---------- */
-
-.titlebar-actions {
-  position: absolute;
-  right: 10px;
-  display: flex;
-  gap: 4px;
-}
-
-.titlebar-btn {
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-  border: none;
-  background: transparent;
-  color: var(--text-dim);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 1.25rem;
-  -webkit-app-region: no-drag;
-}
-
-.titlebar-btn:hover {
-  background: rgba(128, 128, 128, 0.18);
-  color: var(--text);
-}
-
-.titlebar-tabs {
-  display: flex;
-  gap: 2px;
-  margin-left: 16px;
-  -webkit-app-region: no-drag;
-}
-
-.titlebar-tabs button {
-  border: none;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  color: var(--text-dim);
-  font-size: 0.75rem;
-  font-weight: 500;
-  padding: var(--space-1) var(--space-2);
-  border-radius: 0;
-  cursor: pointer;
-}
-
-.titlebar-tabs button:hover {
-  background: rgba(128, 128, 128, 0.14);
-  color: var(--text);
-}
-
-.titlebar-tabs button.is-active {
-  color: var(--text);
-  background: transparent;
-  border-bottom-color: var(--accent);
 }
 
 /* ---------- editor view ---------- */

@@ -551,9 +551,6 @@ export default function App() {
   if (serverStopped) {
     return (
       <div className="app">
-        <div className="titlebar">
-          <span className="titlebar-title">fastllm</span>
-        </div>
         <div className="stopped-state">
           <p className="stopped-title">fastllm has stopped.</p>
           <p className="stopped-hint">You can close this window, or relaunch it from the Desktop shortcut.</p>
@@ -564,64 +561,64 @@ export default function App() {
 
   return (
     <div className="app">
-      <div className="titlebar">
-        <span className="titlebar-title">fastllm</span>
-        <div className="titlebar-tabs">
+      <nav className="view-rail">
+        <button
+          type="button"
+          className={activeView === 'chat' ? 'is-active' : ''}
+          title="Chat"
+          onClick={() => setActiveView('chat')}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M4 4h16v12H8l-4 4V4Z" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          className={activeView === 'editor' ? 'is-active' : ''}
+          title="Editor"
+          onClick={() => setActiveView('editor')}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9l-6-6Z" />
+            <path d="M14 3v6h6" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          className={activeView === 'split' ? 'is-active' : ''}
+          title="Split"
+          onClick={() => setActiveView('split')}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <rect x="3" y="4" width="18" height="16" rx="2" />
+            <path d="M12 4v16" />
+          </svg>
+        </button>
+
+        <div className="view-rail-spacer" />
+
+        {isWails() && (
           <button
             type="button"
-            className={activeView === 'chat' ? 'is-active' : ''}
-            onClick={() => setActiveView('chat')}
+            title="Screenshot"
+            disabled={capturingScreenshot}
+            onClick={handleScreenshot}
           >
-            Chat
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z" />
+              <circle cx="12" cy="13.5" r="3.5" />
+            </svg>
           </button>
-          <button
-            type="button"
-            className={activeView === 'editor' ? 'is-active' : ''}
-            onClick={() => setActiveView('editor')}
-          >
-            Editor
-          </button>
-          <button
-            type="button"
-            className={activeView === 'split' ? 'is-active' : ''}
-            onClick={() => setActiveView('split')}
-          >
-            Split
-          </button>
-        </div>
-        <div className="titlebar-actions">
-          {isWails() && (
-            <button
-              type="button"
-              className="titlebar-btn"
-              title="Screenshot"
-              disabled={capturingScreenshot}
-              onClick={handleScreenshot}
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z" />
-                <circle cx="12" cy="13.5" r="3.5" />
-              </svg>
-            </button>
-          )}
-          <button
-            type="button"
-            className="titlebar-btn"
-            title="Settings"
-            onClick={() => handleOpenSettings()}
-          >
-            ⚙
-          </button>
-          <button
-            type="button"
-            className="titlebar-btn"
-            title="Quit fastllm"
-            onClick={() => setQuitConfirmOpen(true)}
-          >
+        )}
+        <button type="button" title="Settings" onClick={() => handleOpenSettings()}>
+          ⚙
+        </button>
+        {!isWails() && (
+          <button type="button" title="Quit fastllm" onClick={() => setQuitConfirmOpen(true)}>
             ⏻
           </button>
-        </div>
-      </div>
+        )}
+      </nav>
 
       <div className="main-row">
       <div className="split-container" ref={splitContainerRef}>

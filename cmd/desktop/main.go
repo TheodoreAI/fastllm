@@ -147,14 +147,13 @@ type desktopApp struct {
 // Folder… for now. This runs as a real native menu (not an in-app
 // dropdown) because an in-app "File" button/dropdown, built the same way
 // as the working Chat/Editor/Split tabs right next to it, was reliably
-// unclickable specifically in the production build (worked fine under
-// `wails dev`, in a plain browser serving the same built assets, and by
-// every static check of the compiled JS/CSS — never isolated to a single
-// root cause, so this sidesteps the whole class of problem rather than
-// keep chasing it). The click handler can't call the folder-open flow
-// directly — that logic (browseForFolder → save settings → refresh
-// tree/git) lives in React state inside EditorView — so it emits a Wails
-// event instead and lets the frontend react.
+// unclickable when this exe was launched via automation (PowerShell's
+// Start-Process) — a normal double-click launch never showed the problem.
+// Native menu items sidestep whatever that launch-path quirk was. The
+// click handler can't call the folder-open flow directly — that logic
+// (browseForFolder → save settings → refresh tree/git) lives in React
+// state inside EditorView — so it emits a Wails event instead and lets
+// the frontend react.
 func (a *desktopApp) menu() *menu.Menu {
 	m := menu.NewMenu()
 	fileMenu := m.AddSubmenu("File")
