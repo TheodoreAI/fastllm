@@ -392,6 +392,14 @@ export function pushGit() {
   return fetch('/api/editor/git/push', { method: 'POST' })
 }
 
+// The fix offered when pushGit() fails with { no_upstream: true } — runs
+// `git push -u origin HEAD` server-side (see internal/gitrepo.
+// PushSetUpstream), only ever called from that specific error's own
+// button, never automatically.
+export function pushSetUpstreamGit() {
+  return fetch('/api/editor/git/push-set-upstream', { method: 'POST' })
+}
+
 export function fetchGitBranches() {
   return fetch('/api/editor/git/branches')
     .then((r) => okJson(r, 'fetchGitBranches'))

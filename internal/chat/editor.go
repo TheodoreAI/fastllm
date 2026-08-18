@@ -574,12 +574,43 @@ func (h *Handler) EditorGitCommit(w http.ResponseWriter, r *http.Request) {
 // endpoint resolving it automatically. A separate, explicit action from
 // EditorGitCommit — the UI only ever calls this from its own "Push"
 // button, never automatically after a commit.
+//
+// A "no upstream configured" failure specifically is reported as a
+// structured JSON body (409, {"error":..., "no_upstream":true}) instead
+// of the plain-text body every other git error gets — this is the one
+// Push failure with a single unambiguous fix (see gitrepo.ErrNoUpstream's
+// doc comment), so the frontend needs a reliable, non-string-matching way
+// to know when to offer its "Set upstream & push" button rather than just
+// displaying the error.
 func (h *Handler) EditorGitPush(w http.ResponseWriter, r *http.Request) {
 	root, ok := h.editorRoot(w)
 	if !ok {
 		return
 	}
 	output, err := gitrepo.Push(r.Context(), root)
+	if err != nil {
+		if errors.Is(err, gitrepo.ErrNoUpstream) {
+			w.WriteHeader(http.StatusConflict)
+			writeJSON(w, map[string]any{"error": err.Error(), "no_upstream": true})
+			return
+		}
+		h.writeGitError(w, err)
+		return
+	}
+	writeJSON(w, map[string]string{"output": output})
+}
+
+// EditorGitPushSetUpstream runs `git push -u origin HEAD` — the fix
+// offered for the specific EditorGitPush failure above. A separate
+// endpoint (not folded into EditorGitPush as a fallback) so it only ever
+// runs when the user explicitly clicks the button shown for that one
+// error, never automatically.
+func (h *Handler) EditorGitPushSetUpstream(w http.ResponseWriter, r *http.Request) {
+	root, ok := h.editorRoot(w)
+	if !ok {
+		return
+	}
+	output, err := gitrepo.PushSetUpstream(r.Context(), root)
 	if err != nil {
 		h.writeGitError(w, err)
 		return
