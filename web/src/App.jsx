@@ -11,6 +11,7 @@ import SettingsPanel from './components/SettingsPanel'
 import ScreenshotPreviewModal from './components/ScreenshotPreviewModal'
 import DraggableSection from './components/DraggableSection'
 import SectionIcon from './components/SectionIcon'
+import TweakBar from './components/TweakBar'
 import { useTheme } from './useTheme'
 import { useFontFamily } from './useFontFamily'
 import { useFontScale } from './useFontScale'
@@ -187,6 +188,7 @@ export default function App() {
   const [editorSidebarCollapsed, setEditorSidebarCollapsed] = useEditorSidebarCollapsed()
   const [terminalCollapsed, setTerminalCollapsed] = useTerminalCollapsed()
   const [activeView, setActiveView] = useState('chat')
+  const [tweakBarOpen, setTweakBarOpen] = useState(false)
   const [openFolderSignal, setOpenFolderSignal] = useState(0)
   const [editorPanel, setEditorPanel] = useState('files')
   const [gitChangeCount, setGitChangeCount] = useState(0)
@@ -827,6 +829,20 @@ export default function App() {
             </svg>
           </button>
         )}
+        <button
+          type="button"
+          id="view-rail-tweak-bar"
+          className={tweakBarOpen ? 'is-active' : ''}
+          title="Tweak bar (dev)"
+          onClick={() => setTweakBarOpen((v) => !v)}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M4 6h10M17 6h3M4 12h4M11 12h9M4 18h13M20 18h0" />
+            <circle cx="14" cy="6" r="2" fill="currentColor" stroke="none" />
+            <circle cx="7" cy="12" r="2" fill="currentColor" stroke="none" />
+            <circle cx="17" cy="18" r="2" fill="currentColor" stroke="none" />
+          </svg>
+        </button>
         <button type="button" title="Settings" onClick={() => handleOpenSettings()}>
           ⚙
         </button>
@@ -1032,6 +1048,8 @@ export default function App() {
           onClose={() => setSettingsOpen(false)}
         />
       )}
+
+      <TweakBar open={tweakBarOpen} onToggle={() => setTweakBarOpen(true)} />
 
       <span className="app-version" title={__BUILD_TIME__}>
         v{__APP_VERSION__}
