@@ -149,6 +149,12 @@ export default function App() {
   const [messages, setMessages] = useState([])
   const [messagesLoading, setMessagesLoading] = useState(false)
   const [input, setInput] = useState('')
+  // Images pasted/dropped into the composer, waiting to be sent with the
+  // next message — [{ dataUri, name }]. Cleared on send, same lifecycle
+  // as `input`. Not persisted (unlike model/skill/theme): an in-progress
+  // attachment is exactly the kind of ephemeral draft state localStorage
+  // is deliberately NOT used for elsewhere in this app either.
+  const [pendingImages, setPendingImages] = useState([])
   const [streaming, setStreaming] = useState(false)
   const [docText, setDocText] = useState('')
   const [docStatus, setDocStatus] = useState('')
@@ -428,21 +434,69 @@ export default function App() {
     fetchSkills().then(setSkills)
   }
 
+  // maxPendingImages/maxImageBytes bound what the composer will accept —
+  // a vision request with many/huge images costs real latency and (for
+  // cloud providers) real money per token, and there's no resizing/
+  // compression step here, so the cap has to be conservative enough that
+  // even several full-resolution screenshots stay reasonable.
+  const maxPendingImages = 4
+  const maxImageBytes = 8 * 1024 * 1024
+
+  function addPendingImage(file) {
+    if (!file.type.startsWith('image/')) return
+    if (file.size > maxImageBytes) {
+      setDocStatus(`"${file.name || 'pasted image'}" is too large to attach (max 8 MB).`)
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = () => {
+      setPendingImages((prev) => {
+        if (prev.length >= maxPendingImages) return prev
+        return [...prev, { dataUri: reader.result, name: file.name || 'pasted-image' }]
+      })
+    }
+    reader.readAsDataURL(file)
+  }
+
+  function removePendingImage(index) {
+    setPendingImages((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  // Wired to the composer's onPaste — Ctrl+V with an image on the
+  // clipboard (a screenshot, a copied image from a browser/file explorer)
+  // attaches it instead of the browser trying to paste it as text (which
+  // it can't, so nothing would happen otherwise). Text pastes are left
+  // completely alone: only clipboard items whose type starts with
+  // "image/" are intercepted, so a normal text paste never even reaches
+  // this branch, let alone gets preventDefault'd.
+  function handleComposerPaste(e) {
+    const items = Array.from(e.clipboardData?.items || [])
+    const imageItems = items.filter((item) => item.type.startsWith('image/'))
+    if (imageItems.length === 0) return
+    e.preventDefault()
+    for (const item of imageItems) {
+      const file = item.getAsFile()
+      if (file) addPendingImage(file)
+    }
+  }
+
   async function sendMessage(e) {
     e.preventDefault()
     const text = input.trim()
-    if (!text || streaming) return
+    if ((!text && pendingImages.length === 0) || streaming) return
 
+    const images = pendingImages.map((img) => img.dataUri)
     setInput('')
+    setPendingImages([])
     setStreaming(true)
-    setMessages((prev) => [...prev, { role: 'user', content: text }, { role: 'assistant', content: '', sources: [], reasoning: '', toolCalls: [], pendingWrites: [], buildChecks: [] }])
+    setMessages((prev) => [...prev, { role: 'user', content: text, images }, { role: 'assistant', content: '', sources: [], reasoning: '', toolCalls: [], pendingWrites: [], buildChecks: [] }])
 
     const controller = new AbortController()
     abortControllerRef.current = controller
 
     try {
       await streamChat(
-        { message: text, model, skillId, conversationId, thinkLevel },
+        { message: text, model, skillId, conversationId, thinkLevel, images },
         {
           onConversation: (id) => {
             setConversationId(id)
@@ -1020,6 +1074,10 @@ export default function App() {
           userDisplayName={settings?.username}
           onRequestApproveWrite={requestApproveWrite}
           onRejectWrite={handleRejectWrite}
+          pendingImages={pendingImages}
+          onComposerPaste={handleComposerPaste}
+          onRemovePendingImage={removePendingImage}
+          visionSupported={!!models.find((m) => m.name === model)?.supports_vision}
         />
       </div>
       </div>

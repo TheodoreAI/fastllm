@@ -222,25 +222,25 @@ func (r *Router) ListModels(ctx context.Context) ([]Model, error) {
 	if clouds.anthropic != nil {
 		for _, name := range AnthropicModels {
 			full := AnthropicPrefix + name
-			out = append(out, Model{Name: full, SupportsFileTools: SupportsToolsForModel(full), Provider: "anthropic"})
+			out = append(out, Model{Name: full, SupportsFileTools: SupportsToolsForModel(full), SupportsVision: SupportsVisionForModel(full), Provider: "anthropic"})
 		}
 	}
 	if clouds.openai != nil {
 		for _, name := range OpenAIModels {
 			full := OpenAIPrefix + name
-			out = append(out, Model{Name: full, SupportsFileTools: SupportsToolsForModel(full), Provider: "openai"})
+			out = append(out, Model{Name: full, SupportsFileTools: SupportsToolsForModel(full), SupportsVision: SupportsVisionForModel(full), Provider: "openai"})
 		}
 	}
 	if clouds.gemini != nil {
 		for _, name := range GeminiModels {
 			full := GeminiPrefix + name
-			out = append(out, Model{Name: full, SupportsFileTools: SupportsToolsForModel(full), Provider: "gemini"})
+			out = append(out, Model{Name: full, SupportsFileTools: SupportsToolsForModel(full), SupportsVision: SupportsVisionForModel(full), Provider: "gemini"})
 		}
 	}
 	if clouds.deepseek != nil {
 		for _, name := range DeepSeekModels {
 			full := DeepSeekPrefix + name
-			out = append(out, Model{Name: full, SupportsFileTools: SupportsToolsForModel(full), Provider: "deepseek"})
+			out = append(out, Model{Name: full, SupportsFileTools: SupportsToolsForModel(full), SupportsVision: SupportsVisionForModel(full), Provider: "deepseek"})
 		}
 	}
 	return out, nil
