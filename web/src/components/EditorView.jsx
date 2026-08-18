@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import CodeMirror from '@uiw/react-codemirror'
 import { githubLight, githubDark } from '@uiw/codemirror-theme-github'
+import { linter, lintGutter, forceLinting } from '@codemirror/lint'
 import {
   fetchEditorTree,
   fetchEditorFile,
   saveEditorFile,
   createEditorFile,
   deleteEditorFile,
+  fetchEditorFolderFileCount,
+  deleteEditorFolder,
   renameEditorFile,
   searchEditor,
   fetchGitStatus,
@@ -49,6 +52,14 @@ export default function EditorView({
   const [content, setContent] = useState('')
   const [savedContent, setSavedContent] = useState('')
   const [fileStatus, setFileStatus] = useState('')
+  // Lint findings from the most recent save (see api.js's saveEditorFile —
+  // the backend lints JS/JSX files with the target project's own oxlint
+  // right after writing). Kept in a ref (read by the linter() extension's
+  // source function below) rather than only React state, since CodeMirror
+  // pulls diagnostics by calling that function itself — forceLinting()
+  // after a save is what actually triggers it to re-read the ref.
+  const lintDiagnosticsRef = useRef([])
+  const codeMirrorViewRef = useRef(null)
   const [saving, setSaving] = useState(false)
 
   const [query, setQuery] = useState('')
@@ -307,6 +318,8 @@ export default function EditorView({
       setContent(data.content)
       setSavedContent(data.content)
       setFileStatus(data.truncated ? 'File truncated (too large to fully load).' : '')
+      lintDiagnosticsRef.current = []
+      if (codeMirrorViewRef.current) forceLinting(codeMirrorViewRef.current)
     } catch (err) {
       setFileStatus(`Couldn't open this file: ${err.message}`)
     }
@@ -317,8 +330,12 @@ export default function EditorView({
     setSaving(true)
     setFileStatus('')
     try {
-      await saveEditorFile(openPath, content)
+      const res = await saveEditorFile(openPath, content)
+      if (!res.ok) throw new Error(await res.text())
+      const data = await res.json()
       setSavedContent(content)
+      lintDiagnosticsRef.current = data.diagnostics ?? []
+      if (codeMirrorViewRef.current) forceLinting(codeMirrorViewRef.current)
       refreshGitStatus()
     } catch (err) {
       setFileStatus(`Couldn't save this file: ${err.message}`)
@@ -362,6 +379,40 @@ export default function EditorView({
       const res = await deleteEditorFile(path)
       if (!res.ok) throw new Error(await res.text())
       if (openPath === path) {
+        setOpenPath(null)
+        setContent('')
+        setSavedContent('')
+      }
+      refreshTree()
+      refreshGitStatus()
+    } catch (err) {
+      setTreeStatus(`Couldn't delete ${path}: ${err.message}`)
+    }
+  }
+
+  async function handleDeleteFolder(path) {
+    let fileCount = null
+    try {
+      const info = await fetchEditorFolderFileCount(path)
+      fileCount = info.file_count
+    } catch (err) {
+      setTreeStatus(`Couldn't check "${path}": ${err.message}`)
+      return
+    }
+    const ok = await confirmDialog({
+      heading: 'Delete this folder?',
+      description: `This deletes "${path}" and everything in it (${fileCount} file${fileCount === 1 ? '' : 's'}) from disk. This can't be undone.`,
+      confirmLabel: 'Delete folder',
+    })
+    if (!ok) return
+    try {
+      const res = await deleteEditorFolder(path)
+      if (!res.ok) throw new Error(await res.text())
+      // The currently open file (if any) may have lived inside the
+      // deleted folder — same close-if-affected behavior as
+      // handleDeleteFile, just checking a path prefix instead of an
+      // exact match since a whole subtree just disappeared, not one file.
+      if (openPath === path || openPath?.startsWith(`${path}/`)) {
         setOpenPath(null)
         setContent('')
         setSavedContent('')
@@ -491,7 +542,31 @@ export default function EditorView({
     }
   }
 
-  const languageExtensions = useMemo(() => (openPath ? languageExtensionFor(openPath) : []), [openPath])
+  // Stable across renders (the ref it reads is mutated in place, not
+  // replaced) so CodeMirror never needs to tear down and rebuild the
+  // linter extension on every save. severity is used as-is — the backend
+  // (internal/lint.normalizeSeverity) already collapses oxlint's full
+  // severity vocabulary down to exactly "error"/"warning" before it ever
+  // reaches here, so this doesn't need its own copy of that mapping.
+  const oxlintExtension = useMemo(
+    () => [
+      linter(() =>
+        lintDiagnosticsRef.current.map((d) => ({
+          from: Math.max(0, d.offset),
+          to: Math.max(d.offset, d.offset + d.length),
+          severity: d.severity,
+          message: d.message,
+          source: d.rule,
+        }))
+      ),
+      lintGutter(),
+    ],
+    []
+  )
+  const languageExtensions = useMemo(
+    () => (openPath ? [...languageExtensionFor(openPath), ...oxlintExtension] : []),
+    [openPath, oxlintExtension]
+  )
   const staged = gitStatus.filter((s) => s.staged)
   const unstaged = gitStatus.filter((s) => s.unstaged)
 
@@ -607,6 +682,7 @@ export default function EditorView({
               canWrite={canWrite}
               onCreateFile={handleCreateFile}
               onDeleteFile={handleDeleteFile}
+              onDeleteFolder={handleDeleteFolder}
               onRenameFile={handleRenameFile}
             />
           </div>
@@ -788,6 +864,9 @@ export default function EditorView({
                   theme={theme === 'light' ? githubLight : githubDark}
                   extensions={languageExtensions}
                   onChange={setContent}
+                  onCreateEditor={(view) => {
+                    codeMirrorViewRef.current = view
+                  }}
                   readOnly={!canWrite}
                 />
               </div>

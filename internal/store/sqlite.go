@@ -170,6 +170,9 @@ func Open(path string) (*sql.DB, error) {
 	if err := migrateOrphanMessages(db); err != nil {
 		return nil, fmt.Errorf("store: migrate orphan messages: %w", err)
 	}
+	if err := migrateGeneralAssistantPrompt(db); err != nil {
+		return nil, fmt.Errorf("store: migrate general assistant prompt: %w", err)
+	}
 	return db, nil
 }
 
@@ -252,6 +255,52 @@ func seedDefaultSkills(db *sql.DB) error {
 		}
 	}
 	_, err = db.Exec(`INSERT INTO meta (key, value) VALUES (?, '1')`, seedFlagKey)
+	return err
+}
+
+const generalAssistantPromptMigrationFlagKey = "migrated_general_assistant_prompt_v2"
+
+// oldGeneralAssistantPrompt is the original seed prompt this migration
+// replaces — see generalAssistantPromptMigrationFlagKey below.
+const oldGeneralAssistantPrompt = "You are a helpful assistant. Use the provided context to answer\nthe user's question when it's relevant. If the context doesn't contain the\nanswer, say so and answer from general knowledge instead."
+
+// migrateGeneralAssistantPrompt updates any pre-existing "General
+// Assistant" skill row to the new copilot-style prompt in
+// seed/skills.json, once, for databases that seeded the old wording
+// before this change shipped. Only touches rows whose prompt still
+// exactly matches the old default — if the user already edited it,
+// their edit is left alone. Tracked via meta like seedDefaultSkills, so
+// it runs exactly once even if the user later deletes the skill.
+func migrateGeneralAssistantPrompt(db *sql.DB) error {
+	var done string
+	err := db.QueryRow(`SELECT value FROM meta WHERE key = ?`, generalAssistantPromptMigrationFlagKey).Scan(&done)
+	if err == nil {
+		return nil
+	}
+	if err != sql.ErrNoRows {
+		return err
+	}
+
+	var defaultSkills []seedSkill
+	if err := json.Unmarshal(seedSkillsJSON, &defaultSkills); err != nil {
+		return fmt.Errorf("parse seed/skills.json: %w", err)
+	}
+	var newPrompt string
+	for _, s := range defaultSkills {
+		if s.Name == "General Assistant" {
+			newPrompt = s.Prompt
+			break
+		}
+	}
+	if newPrompt != "" {
+		if _, err := db.Exec(
+			`UPDATE skills SET prompt = ? WHERE name = ? AND prompt = ?`,
+			newPrompt, "General Assistant", oldGeneralAssistantPrompt,
+		); err != nil {
+			return err
+		}
+	}
+	_, err = db.Exec(`INSERT INTO meta (key, value) VALUES (?, '1')`, generalAssistantPromptMigrationFlagKey)
 	return err
 }
 
@@ -592,6 +641,51 @@ func SaveTerminalSettings(db *sql.DB, s TerminalSettings) error {
 		return err
 	}
 	_, err = db.Exec(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, settingTerminal, string(payload))
+	return err
+}
+
+// CloudProviderSettings holds the user's own API keys for cloud model
+// providers, entered via Settings → Cloud providers. Empty ApiKey means
+// that provider isn't configured — its models are left out of the
+// combined model list (see internal/llm.Router) rather than shown
+// disabled, since there's nothing useful to click on until a key is
+// entered anyway.
+type CloudProviderSettings struct {
+	AnthropicAPIKey string `json:"anthropic_api_key"`
+	OpenAIAPIKey    string `json:"openai_api_key"`
+	GeminiAPIKey    string `json:"gemini_api_key"`
+	DeepSeekAPIKey  string `json:"deepseek_api_key"`
+}
+
+var DefaultCloudProviderSettings = CloudProviderSettings{}
+
+const settingCloudProviders = "cloud_providers"
+
+// GetCloudProviderSettings loads the persisted cloud API keys, or the
+// zero-value defaults (none configured) when nothing has been saved yet.
+func GetCloudProviderSettings(db *sql.DB) (CloudProviderSettings, error) {
+	s := DefaultCloudProviderSettings
+	var value string
+	err := db.QueryRow(`SELECT value FROM settings WHERE key = ?`, settingCloudProviders).Scan(&value)
+	if err == sql.ErrNoRows {
+		return s, nil
+	}
+	if err != nil {
+		return s, err
+	}
+	if err := json.Unmarshal([]byte(value), &s); err != nil {
+		return s, err
+	}
+	return s, nil
+}
+
+// SaveCloudProviderSettings persists the given cloud API keys.
+func SaveCloudProviderSettings(db *sql.DB, s CloudProviderSettings) error {
+	payload, err := json.Marshal(s)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, settingCloudProviders, string(payload))
 	return err
 }
 

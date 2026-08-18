@@ -115,6 +115,17 @@ func Build(cfg Config) (*Built, error) {
 	log.Printf("loaded %d chunks into vector store", len(chunks))
 
 	llmClient := llm.New(cfg.LLMBaseURL, cfg.LLMAPIKey, cfg.LLMChatModel, cfg.LLMEmbedModel)
+	cloudSettings, err := store.GetCloudProviderSettings(db)
+	if err != nil {
+		log.Printf("load cloud provider settings: %v", err)
+		cloudSettings = store.DefaultCloudProviderSettings
+	}
+	llmRouter := llm.NewRouter(llmClient, llm.CloudProviderConfig{
+		AnthropicAPIKey: cloudSettings.AnthropicAPIKey,
+		OpenAIAPIKey:    cloudSettings.OpenAIAPIKey,
+		GeminiAPIKey:    cloudSettings.GeminiAPIKey,
+		DeepSeekAPIKey:  cloudSettings.DeepSeekAPIKey,
+	})
 
 	if err := store.SeedFileAccessSettingsFromEnv(db, cfg.FilesRoot, cfg.FilesWrite); err != nil {
 		log.Printf("seed file access settings from env: %v", err)
@@ -148,7 +159,7 @@ func Build(cfg Config) (*Built, error) {
 		log.Printf("terminal enabled — /api/terminal/ws will spawn an interactive PowerShell session for any loopback connection")
 	}
 
-	handler := chat.New(db, llmClient, vecStore, fileReader, terminalGate)
+	handler := chat.New(db, llmRouter, vecStore, fileReader, terminalGate)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/chat", handler.Chat)
@@ -165,6 +176,8 @@ func Build(cfg Config) (*Built, error) {
 	mux.HandleFunc("PUT /api/settings/files", handler.UpdateFileAccessSettings)
 	mux.HandleFunc("GET /api/settings/terminal", handler.GetTerminalSettings)
 	mux.HandleFunc("PUT /api/settings/terminal", handler.UpdateTerminalSettings)
+	mux.HandleFunc("GET /api/settings/cloud-providers", handler.GetCloudProviderSettings)
+	mux.HandleFunc("PUT /api/settings/cloud-providers", handler.UpdateCloudProviderSettings)
 	mux.HandleFunc("POST /api/settings/files/browse", handler.BrowseForFolder)
 	mux.HandleFunc("DELETE /api/conversations", handler.ClearConversations)
 	mux.HandleFunc("GET /api/skills", handler.ListSkills)
@@ -178,6 +191,8 @@ func Build(cfg Config) (*Built, error) {
 	mux.HandleFunc("GET /api/editor/file", handler.EditorReadFile)
 	mux.HandleFunc("PUT /api/editor/file", handler.EditorSaveFile)
 	mux.HandleFunc("DELETE /api/editor/file", handler.EditorDeleteFile)
+	mux.HandleFunc("GET /api/editor/folder/file-count", handler.EditorFolderFileCount)
+	mux.HandleFunc("DELETE /api/editor/folder", handler.EditorDeleteFolder)
 	mux.HandleFunc("POST /api/editor/file/rename", handler.EditorRenameFile)
 	mux.HandleFunc("GET /api/editor/search", handler.EditorSearch)
 	mux.HandleFunc("GET /api/editor/git/status", handler.EditorGitStatus)

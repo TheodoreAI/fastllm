@@ -45,6 +45,10 @@ const KEYBINDINGS = [
   { keys: 'Ctrl+Q', description: 'Exit fastllm', native: true },
   { keys: 'Ctrl+Z', description: 'Undo', native: true },
   { keys: 'Ctrl+Y', description: 'Redo', native: true },
+  { keys: 'Ctrl+X', description: 'Cut', native: true },
+  { keys: 'Ctrl+C', description: 'Copy', native: true },
+  { keys: 'Ctrl+V', description: 'Paste', native: true },
+  { keys: 'Ctrl+A', description: 'Select all', native: true },
   { keys: 'Ctrl+Shift+C', description: 'Copy selection (in the Terminal panel)', native: false },
   { keys: 'Ctrl+Shift+V', description: 'Paste (in the Terminal panel)', native: false },
 ]
@@ -90,6 +94,8 @@ export default function SettingsPanel({
   onSaveFileAccessSettings,
   terminalSettings,
   onSaveTerminalSettings,
+  cloudProviderSettings,
+  onSaveCloudProviderSettings,
   thinkLevel,
   onThinkLevelChange,
   onClearKnowledgeBase,
@@ -114,6 +120,15 @@ export default function SettingsPanel({
   const [fileAccessStatus, setFileAccessStatus] = useState('')
   const [terminalForm, setTerminalForm] = useState(terminalSettings)
   const [terminalStatus, setTerminalStatus] = useState('')
+  // Keyed by provider id ('anthropic' | 'openai' | 'gemini') -> the new
+  // key text the user has typed. A provider absent from this object was
+  // never touched this session, so saving omits its field entirely and
+  // whatever key (if any) is already stored server-side is left alone —
+  // see UpdateCloudProviderSettings's doc comment for why that distinction
+  // matters. The server never sends real key values back (only whether
+  // one is configured), so there is no "current key" to prefill here.
+  const [cloudProviderForm, setCloudProviderForm] = useState({})
+  const [cloudProviderStatus, setCloudProviderStatus] = useState('')
   const [confirming, setConfirming] = useState(null) // 'kb' | 'conversations' | null
   const [dataStatus, setDataStatus] = useState('')
   const [browsing, setBrowsing] = useState(false)
@@ -230,6 +245,26 @@ export default function SettingsPanel({
     }
   }
 
+  // Only sends a field for a provider the user actually typed into this
+  // session (see cloudProviderForm's declaration above) — an untouched
+  // provider's key, if any, stays exactly as already stored.
+  async function handleSaveCloudProviders(e) {
+    e.preventDefault()
+    setCloudProviderStatus('Saving…')
+    try {
+      const next = {}
+      if ('anthropic' in cloudProviderForm) next.anthropic_api_key = cloudProviderForm.anthropic
+      if ('openai' in cloudProviderForm) next.openai_api_key = cloudProviderForm.openai
+      if ('gemini' in cloudProviderForm) next.gemini_api_key = cloudProviderForm.gemini
+      if ('deepseek' in cloudProviderForm) next.deepseek_api_key = cloudProviderForm.deepseek
+      await onSaveCloudProviderSettings(next)
+      setCloudProviderForm({})
+      setCloudProviderStatus('Saved. Newly added models appear in the Model list immediately.')
+    } catch (err) {
+      setCloudProviderStatus(`Couldn't save cloud provider settings: ${err.message}`)
+    }
+  }
+
   async function runConfirmed(action) {
     setConfirming(null)
     setDataStatus('Clearing…')
@@ -313,6 +348,9 @@ export default function SettingsPanel({
       <SubSection id="thinking" label="Thinking" expanded={!!expanded.thinking} onToggle={toggleSection}>
         <label className="settings-field">
           <span>Reasoning effort</span>
+          {/* These three values must match normalizeThinkLevel's accepted
+              set in internal/chat/handler.go — nothing derives one list
+              from the other, so an addition/rename needs both edits. */}
           <select className="model-select" value={thinkLevel || 'medium'} onChange={(e) => onThinkLevelChange(e.target.value)}>
             <option value="low">Low</option>
             <option value="medium">Medium</option>
@@ -409,6 +447,37 @@ export default function SettingsPanel({
           <button type="submit" className="btn-primary">Save terminal access</button>
           {terminalStatus && (
             <p className={`status ${terminalStatus.startsWith("Couldn't") ? 'status-error' : ''}`}>{terminalStatus}</p>
+          )}
+        </form>
+      </SubSection>
+
+      <SubSection id="cloudProviders" label="Cloud providers" expanded={!!expanded.cloudProviders} onToggle={toggleSection}>
+        <form onSubmit={handleSaveCloudProviders} className="rag-form">
+          <p className="settings-hint">
+            Add your own API key for a cloud provider to use its models from the Model picker alongside your local models. Keys are stored on this machine and sent only to that provider. Gemini, OpenAI, and DeepSeek models support file read/write tools when file access is enabled below; Anthropic (Claude) models don't yet.
+          </p>
+          {[
+            { id: 'anthropic', label: 'Anthropic (Claude)', configured: cloudProviderSettings?.anthropic_configured },
+            { id: 'openai', label: 'OpenAI (ChatGPT)', configured: cloudProviderSettings?.openai_configured },
+            { id: 'gemini', label: 'Google (Gemini)', configured: cloudProviderSettings?.gemini_configured },
+            { id: 'deepseek', label: 'DeepSeek', configured: cloudProviderSettings?.deepseek_configured },
+          ].map(({ id, label, configured }) => (
+            <label className="settings-field" key={id}>
+              <span>{label}{configured && !(id in cloudProviderForm) && <span className="settings-hint-inline"> (key saved)</span>}</span>
+              <input
+                type="password"
+                autoComplete="off"
+                value={cloudProviderForm[id] ?? ''}
+                placeholder={configured ? 'Enter a new key to replace the saved one' : 'API key'}
+                onChange={(e) => setCloudProviderForm((prev) => ({ ...prev, [id]: e.target.value }))}
+              />
+            </label>
+          ))}
+          <button type="submit" className="btn-primary" disabled={Object.keys(cloudProviderForm).length === 0}>
+            Save cloud providers
+          </button>
+          {cloudProviderStatus && (
+            <p className={`status ${cloudProviderStatus.startsWith("Couldn't") ? 'status-error' : ''}`}>{cloudProviderStatus}</p>
           )}
         </form>
       </SubSection>
