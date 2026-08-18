@@ -79,10 +79,18 @@ export function indexDocument(filename, content) {
 
 // Uploads one real file (used for PDFs and any file coming from a folder
 // drop) via multipart/form-data so the server can extract text itself.
-export function uploadFile(file) {
+// Routed through apiOrigin() for the same reason streamChat is: Wails'
+// in-process AssetServer bridge (see cmd/desktop/main.go) doesn't handle
+// multipart/binary POST bodies reliably — file uploads over it can arrive
+// truncated or empty server-side, which is what surfaced as every folder
+// upload's files being wrongly flagged "empty" in the desktop build (the
+// plain-browser build was never affected, since it always talks to a real
+// net/http listener).
+export async function uploadFile(file) {
+  const origin = await apiOrigin()
   const form = new FormData()
   form.append('file', file, file.name)
-  return fetch('/api/documents/upload', { method: 'POST', body: form })
+  return fetch(`${origin}/api/documents/upload`, { method: 'POST', body: form })
 }
 
 export function clearKnowledgeBase() {
