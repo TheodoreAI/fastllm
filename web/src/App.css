@@ -213,7 +213,7 @@ body {
 .app {
   position: relative;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   height: 100vh;
   background: var(--bg-window);
   color: var(--text);
@@ -232,32 +232,51 @@ body {
   pointer-events: none;
 }
 
-.titlebar,
 .body {
   position: relative;
   z-index: 1;
 }
 
-.titlebar {
-  height: 38px;
-  min-height: 38px;
+.view-rail {
+  width: 44px;
+  min-width: 44px;
   display: flex;
+  flex-direction: column;
   align-items: center;
+  gap: 2px;
+  padding: var(--space-2) 0;
   background: var(--bg-titlebar);
-  border-bottom: 1px solid var(--border);
-  padding: 0 var(--space-2);
+  border-right: 1px solid var(--border);
   position: relative;
-  -webkit-app-region: drag;
+  z-index: 1;
 }
 
-.titlebar-title {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 0.8125rem;
-  font-weight: 600;
+.view-rail-spacer {
+  flex: 1;
+}
+
+.view-rail button {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--text-dim);
-  letter-spacing: 0.2px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.1rem;
+}
+
+.view-rail button:hover {
+  background: rgba(128, 128, 128, 0.18);
+  color: var(--text);
+}
+
+.view-rail button.is-active {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .main-row {
@@ -924,7 +943,8 @@ body {
 }
 
 .modal-actions .btn-secondary,
-.modal-actions .btn-danger {
+.modal-actions .btn-danger,
+.modal-actions .btn-primary {
   width: auto;
   margin-top: 0;
   padding: 7px 14px;
@@ -943,6 +963,27 @@ body {
 
 .btn-danger:hover {
   filter: brightness(1.1);
+}
+
+/* ---------- screenshot ---------- */
+
+.screenshot-preview-modal {
+  width: min(720px, calc(100vw - 40px));
+}
+
+.screenshot-preview-frame {
+  max-height: min(520px, calc(100vh - 220px));
+  overflow: auto;
+  margin-bottom: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-chat);
+}
+
+.screenshot-preview-frame img {
+  display: block;
+  width: 100%;
+  height: auto;
 }
 
 /* ---------- chat ---------- */
@@ -1472,65 +1513,6 @@ body {
 .stopped-hint {
   font-size: 0.8125rem;
   margin: 0;
-}
-
-/* ---------- titlebar actions / settings ---------- */
-
-.titlebar-actions {
-  position: absolute;
-  right: 10px;
-  display: flex;
-  gap: 4px;
-}
-
-.titlebar-btn {
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-  border: none;
-  background: transparent;
-  color: var(--text-dim);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 1.25rem;
-  -webkit-app-region: no-drag;
-}
-
-.titlebar-btn:hover {
-  background: rgba(128, 128, 128, 0.18);
-  color: var(--text);
-}
-
-.titlebar-tabs {
-  display: flex;
-  gap: 2px;
-  margin-left: 16px;
-  -webkit-app-region: no-drag;
-}
-
-.titlebar-tabs button {
-  border: none;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  color: var(--text-dim);
-  font-size: 0.75rem;
-  font-weight: 500;
-  padding: var(--space-1) var(--space-2);
-  border-radius: 0;
-  cursor: pointer;
-}
-
-.titlebar-tabs button:hover {
-  background: rgba(128, 128, 128, 0.14);
-  color: var(--text);
-}
-
-.titlebar-tabs button.is-active {
-  color: var(--text);
-  background: transparent;
-  border-bottom-color: var(--accent);
 }
 
 /* ---------- editor view ---------- */
@@ -2244,31 +2226,95 @@ body {
   background: var(--bg-chat);
 }
 
-.settings-panel {
-  width: 430px;
+.settings-floating-panel {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 480px;
+  height: 480px;
   max-width: calc(100vw - 40px);
-  background: color-mix(in srgb, var(--bg-panel) 92%, rgba(255, 255, 255, 0.02));
-  border-color: var(--border-strong);
+  max-height: calc(100vh - 40px);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
   box-shadow: var(--shadow-overlay);
+  z-index: 100;
 }
 
-.settings-panel h3 {
-  margin: 0 0 18px;
-  font-size: 1.05rem;
-  font-weight: 600;
-  letter-spacing: -0.02em;
+.settings-floating-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 0 0 auto;
+  padding: var(--space-2) var(--space-2) 0;
+}
+
+.settings-floating-header h2 {
+  margin: 0 var(--space-1) var(--space-1);
+}
+
+.settings-floating-close {
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 0.9rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+}
+
+.settings-floating-close:hover {
+  background: rgba(128, 128, 128, 0.18);
+  color: var(--text);
+}
+
+.settings-floating-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 0 var(--space-2) var(--space-2);
 }
 
 .settings-section {
-  margin-bottom: 16px;
-  padding: 14px 14px 12px;
+  margin-bottom: 8px;
+  padding: 8px 10px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 10px;
   background: color-mix(in srgb, var(--bg-panel) 78%, rgba(255, 255, 255, 0.03));
 }
 
 .settings-section:last-child {
   margin-bottom: 0;
+}
+
+.settings-subsection-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 2px 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.settings-subsection-chevron {
+  flex: 0 0 auto;
+  display: flex;
+  color: var(--text-faint);
+  transition: transform 0.1s ease;
+}
+
+.settings-subsection-chevron.is-open {
+  transform: rotate(90deg);
+}
+
+.settings-subsection-body {
+  margin-top: 10px;
 }
 
 .settings-label {
@@ -2277,7 +2323,7 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--text-faint);
-  margin: 0 0 12px;
+  margin: 0;
 }
 
 .settings-row {
@@ -2311,7 +2357,8 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 240px;
+  max-width: 260px;
+  min-width: 0;
 }
 
 .theme-toggle {
@@ -2368,19 +2415,19 @@ body {
 
 .file-access-root-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 
 .file-access-root-row input[type='text'] {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
 }
 
 .file-access-root-row .btn-secondary {
   flex: 0 0 auto;
   width: auto;
-  min-width: 120px;
   margin-top: 0;
   padding: 9px 14px;
 }
@@ -2408,7 +2455,7 @@ body {
   background: rgba(128, 128, 128, 0.12);
 }
 
-.settings-panel .modal-actions {
+.settings-floating-panel .modal-actions {
   margin-top: 8px;
 }
 
@@ -2431,6 +2478,23 @@ body {
   height: 18px;
   accent-color: var(--accent);
   margin: 0;
+}
+
+.settings-check-row input[type='checkbox']:disabled {
+  /* accent-color alone doesn't reliably dim a disabled checkbox across
+     browsers/WebView2 — without this it can look identical to an
+     enabled one, which is exactly what made the file-access checkboxes
+     read as clickable when they weren't. */
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.settings-check-row:has(input:disabled) {
+  cursor: not-allowed;
+}
+
+.settings-check-row:has(input:disabled) span {
+  color: var(--text-dim);
 }
 
 .settings-check-row span {

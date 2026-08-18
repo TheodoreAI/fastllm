@@ -23,7 +23,7 @@ import (
 var ErrNotARepo = errors.New("gitrepo: not a git repository")
 
 func run(ctx context.Context, root string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd := gitCommand(ctx, args...)
 	cmd.Dir = root
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -283,7 +283,7 @@ func Search(ctx context.Context, root, query string) ([]SearchMatch, error) {
 	// -n includes line numbers; -F treats query as a literal string,
 	// not a regex, so search input can't be used to inject grep/regex
 	// syntax the user didn't intend.
-	cmd := exec.CommandContext(ctx, "git", "grep", "-n", "-I", "-F", "--untracked", "-e", query)
+	cmd := gitCommand(ctx, "grep", "-n", "-I", "-F", "--untracked", "-e", query)
 	cmd.Dir = root
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

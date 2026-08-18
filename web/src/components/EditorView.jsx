@@ -30,7 +30,7 @@ import TerminalView from './TerminalView'
 
 const PANELS = { files: 'Files', search: 'Search', git: 'Git' }
 
-export default function EditorView({ fileAccessSettings, onFileAccessSettingsChange, theme, terminalEnabled, visible }) {
+export default function EditorView({ fileAccessSettings, onFileAccessSettingsChange, theme, terminalEnabled, visible, openFolderSignal }) {
   const [panel, setPanel] = useState('files')
   const [tree, setTree] = useState([])
   const [treeStatus, setTreeStatus] = useState('')
@@ -178,6 +178,24 @@ export default function EditorView({ fileAccessSettings, onFileAccessSettingsCha
       setOpeningFolder(false)
     }
   }
+
+  // openFolderSignal is a bump counter (see App.jsx), not a boolean —
+  // App.jsx has no other way to reach into this always-mounted-but-often-
+  // hidden component to trigger its folder picker (e.g. from the native
+  // File → Open Folder… menu item), and a counter re-fires this effect on
+  // every click even if the user picks the same signal value twice in a
+  // row (a boolean toggled true/false wouldn't change on every other
+  // click). Skips the mount-time run (undefined/0) so opening the app
+  // doesn't immediately pop the folder dialog.
+  const isFirstOpenFolderSignal = useRef(true)
+  useEffect(() => {
+    if (isFirstOpenFolderSignal.current) {
+      isFirstOpenFolderSignal.current = false
+      return
+    }
+    handleOpenFolder()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openFolderSignal])
 
   async function openFile(path) {
     if (dirty && !window.confirm(`Discard unsaved changes to ${openPath}?`)) return

@@ -126,8 +126,23 @@ export function browseForFolder() {
 // both the plain-browser build (cmd/server) and the desktop build
 // (cmd/desktop) without adding a new frontend dependency, mirroring how
 // the old Tauri branch detected window.__TAURI__ for the same purpose.
-function isWails() {
+export function isWails() {
   return typeof window !== 'undefined' && typeof window.runtime?.Quit === 'function'
+}
+
+// The terminal WebSocket can't go through Wails' normal in-process bridge
+// (see cmd/desktop/main.go's termListener comment for why) — it needs the
+// real loopback TCP listener cmd/desktop opens alongside it, whose port is
+// exposed via a bound Go method rather than a fixed/predictable one, since
+// a fixed port could collide with another local process. Falls back to
+// window.location.host for the plain-browser build, which has no such
+// bridge to route around.
+export async function terminalWSHost() {
+  if (isWails() && window.go?.main?.terminalBridge?.TerminalPort) {
+    const port = await window.go.main.terminalBridge.TerminalPort()
+    return `127.0.0.1:${port}`
+  }
+  return window.location.host
 }
 
 export function quitServer() {
@@ -141,6 +156,17 @@ export function quitServer() {
     return Promise.resolve()
   }
   return fetch('/api/quit', { method: 'POST' })
+}
+
+// GET /api/screenshot only exists on cmd/desktop's mux (see
+// cmd/desktop/main.go's screenshotHandler) — a plain browser tab has no
+// OS window to capture, so this is only ever called from behind an
+// isWails() check.
+export function captureScreenshot() {
+  return fetch('/api/screenshot').then((r) => {
+    if (!r.ok) throw new Error(`captureScreenshot failed: ${r.status}`)
+    return r.blob()
+  })
 }
 
 export function fetchEditorTree() {

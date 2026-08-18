@@ -7,7 +7,8 @@ import KnowledgeBasePanel from './components/KnowledgeBasePanel'
 import ChatPanel from './components/ChatPanel'
 import EditorView from './components/EditorView'
 import ConfirmDeleteModal from './components/ConfirmDeleteModal'
-import SettingsModal from './components/SettingsModal'
+import SettingsPanel from './components/SettingsPanel'
+import ScreenshotPreviewModal from './components/ScreenshotPreviewModal'
 import DraggableSection from './components/DraggableSection'
 import SectionIcon from './components/SectionIcon'
 import { useTheme } from './useTheme'
@@ -38,6 +39,8 @@ import {
   uploadFile,
   streamChat,
   quitServer,
+  isWails,
+  captureScreenshot,
   approveWrite,
   rejectWrite,
 } from './api'
@@ -78,8 +81,14 @@ export default function App() {
   const [conversationError, setConversationError] = useState('')
   const [settings, setSettings] = useState(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // Set (to a sub-section id like 'llmBackend') to force that Settings
+  // sub-section open when the panel is opened — see ModelPicker's
+  // onOpenSettings below.
+  const [settingsExpandRequest, setSettingsExpandRequest] = useState(null)
   const [quitConfirmOpen, setQuitConfirmOpen] = useState(false)
   const [quitting, setQuitting] = useState(false)
+  const [screenshotBlob, setScreenshotBlob] = useState(null)
+  const [capturingScreenshot, setCapturingScreenshot] = useState(false)
   const [serverStopped, setServerStopped] = useState(false)
   const [ragSettings, setRagSettings] = useState(null)
   const [fileAccessSettings, setFileAccessSettings] = useState({ root: '', read_enabled: false, write_enabled: false })
@@ -91,6 +100,7 @@ export default function App() {
   const [sectionOrder, moveSection] = useSectionOrder(DEFAULT_SECTION_ORDER)
   const [sidebarCollapsed, setSidebarCollapsed] = useSidebarCollapsed()
   const [activeView, setActiveView] = useState('chat')
+  const [openFolderSignal, setOpenFolderSignal] = useState(0)
   const [splitWidth, setSplitWidth] = useSplitWidth()
   const splitContainerRef = useRef(null)
   const bottomRef = useRef(null)
@@ -112,6 +122,23 @@ export default function App() {
     fetchRagSettings().then(setRagSettings)
     fetchFileAccessSettings().then((settings) => setFileAccessSettings(settings ?? { root: '', read_enabled: false, write_enabled: false }))
     fetchTerminalSettings().then((settings) => setTerminalSettings(settings ?? { enabled: false }))
+  }, [])
+
+  // Native File → Open Folder… menu item (see cmd/desktop/main.go) has no
+  // direct line to React state, so it emits a Wails runtime event instead;
+  // window.runtime only exists in the desktop build, hence the isWails()
+  // guard — matches how the rest of this file feature-detects Wails (see
+  // api.js's isWails doc comment) rather than importing @wailsjs/runtime.
+  // Switches to the Editor tab (where the folder dialog's result — tree,
+  // git status/branches — is actually visible) and bumps openFolderSignal,
+  // which EditorView watches to re-run its own handleOpenFolder.
+  useEffect(() => {
+    if (!isWails()) return
+    const unsubscribe = window.runtime.EventsOn('menu:open-folder', () => {
+      setActiveView((v) => (v === 'chat' ? 'editor' : v))
+      setOpenFolderSignal((n) => n + 1)
+    })
+    return unsubscribe
   }, [])
 
   useEffect(() => {
@@ -455,6 +482,25 @@ export default function App() {
     setServerStopped(true)
   }
 
+  async function handleScreenshot() {
+    setCapturingScreenshot(true)
+    try {
+      const blob = await captureScreenshot()
+      setScreenshotBlob(blob)
+    } catch {
+      // Nothing to recover into beyond leaving the preview modal unopened
+      // — mirrors this codebase's other fetch-failure handling (e.g.
+      // confirmQuit above), no separate error UI for a capture failure.
+    } finally {
+      setCapturingScreenshot(false)
+    }
+  }
+
+  function handleOpenSettings(subSection) {
+    if (subSection) setSettingsExpandRequest(subSection)
+    setSettingsOpen(true)
+  }
+
   async function confirmDeleteSkill() {
     const id = skillToDelete
     setSkillToDelete(null)
@@ -505,9 +551,6 @@ export default function App() {
   if (serverStopped) {
     return (
       <div className="app">
-        <div className="titlebar">
-          <span className="titlebar-title">fastllm</span>
-        </div>
         <div className="stopped-state">
           <p className="stopped-title">fastllm has stopped.</p>
           <p className="stopped-hint">You can close this window, or relaunch it from the Desktop shortcut.</p>
@@ -518,50 +561,64 @@ export default function App() {
 
   return (
     <div className="app">
-      <div className="titlebar">
-        <span className="titlebar-title">fastllm</span>
-        <div className="titlebar-tabs">
+      <nav className="view-rail">
+        <button
+          type="button"
+          className={activeView === 'chat' ? 'is-active' : ''}
+          title="Chat"
+          onClick={() => setActiveView('chat')}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M4 4h16v12H8l-4 4V4Z" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          className={activeView === 'editor' ? 'is-active' : ''}
+          title="Editor"
+          onClick={() => setActiveView('editor')}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9l-6-6Z" />
+            <path d="M14 3v6h6" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          className={activeView === 'split' ? 'is-active' : ''}
+          title="Split"
+          onClick={() => setActiveView('split')}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <rect x="3" y="4" width="18" height="16" rx="2" />
+            <path d="M12 4v16" />
+          </svg>
+        </button>
+
+        <div className="view-rail-spacer" />
+
+        {isWails() && (
           <button
             type="button"
-            className={activeView === 'chat' ? 'is-active' : ''}
-            onClick={() => setActiveView('chat')}
+            title="Screenshot"
+            disabled={capturingScreenshot}
+            onClick={handleScreenshot}
           >
-            Chat
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z" />
+              <circle cx="12" cy="13.5" r="3.5" />
+            </svg>
           </button>
-          <button
-            type="button"
-            className={activeView === 'editor' ? 'is-active' : ''}
-            onClick={() => setActiveView('editor')}
-          >
-            Editor
-          </button>
-          <button
-            type="button"
-            className={activeView === 'split' ? 'is-active' : ''}
-            onClick={() => setActiveView('split')}
-          >
-            Split
-          </button>
-        </div>
-        <div className="titlebar-actions">
-          <button
-            type="button"
-            className="titlebar-btn"
-            title="Settings"
-            onClick={() => setSettingsOpen(true)}
-          >
-            ⚙
-          </button>
-          <button
-            type="button"
-            className="titlebar-btn"
-            title="Quit fastllm"
-            onClick={() => setQuitConfirmOpen(true)}
-          >
+        )}
+        <button type="button" title="Settings" onClick={() => handleOpenSettings()}>
+          ⚙
+        </button>
+        {!isWails() && (
+          <button type="button" title="Quit fastllm" onClick={() => setQuitConfirmOpen(true)}>
             ⏻
           </button>
-        </div>
-      </div>
+        )}
+      </nav>
 
       <div className="main-row">
       <div className="split-container" ref={splitContainerRef}>
@@ -578,6 +635,7 @@ export default function App() {
           theme={theme}
           terminalEnabled={terminalSettings.enabled}
           visible={activeView === 'editor' || activeView === 'split'}
+          openFolderSignal={openFolderSignal}
         />
       </div>
 
@@ -646,7 +704,7 @@ export default function App() {
                 model={model}
                 onChange={setModel}
                 fileAccessSettings={fileAccessSettings}
-                onOpenSettings={() => setSettingsOpen(true)}
+                onOpenSettings={() => handleOpenSettings('llmBackend')}
               />
             ),
                 skills: (
@@ -720,8 +778,12 @@ export default function App() {
         />
       )}
 
+      {screenshotBlob && (
+        <ScreenshotPreviewModal blob={screenshotBlob} onClose={() => setScreenshotBlob(null)} />
+      )}
+
       {settingsOpen && (
-        <SettingsModal
+        <SettingsPanel
           theme={theme}
           onThemeChange={setTheme}
           fontFamily={fontFamily}
@@ -739,6 +801,7 @@ export default function App() {
           onThinkLevelChange={setThinkLevel}
           onClearKnowledgeBase={handleClearKnowledgeBase}
           onClearConversations={handleClearConversations}
+          expandSection={settingsExpandRequest}
           onClose={() => setSettingsOpen(false)}
         />
       )}
