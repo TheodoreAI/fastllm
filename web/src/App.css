@@ -25,6 +25,7 @@
   --accent-contrast: #ffffff;
   --danger: #ff453a;
   --success: #32d74b;
+  --warning: #f2cc60;
 
   --radius-window: 4px;
   --radius: 4px;
@@ -73,16 +74,481 @@ html {
   --accent-contrast: #ffffff;
   --danger: #ff3b30;
   --success: #34c759;
+  --warning: #b8860b;
 
   --shadow-window: none;
   --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.16);
 }
 
-:root[data-theme='light'] .message.assistant {
+:root[data-theme='high-contrast'] {
+  /* High Contrast — pure black/white with a saturated accent, thicker
+     borders than the other themes (see --border-strong below) for
+     accessibility: every boundary between surfaces stays legible even
+     under color-vision deficiency or a low-quality display. */
+  --bg-window: #000000;
+  --bg-titlebar: #0a0a0a;
+  --bg-sidebar: #000000;
+  --bg-sidebar-tint: rgba(0, 0, 0, 0.85);
+  --bg-panel: #0d0d0d;
+  --bg-chat: #000000;
+  --bg-input: #1a1a1a;
+  --bg-bubble: #1a1a1a;
+  --bg-bubble-user: #0af0ff;
+
+  --border: rgba(255, 255, 255, 0.35);
+  --border-strong: rgba(255, 255, 255, 0.6);
+
+  --text: #ffffff;
+  --text-dim: #d0d0d0;
+  --text-faint: #a0a0a0;
+
+  --accent: #0af0ff;
+  --accent-contrast: #000000;
+  --danger: #ff5c5c;
+  --success: #4ee44e;
+  --warning: #ffd23f;
+
+  /* Sharp, undecorated corners — accessibility themes favor crisp,
+     unambiguous edges over softening. */
+  --radius-window: 0px;
+  --radius: 0px;
+  --radius-sm: 0px;
+
+  --shadow-window: none;
+  --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.6);
+}
+
+:root[data-theme='sepia'] {
+  /* Sepia — warm cream background with brown-toned text, aimed at long
+     reading sessions. Light-family (see the data-theme-family selectors
+     below): the fixed dark syntax-highlighting palette needs the same
+     light-mode override treatment light mode itself uses. */
+  --bg-window: #f4ecd8;
+  --bg-titlebar: #ecdfc3;
+  --bg-sidebar: #efe2c6;
+  --bg-sidebar-tint: rgba(244, 236, 216, 0.8);
+  --bg-panel: #faf3e3;
+  --bg-chat: #f8f1de;
+  --bg-input: #faf3e3;
+  --bg-bubble: #ecdfc3;
+  --bg-bubble-user: #a9723f;
+
+  --border: rgba(92, 65, 32, 0.14);
+  --border-strong: rgba(92, 65, 32, 0.24);
+
+  --text: #4a3826;
+  --text-dim: #7a6650;
+  --text-faint: #9c8a72;
+
+  --accent: #a9723f;
+  --accent-contrast: #fff8ec;
+  --danger: #c1442e;
+  --success: #4f7942;
+  --warning: #b8860b;
+
+  /* Softer, book-like corners. */
+  --radius-window: 6px;
+  --radius: 6px;
+  --radius-sm: 4px;
+
+  --shadow-window: none;
+  --shadow-overlay: 0 8px 24px rgba(74, 56, 38, 0.18);
+}
+
+:root[data-theme='midnight'] {
+  /* Midnight Blue — deep navy background with a cyan accent, a cooler
+     dark alternative to the default graphite dark theme. */
+  --bg-window: #0d1421;
+  --bg-titlebar: #101a2c;
+  --bg-sidebar: #0f1826;
+  --bg-sidebar-tint: rgba(13, 20, 33, 0.75);
+  --bg-panel: #142238;
+  --bg-chat: #0d1421;
+  --bg-input: #1b2d47;
+  --bg-bubble: #1b2d47;
+  --bg-bubble-user: #2dd4d4;
+
+  --border: rgba(148, 197, 255, 0.12);
+  --border-strong: rgba(148, 197, 255, 0.2);
+
+  --text: #e8f1ff;
+  --text-dim: #93a9c9;
+  --text-faint: #5f7291;
+
+  --accent: #2dd4d4;
+  --accent-contrast: #06222b;
+  --danger: #ff6b6b;
+  --success: #3ddc97;
+  --warning: #ffd166;
+
+  --shadow-window: none;
+  --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+:root[data-theme='ubuntu'] {
+  /* Ubuntu — the distro's signature aubergine/purple terminal, plus its
+     "Ubuntu orange" accent (the color of the Ubuntu logo and default
+     button highlight). */
+  --bg-window: #2c001e;
+  --bg-titlebar: #300a24;
+  --bg-sidebar: #260019;
+  --bg-sidebar-tint: rgba(44, 0, 30, 0.78);
+  --bg-panel: #3a0929;
+  --bg-chat: #2c001e;
+  --bg-input: #4b1038;
+  --bg-bubble: #4b1038;
+  --bg-bubble-user: #e95420;
+
+  --border: rgba(255, 255, 255, 0.1);
+  --border-strong: rgba(255, 255, 255, 0.18);
+
+  --text: #f6f4f2;
+  --text-dim: #c9b8c2;
+  --text-faint: #93808c;
+
+  --accent: #e95420;
+  --accent-contrast: #ffffff;
+  --danger: #ff5c5c;
+  --success: #4caf50;
+  --warning: #efb73e;
+
+  /* Yaru (Ubuntu's GTK theme) leans noticeably rounded. */
+  --radius-window: 8px;
+  --radius: 8px;
+  --radius-sm: 6px;
+
+  --shadow-window: none;
+  --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+:root[data-theme='solarized'] {
+  /* Solarized (dark) — Ethan Schoonover's precisely-tuned low-contrast
+     palette (base03/base02 backgrounds, base0/base1 text, the signature
+     cyan/blue/yellow accents), ubiquitous across Linux terminals and
+     editors even though it started life as a vim/Emacs colorscheme. */
+  --bg-window: #002b36;
+  --bg-titlebar: #073642;
+  --bg-sidebar: #00252e;
+  --bg-sidebar-tint: rgba(0, 43, 54, 0.8);
+  --bg-panel: #073642;
+  --bg-chat: #002b36;
+  --bg-input: #0a4551;
+  --bg-bubble: #0a4551;
+  --bg-bubble-user: #268bd2;
+
+  --border: rgba(147, 161, 161, 0.16);
+  --border-strong: rgba(147, 161, 161, 0.28);
+
+  --text: #93a1a1;
+  --text-dim: #708284;
+  --text-faint: #586e75;
+
+  --accent: #2aa198;
+  --accent-contrast: #002b36;
+  --danger: #dc322f;
+  --success: #859900;
+  --warning: #b58900;
+
+  /* Terminal/vim heritage — sharp, minimal corners. */
+  --radius-window: 2px;
+  --radius: 2px;
+  --radius-sm: 1px;
+
+  --shadow-window: none;
+  --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+:root[data-theme='nord'] {
+  /* Nord — Arctic, north-bluish palette (Polar Night backgrounds, Snow
+     Storm text, Frost accents) popular across Linux window managers
+     (i3, Sway) and terminal setups for its muted, low-glare feel. */
+  --bg-window: #2e3440;
+  --bg-titlebar: #272c36;
+  --bg-sidebar: #2a2f3a;
+  --bg-sidebar-tint: rgba(46, 52, 64, 0.78);
+  --bg-panel: #3b4252;
+  --bg-chat: #2e3440;
+  --bg-input: #434c5e;
+  --bg-bubble: #434c5e;
+  --bg-bubble-user: #88c0d0;
+
+  --border: rgba(216, 222, 233, 0.1);
+  --border-strong: rgba(216, 222, 233, 0.18);
+
+  --text: #e5e9f0;
+  --text-dim: #b8c2d6;
+  --text-faint: #7f8ba3;
+
+  --accent: #88c0d0;
+  --accent-contrast: #2e3440;
+  --danger: #bf616a;
+  --success: #a3be8c;
+  --warning: #ebcb8b;
+
+  /* Nord's own design language is minimal and mostly square. */
+  --radius-window: 2px;
+  --radius: 2px;
+  --radius-sm: 1px;
+
+  --shadow-window: none;
+  --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+:root[data-theme='big-sur'] {
+  /* macOS Big Sur — the modern flat macOS look introduced in 11.0: crisp
+     white/light-gray surfaces, systemBlue accent, and the soft
+     "continuous corner" radius macOS is known for (see --radius-window
+     etc. below) — the lightest, airiest theme in this set. */
+  --bg-window: #f5f5f7;
+  --bg-titlebar: #ececef;
+  --bg-sidebar: #efeff2;
+  --bg-sidebar-tint: rgba(245, 245, 247, 0.8);
+  --bg-panel: #ffffff;
+  --bg-chat: #ffffff;
+  --bg-input: #ffffff;
+  --bg-bubble: #edeef0;
+  --bg-bubble-user: #0071e3;
+
+  --border: rgba(0, 0, 0, 0.08);
+  --border-strong: rgba(0, 0, 0, 0.14);
+
+  --text: #1d1d1f;
+  --text-dim: #6e6e73;
+  --text-faint: #86868b;
+
+  --accent: #0071e3;
+  --accent-contrast: #ffffff;
+  --danger: #ff3b30;
+  --success: #28cd41;
+  --warning: #ff9500;
+
+  --radius-window: 10px;
+  --radius: 10px;
+  --radius-sm: 6px;
+
+  --shadow-window: none;
+  --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.14);
+}
+
+:root[data-theme='catppuccin'] {
+  /* Catppuccin (Mocha) — the popular modern pastel palette (Base/Mantle
+     backgrounds, Text/Subtext foregrounds, Mauve accent) widely used
+     across Neovim, terminals, and Linux desktop theming today. */
+  --bg-window: #1e1e2e;
+  --bg-titlebar: #181825;
+  --bg-sidebar: #181825;
+  --bg-sidebar-tint: rgba(30, 30, 46, 0.78);
+  --bg-panel: #313244;
+  --bg-chat: #1e1e2e;
+  --bg-input: #313244;
+  --bg-bubble: #313244;
+  --bg-bubble-user: #cba6f7;
+
+  --border: rgba(205, 214, 244, 0.1);
+  --border-strong: rgba(205, 214, 244, 0.18);
+
+  --text: #cdd6f4;
+  --text-dim: #a6adc8;
+  --text-faint: #7f849c;
+
+  --accent: #cba6f7;
+  --accent-contrast: #1e1e2e;
+  --danger: #f38ba8;
+  --success: #a6e3a1;
+  --warning: #f9e2af;
+
+  /* Catppuccin's community styling leans soft and rounded. */
+  --radius-window: 8px;
+  --radius: 8px;
+  --radius-sm: 5px;
+
+  --shadow-window: none;
+  --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+:root[data-theme='dracula'] {
+  /* Dracula — the widely-ported "purple on near-black" editor/terminal
+     theme (background #282a36, the signature pink accent), one of the
+     most-installed themes across every major editor. */
+  --bg-window: #282a36;
+  --bg-titlebar: #21222c;
+  --bg-sidebar: #21222c;
+  --bg-sidebar-tint: rgba(40, 42, 54, 0.78);
+  --bg-panel: #343746;
+  --bg-chat: #282a36;
+  --bg-input: #44475a;
+  --bg-bubble: #44475a;
+  --bg-bubble-user: #ff79c6;
+
+  --border: rgba(248, 248, 242, 0.1);
+  --border-strong: rgba(248, 248, 242, 0.18);
+
+  --text: #f8f8f2;
+  --text-dim: #bfbfd9;
+  --text-faint: #6272a4;
+
+  --accent: #bd93f9;
+  --accent-contrast: #282a36;
+  --danger: #ff5555;
+  --success: #50fa7b;
+  --warning: #f1fa8c;
+
+  --radius-window: 4px;
+  --radius: 4px;
+  --radius-sm: 3px;
+
+  --shadow-window: none;
+  --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+:root[data-theme='gruvbox'] {
+  /* Gruvbox (dark) — retro, warm-toned "groove box" palette (dark0
+     background, cream foreground, muted earthy accents) popular in the
+     vim/terminal-multiplexer world for its low eye-strain contrast. */
+  --bg-window: #282828;
+  --bg-titlebar: #1d2021;
+  --bg-sidebar: #1d2021;
+  --bg-sidebar-tint: rgba(40, 40, 40, 0.78);
+  --bg-panel: #3c3836;
+  --bg-chat: #282828;
+  --bg-input: #504945;
+  --bg-bubble: #504945;
+  --bg-bubble-user: #d65d0e;
+
+  --border: rgba(235, 219, 178, 0.1);
+  --border-strong: rgba(235, 219, 178, 0.18);
+
+  --text: #ebdbb2;
+  --text-dim: #bdae93;
+  --text-faint: #928374;
+
+  --accent: #fabd2f;
+  --accent-contrast: #282828;
+  --danger: #fb4934;
+  --success: #b8bb26;
+  --warning: #fabd2f;
+
+  /* Retro/blocky — sharp corners to match Gruvbox's terminal roots. */
+  --radius-window: 1px;
+  --radius: 1px;
+  --radius-sm: 1px;
+
+  --shadow-window: none;
+  --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+:root[data-theme='tokyo-night'] {
+  /* Tokyo Night — the very popular VS Code/Neovim theme evoking Tokyo's
+     neon skyline at night: deep blue-black background, vivid
+     blue/purple accents against otherwise muted surfaces. */
+  --bg-window: #1a1b26;
+  --bg-titlebar: #16161e;
+  --bg-sidebar: #16161e;
+  --bg-sidebar-tint: rgba(26, 27, 38, 0.78);
+  --bg-panel: #24283b;
+  --bg-chat: #1a1b26;
+  --bg-input: #292e42;
+  --bg-bubble: #292e42;
+  --bg-bubble-user: #7aa2f7;
+
+  --border: rgba(169, 177, 214, 0.1);
+  --border-strong: rgba(169, 177, 214, 0.18);
+
+  --text: #c0caf5;
+  --text-dim: #9aa5ce;
+  --text-faint: #565f89;
+
+  --accent: #bb9af7;
+  --accent-contrast: #1a1b26;
+  --danger: #f7768e;
+  --success: #9ece6a;
+  --warning: #e0af68;
+
+  --radius-window: 5px;
+  --radius: 5px;
+  --radius-sm: 3px;
+
+  --shadow-window: none;
+  --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+:root[data-theme='one-dark'] {
+  /* One Dark — Atom's flagship theme (later ported everywhere, including
+     as VS Code's default dark theme's namesake): balanced blue-gray
+     background with a cool blue accent, comfortable neutral contrast. */
+  --bg-window: #282c34;
+  --bg-titlebar: #21252b;
+  --bg-sidebar: #21252b;
+  --bg-sidebar-tint: rgba(40, 44, 52, 0.78);
+  --bg-panel: #2c313a;
+  --bg-chat: #282c34;
+  --bg-input: #3a3f4b;
+  --bg-bubble: #3a3f4b;
+  --bg-bubble-user: #61afef;
+
+  --border: rgba(171, 178, 191, 0.1);
+  --border-strong: rgba(171, 178, 191, 0.18);
+
+  --text: #abb2bf;
+  --text-dim: #828a9a;
+  --text-faint: #5c6370;
+
+  --accent: #61afef;
+  --accent-contrast: #282c34;
+  --danger: #e06c75;
+  --success: #98c379;
+  --warning: #e5c07b;
+
+  /* Atom's own UI chrome was fairly sharp-edged. */
+  --radius-window: 3px;
+  --radius: 3px;
+  --radius-sm: 2px;
+
+  --shadow-window: none;
+  --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+:root[data-theme='monokai'] {
+  /* Monokai — Wimer Hazenberg's iconic Sublime Text/TextMate theme: near-
+     black background with the unmistakable hot-pink/green/orange trio,
+     among the highest-contrast, most saturated editor themes ever made. */
+  --bg-window: #272822;
+  --bg-titlebar: #1e1f1a;
+  --bg-sidebar: #1e1f1a;
+  --bg-sidebar-tint: rgba(39, 40, 34, 0.78);
+  --bg-panel: #34352d;
+  --bg-chat: #272822;
+  --bg-input: #49483e;
+  --bg-bubble: #49483e;
+  --bg-bubble-user: #f92672;
+
+  --border: rgba(248, 248, 242, 0.1);
+  --border-strong: rgba(248, 248, 242, 0.18);
+
+  --text: #f8f8f2;
+  --text-dim: #c2c1bc;
+  --text-faint: #75715e;
+
+  --accent: #a6e22e;
+  --accent-contrast: #272822;
+  --danger: #f92672;
+  --success: #a6e22e;
+  --warning: #e6db74;
+
+  /* Sublime Text's classic UI is sharp and minimal. */
+  --radius-window: 2px;
+  --radius: 2px;
+  --radius-sm: 1px;
+
+  --shadow-window: none;
+  --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+:root[data-theme-family='light'] .message.assistant {
   border: 1px solid var(--border);
 }
 
-:root[data-theme='light'] .markdown pre {
+:root[data-theme-family='light'] .markdown pre {
   background: #f5f5f7;
 }
 
@@ -93,98 +559,98 @@ html {
    highlight.js's own github.css (light) token palette, scoped to light
    mode, rather than switching stylesheets — avoids importing and
    specificity-fighting two full vendor stylesheets at once. */
-:root[data-theme='light'] .markdown .hljs {
+:root[data-theme-family='light'] .markdown .hljs {
   color: #24292e;
 }
 
-:root[data-theme='light'] .markdown .hljs-doctag,
-:root[data-theme='light'] .markdown .hljs-keyword,
-:root[data-theme='light'] .markdown .hljs-meta .hljs-keyword,
-:root[data-theme='light'] .markdown .hljs-template-tag,
-:root[data-theme='light'] .markdown .hljs-template-variable,
-:root[data-theme='light'] .markdown .hljs-type,
-:root[data-theme='light'] .markdown .hljs-variable.language_ {
+:root[data-theme-family='light'] .markdown .hljs-doctag,
+:root[data-theme-family='light'] .markdown .hljs-keyword,
+:root[data-theme-family='light'] .markdown .hljs-meta .hljs-keyword,
+:root[data-theme-family='light'] .markdown .hljs-template-tag,
+:root[data-theme-family='light'] .markdown .hljs-template-variable,
+:root[data-theme-family='light'] .markdown .hljs-type,
+:root[data-theme-family='light'] .markdown .hljs-variable.language_ {
   color: #d73a49;
 }
 
-:root[data-theme='light'] .markdown .hljs-title,
-:root[data-theme='light'] .markdown .hljs-title.class_,
-:root[data-theme='light'] .markdown .hljs-title.class_.inherited__,
-:root[data-theme='light'] .markdown .hljs-title.function_ {
+:root[data-theme-family='light'] .markdown .hljs-title,
+:root[data-theme-family='light'] .markdown .hljs-title.class_,
+:root[data-theme-family='light'] .markdown .hljs-title.class_.inherited__,
+:root[data-theme-family='light'] .markdown .hljs-title.function_ {
   color: #6f42c1;
 }
 
-:root[data-theme='light'] .markdown .hljs-attr,
-:root[data-theme='light'] .markdown .hljs-attribute,
-:root[data-theme='light'] .markdown .hljs-literal,
-:root[data-theme='light'] .markdown .hljs-meta,
-:root[data-theme='light'] .markdown .hljs-number,
-:root[data-theme='light'] .markdown .hljs-operator,
-:root[data-theme='light'] .markdown .hljs-variable,
-:root[data-theme='light'] .markdown .hljs-selector-attr,
-:root[data-theme='light'] .markdown .hljs-selector-class,
-:root[data-theme='light'] .markdown .hljs-selector-id {
+:root[data-theme-family='light'] .markdown .hljs-attr,
+:root[data-theme-family='light'] .markdown .hljs-attribute,
+:root[data-theme-family='light'] .markdown .hljs-literal,
+:root[data-theme-family='light'] .markdown .hljs-meta,
+:root[data-theme-family='light'] .markdown .hljs-number,
+:root[data-theme-family='light'] .markdown .hljs-operator,
+:root[data-theme-family='light'] .markdown .hljs-variable,
+:root[data-theme-family='light'] .markdown .hljs-selector-attr,
+:root[data-theme-family='light'] .markdown .hljs-selector-class,
+:root[data-theme-family='light'] .markdown .hljs-selector-id {
   color: #005cc5;
 }
 
-:root[data-theme='light'] .markdown .hljs-regexp,
-:root[data-theme='light'] .markdown .hljs-string,
-:root[data-theme='light'] .markdown .hljs-meta .hljs-string {
+:root[data-theme-family='light'] .markdown .hljs-regexp,
+:root[data-theme-family='light'] .markdown .hljs-string,
+:root[data-theme-family='light'] .markdown .hljs-meta .hljs-string {
   color: #032f62;
 }
 
-:root[data-theme='light'] .markdown .hljs-built_in,
-:root[data-theme='light'] .markdown .hljs-symbol {
+:root[data-theme-family='light'] .markdown .hljs-built_in,
+:root[data-theme-family='light'] .markdown .hljs-symbol {
   color: #e36209;
 }
 
-:root[data-theme='light'] .markdown .hljs-comment,
-:root[data-theme='light'] .markdown .hljs-code,
-:root[data-theme='light'] .markdown .hljs-formula {
+:root[data-theme-family='light'] .markdown .hljs-comment,
+:root[data-theme-family='light'] .markdown .hljs-code,
+:root[data-theme-family='light'] .markdown .hljs-formula {
   color: #6a737d;
 }
 
-:root[data-theme='light'] .markdown .hljs-name,
-:root[data-theme='light'] .markdown .hljs-quote,
-:root[data-theme='light'] .markdown .hljs-selector-tag,
-:root[data-theme='light'] .markdown .hljs-selector-pseudo {
+:root[data-theme-family='light'] .markdown .hljs-name,
+:root[data-theme-family='light'] .markdown .hljs-quote,
+:root[data-theme-family='light'] .markdown .hljs-selector-tag,
+:root[data-theme-family='light'] .markdown .hljs-selector-pseudo {
   color: #22863a;
 }
 
-:root[data-theme='light'] .markdown .hljs-subst {
+:root[data-theme-family='light'] .markdown .hljs-subst {
   color: #24292e;
 }
 
-:root[data-theme='light'] .markdown .hljs-section {
+:root[data-theme-family='light'] .markdown .hljs-section {
   color: #005cc5;
   font-weight: bold;
 }
 
-:root[data-theme='light'] .markdown .hljs-bullet {
+:root[data-theme-family='light'] .markdown .hljs-bullet {
   color: #735c0f;
 }
 
-:root[data-theme='light'] .markdown .hljs-emphasis {
+:root[data-theme-family='light'] .markdown .hljs-emphasis {
   color: #24292e;
   font-style: italic;
 }
 
-:root[data-theme='light'] .markdown .hljs-strong {
+:root[data-theme-family='light'] .markdown .hljs-strong {
   color: #24292e;
   font-weight: bold;
 }
 
-:root[data-theme='light'] .markdown .hljs-addition {
+:root[data-theme-family='light'] .markdown .hljs-addition {
   color: #22863a;
   background-color: #f0fff4;
 }
 
-:root[data-theme='light'] .markdown .hljs-deletion {
+:root[data-theme-family='light'] .markdown .hljs-deletion {
   color: #b31d28;
   background-color: #ffeef0;
 }
 
-:root[data-theme='light'] .message .role {
+:root[data-theme-family='light'] .message .role {
   color: rgba(0, 0, 0, 0.45);
 }
 
@@ -237,7 +703,26 @@ body {
   z-index: 1;
 }
 
+.app-version {
+  position: absolute;
+  right: 8px;
+  bottom: 6px;
+  z-index: 2;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--text);
+  opacity: 1;
+  user-select: none;
+  pointer-events: auto;
+}
+
 .view-rail {
+  /* Single source of truth for every icon on this rail — an SVG icon
+     (Chat/Editor/Split/Search/Git/Screenshot) reads --view-rail-icon-size
+     via width/height below; the Settings gear (a text glyph, not an SVG)
+     reads the same value as its font-size so both scale together from
+     one place instead of six separately-tuned numbers. */
+  --view-rail-icon-size: 20px;
   width: 44px;
   min-width: 44px;
   display: flex;
@@ -266,7 +751,12 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.1rem;
+  font-size: var(--view-rail-icon-size);
+}
+
+.view-rail button svg {
+  width: var(--view-rail-icon-size);
+  height: var(--view-rail-icon-size);
 }
 
 .view-rail button:hover {
@@ -275,8 +765,25 @@ body {
 }
 
 .view-rail button.is-active {
-  color: var(--text);
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent-contrast);
+  background: var(--accent);
+}
+
+.view-rail-git {
+  position: relative;
+}
+
+.view-rail-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border-radius: 999px;
+  font-size: 0.625rem;
+  padding: 0 4px;
+  min-width: 14px;
+  line-height: 1.3;
 }
 
 .main-row {
@@ -497,8 +1004,8 @@ body {
   border-radius: 50%;
   border: none;
   background: transparent;
-  color: var(--text-faint);
-  font-size: 12px;
+  color: var(--text-dim);
+  font-size: 16px;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -735,7 +1242,7 @@ body {
 }
 
 .btn-secondary:hover {
-  background: #343434;
+  background: color-mix(in srgb, var(--text) 15%, transparent);
 }
 
 .btn-icon {
@@ -1121,8 +1628,8 @@ body {
 }
 
 .message.user .markdown a {
-  color: #ffffff;
-  text-decoration-color: rgba(255, 255, 255, 0.5);
+  color: var(--accent-contrast);
+  text-decoration-color: color-mix(in srgb, var(--accent-contrast) 50%, transparent);
 }
 
 .markdown blockquote {
@@ -1534,15 +2041,15 @@ body {
 }
 
 .editor-sidebar {
-  width: 260px;
-  min-width: 200px;
-  max-width: 400px;
+  /* Width when expanded is set inline from useEditorSidebarWidth (see
+     EditorView.jsx) via the draggable divider right after this element —
+     no fixed width here, just the collapsed-state override below. */
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border);
   overflow: hidden;
-  transition: width 0.15s ease, min-width 0.15s ease;
 }
 
 .editor-sidebar.is-collapsed {
@@ -1559,8 +2066,8 @@ body {
   border-radius: 50%;
   border: none;
   background: transparent;
-  color: var(--text-faint);
-  font-size: 12px;
+  color: var(--text-dim);
+  font-size: 16px;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -1574,6 +2081,28 @@ body {
 .editor-sidebar-collapse-toggle:hover {
   background: rgba(128, 128, 128, 0.18);
   color: var(--text);
+}
+
+.editor-sidebar-divider {
+  flex: 0 0 5px;
+  cursor: col-resize;
+  background: var(--border);
+  position: relative;
+  z-index: 2;
+}
+
+.editor-sidebar-divider:hover,
+.editor-sidebar-divider:active {
+  background: var(--accent);
+}
+
+.editor-sidebar-divider::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  right: -3px;
 }
 
 .editor-folder-row {
@@ -2100,8 +2629,8 @@ body {
 }
 
 .editor-git-m {
-  background: color-mix(in srgb, #f2cc60 22%, transparent);
-  color: #b8860b;
+  background: color-mix(in srgb, var(--warning) 22%, transparent);
+  color: var(--warning);
 }
 
 .editor-git-a {
@@ -2197,6 +2726,9 @@ body {
 
 .editor-codemirror {
   flex: 1;
+  width: 100%;
+  max-width: 900px;
+  align-self: center;
   min-height: 0;
   overflow: hidden;
 }
@@ -2338,7 +2870,7 @@ body {
   font-size: 0.8125rem;
 }
 
-:root[data-theme='light'] .settings-row {
+:root[data-theme-family='light'] .settings-row {
   background: var(--bg-window);
 }
 
@@ -2363,6 +2895,7 @@ body {
 
 .theme-toggle {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
 }
 
@@ -2433,7 +2966,8 @@ body {
 }
 
 .theme-option {
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 88px;
   padding: 8px 10px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-strong);
@@ -2447,7 +2981,7 @@ body {
 
 .theme-option.active {
   background: var(--accent);
-  color: white;
+  color: var(--accent-contrast);
   border-color: var(--accent);
 }
 
@@ -2530,7 +3064,7 @@ body {
   text-align: right;
 }
 
-:root[data-theme='light'] .rag-field input {
+:root[data-theme-family='light'] .rag-field input {
   background: var(--bg-window);
 }
 
@@ -2559,7 +3093,7 @@ body {
   font-size: 0.8125rem;
 }
 
-:root[data-theme='light'] .danger-row {
+:root[data-theme-family='light'] .danger-row {
   background: var(--bg-window);
   border: 1px solid var(--border);
 }
