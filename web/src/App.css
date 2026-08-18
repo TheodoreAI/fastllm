@@ -25,6 +25,7 @@
   --accent-contrast: #ffffff;
   --danger: #ff453a;
   --success: #32d74b;
+  --warning: #f2cc60;
 
   --radius-window: 4px;
   --radius: 4px;
@@ -73,16 +74,268 @@ html {
   --accent-contrast: #ffffff;
   --danger: #ff3b30;
   --success: #34c759;
+  --warning: #b8860b;
 
   --shadow-window: none;
   --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.16);
 }
 
-:root[data-theme='light'] .message.assistant {
+:root[data-theme='high-contrast'] {
+  /* High Contrast — pure black/white with a saturated accent, thicker
+     borders than the other themes (see --border-strong below) for
+     accessibility: every boundary between surfaces stays legible even
+     under color-vision deficiency or a low-quality display. */
+  --bg-window: #000000;
+  --bg-titlebar: #0a0a0a;
+  --bg-sidebar: #000000;
+  --bg-sidebar-tint: rgba(0, 0, 0, 0.85);
+  --bg-panel: #0d0d0d;
+  --bg-chat: #000000;
+  --bg-input: #1a1a1a;
+  --bg-bubble: #1a1a1a;
+  --bg-bubble-user: #0af0ff;
+
+  --border: rgba(255, 255, 255, 0.35);
+  --border-strong: rgba(255, 255, 255, 0.6);
+
+  --text: #ffffff;
+  --text-dim: #d0d0d0;
+  --text-faint: #a0a0a0;
+
+  --accent: #0af0ff;
+  --accent-contrast: #000000;
+  --danger: #ff5c5c;
+  --success: #4ee44e;
+  --warning: #ffd23f;
+
+  --shadow-window: none;
+  --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.6);
+}
+
+:root[data-theme='sepia'] {
+  /* Sepia — warm cream background with brown-toned text, aimed at long
+     reading sessions. Light-family (see the data-theme-family selectors
+     below): the fixed dark syntax-highlighting palette needs the same
+     light-mode override treatment light mode itself uses. */
+  --bg-window: #f4ecd8;
+  --bg-titlebar: #ecdfc3;
+  --bg-sidebar: #efe2c6;
+  --bg-sidebar-tint: rgba(244, 236, 216, 0.8);
+  --bg-panel: #faf3e3;
+  --bg-chat: #f8f1de;
+  --bg-input: #faf3e3;
+  --bg-bubble: #ecdfc3;
+  --bg-bubble-user: #a9723f;
+
+  --border: rgba(92, 65, 32, 0.14);
+  --border-strong: rgba(92, 65, 32, 0.24);
+
+  --text: #4a3826;
+  --text-dim: #7a6650;
+  --text-faint: #9c8a72;
+
+  --accent: #a9723f;
+  --accent-contrast: #fff8ec;
+  --danger: #c1442e;
+  --success: #4f7942;
+  --warning: #b8860b;
+
+  --shadow-window: none;
+  --shadow-overlay: 0 8px 24px rgba(74, 56, 38, 0.18);
+}
+
+:root[data-theme='midnight'] {
+  /* Midnight Blue — deep navy background with a cyan accent, a cooler
+     dark alternative to the default graphite dark theme. */
+  --bg-window: #0d1421;
+  --bg-titlebar: #101a2c;
+  --bg-sidebar: #0f1826;
+  --bg-sidebar-tint: rgba(13, 20, 33, 0.75);
+  --bg-panel: #142238;
+  --bg-chat: #0d1421;
+  --bg-input: #1b2d47;
+  --bg-bubble: #1b2d47;
+  --bg-bubble-user: #2dd4d4;
+
+  --border: rgba(148, 197, 255, 0.12);
+  --border-strong: rgba(148, 197, 255, 0.2);
+
+  --text: #e8f1ff;
+  --text-dim: #93a9c9;
+  --text-faint: #5f7291;
+
+  --accent: #2dd4d4;
+  --accent-contrast: #06222b;
+  --danger: #ff6b6b;
+  --success: #3ddc97;
+  --warning: #ffd166;
+
+  --shadow-window: none;
+  --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+:root[data-theme='ubuntu'] {
+  /* Ubuntu — the distro's signature aubergine/purple terminal, plus its
+     "Ubuntu orange" accent (the color of the Ubuntu logo and default
+     button highlight). */
+  --bg-window: #2c001e;
+  --bg-titlebar: #300a24;
+  --bg-sidebar: #260019;
+  --bg-sidebar-tint: rgba(44, 0, 30, 0.78);
+  --bg-panel: #3a0929;
+  --bg-chat: #2c001e;
+  --bg-input: #4b1038;
+  --bg-bubble: #4b1038;
+  --bg-bubble-user: #e95420;
+
+  --border: rgba(255, 255, 255, 0.1);
+  --border-strong: rgba(255, 255, 255, 0.18);
+
+  --text: #f6f4f2;
+  --text-dim: #c9b8c2;
+  --text-faint: #93808c;
+
+  --accent: #e95420;
+  --accent-contrast: #ffffff;
+  --danger: #ff5c5c;
+  --success: #4caf50;
+  --warning: #efb73e;
+
+  --shadow-window: none;
+  --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+:root[data-theme='solarized'] {
+  /* Solarized (dark) — Ethan Schoonover's precisely-tuned low-contrast
+     palette (base03/base02 backgrounds, base0/base1 text, the signature
+     cyan/blue/yellow accents), ubiquitous across Linux terminals and
+     editors even though it started life as a vim/Emacs colorscheme. */
+  --bg-window: #002b36;
+  --bg-titlebar: #073642;
+  --bg-sidebar: #00252e;
+  --bg-sidebar-tint: rgba(0, 43, 54, 0.8);
+  --bg-panel: #073642;
+  --bg-chat: #002b36;
+  --bg-input: #0a4551;
+  --bg-bubble: #0a4551;
+  --bg-bubble-user: #268bd2;
+
+  --border: rgba(147, 161, 161, 0.16);
+  --border-strong: rgba(147, 161, 161, 0.28);
+
+  --text: #93a1a1;
+  --text-dim: #708284;
+  --text-faint: #586e75;
+
+  --accent: #2aa198;
+  --accent-contrast: #002b36;
+  --danger: #dc322f;
+  --success: #859900;
+  --warning: #b58900;
+
+  --shadow-window: none;
+  --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+:root[data-theme='nord'] {
+  /* Nord — Arctic, north-bluish palette (Polar Night backgrounds, Snow
+     Storm text, Frost accents) popular across Linux window managers
+     (i3, Sway) and terminal setups for its muted, low-glare feel. */
+  --bg-window: #2e3440;
+  --bg-titlebar: #272c36;
+  --bg-sidebar: #2a2f3a;
+  --bg-sidebar-tint: rgba(46, 52, 64, 0.78);
+  --bg-panel: #3b4252;
+  --bg-chat: #2e3440;
+  --bg-input: #434c5e;
+  --bg-bubble: #434c5e;
+  --bg-bubble-user: #88c0d0;
+
+  --border: rgba(216, 222, 233, 0.1);
+  --border-strong: rgba(216, 222, 233, 0.18);
+
+  --text: #e5e9f0;
+  --text-dim: #b8c2d6;
+  --text-faint: #7f8ba3;
+
+  --accent: #88c0d0;
+  --accent-contrast: #2e3440;
+  --danger: #bf616a;
+  --success: #a3be8c;
+  --warning: #ebcb8b;
+
+  --shadow-window: none;
+  --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+:root[data-theme='big-sur'] {
+  /* macOS Big Sur — the modern flat macOS look introduced in 11.0: crisp
+     white/light-gray surfaces, systemBlue accent, softer corner radii in
+     spirit (radius tokens stay shared across themes, see :root above) —
+     the lightest, airiest theme in this set. */
+  --bg-window: #f5f5f7;
+  --bg-titlebar: #ececef;
+  --bg-sidebar: #efeff2;
+  --bg-sidebar-tint: rgba(245, 245, 247, 0.8);
+  --bg-panel: #ffffff;
+  --bg-chat: #ffffff;
+  --bg-input: #ffffff;
+  --bg-bubble: #edeef0;
+  --bg-bubble-user: #0071e3;
+
+  --border: rgba(0, 0, 0, 0.08);
+  --border-strong: rgba(0, 0, 0, 0.14);
+
+  --text: #1d1d1f;
+  --text-dim: #6e6e73;
+  --text-faint: #86868b;
+
+  --accent: #0071e3;
+  --accent-contrast: #ffffff;
+  --danger: #ff3b30;
+  --success: #28cd41;
+  --warning: #ff9500;
+
+  --shadow-window: none;
+  --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.14);
+}
+
+:root[data-theme='catppuccin'] {
+  /* Catppuccin (Mocha) — the popular modern pastel palette (Base/Mantle
+     backgrounds, Text/Subtext foregrounds, Mauve accent) widely used
+     across Neovim, terminals, and Linux desktop theming today. */
+  --bg-window: #1e1e2e;
+  --bg-titlebar: #181825;
+  --bg-sidebar: #181825;
+  --bg-sidebar-tint: rgba(30, 30, 46, 0.78);
+  --bg-panel: #313244;
+  --bg-chat: #1e1e2e;
+  --bg-input: #313244;
+  --bg-bubble: #313244;
+  --bg-bubble-user: #cba6f7;
+
+  --border: rgba(205, 214, 244, 0.1);
+  --border-strong: rgba(205, 214, 244, 0.18);
+
+  --text: #cdd6f4;
+  --text-dim: #a6adc8;
+  --text-faint: #7f849c;
+
+  --accent: #cba6f7;
+  --accent-contrast: #1e1e2e;
+  --danger: #f38ba8;
+  --success: #a6e3a1;
+  --warning: #f9e2af;
+
+  --shadow-window: none;
+  --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+:root[data-theme-family='light'] .message.assistant {
   border: 1px solid var(--border);
 }
 
-:root[data-theme='light'] .markdown pre {
+:root[data-theme-family='light'] .markdown pre {
   background: #f5f5f7;
 }
 
@@ -93,98 +346,98 @@ html {
    highlight.js's own github.css (light) token palette, scoped to light
    mode, rather than switching stylesheets — avoids importing and
    specificity-fighting two full vendor stylesheets at once. */
-:root[data-theme='light'] .markdown .hljs {
+:root[data-theme-family='light'] .markdown .hljs {
   color: #24292e;
 }
 
-:root[data-theme='light'] .markdown .hljs-doctag,
-:root[data-theme='light'] .markdown .hljs-keyword,
-:root[data-theme='light'] .markdown .hljs-meta .hljs-keyword,
-:root[data-theme='light'] .markdown .hljs-template-tag,
-:root[data-theme='light'] .markdown .hljs-template-variable,
-:root[data-theme='light'] .markdown .hljs-type,
-:root[data-theme='light'] .markdown .hljs-variable.language_ {
+:root[data-theme-family='light'] .markdown .hljs-doctag,
+:root[data-theme-family='light'] .markdown .hljs-keyword,
+:root[data-theme-family='light'] .markdown .hljs-meta .hljs-keyword,
+:root[data-theme-family='light'] .markdown .hljs-template-tag,
+:root[data-theme-family='light'] .markdown .hljs-template-variable,
+:root[data-theme-family='light'] .markdown .hljs-type,
+:root[data-theme-family='light'] .markdown .hljs-variable.language_ {
   color: #d73a49;
 }
 
-:root[data-theme='light'] .markdown .hljs-title,
-:root[data-theme='light'] .markdown .hljs-title.class_,
-:root[data-theme='light'] .markdown .hljs-title.class_.inherited__,
-:root[data-theme='light'] .markdown .hljs-title.function_ {
+:root[data-theme-family='light'] .markdown .hljs-title,
+:root[data-theme-family='light'] .markdown .hljs-title.class_,
+:root[data-theme-family='light'] .markdown .hljs-title.class_.inherited__,
+:root[data-theme-family='light'] .markdown .hljs-title.function_ {
   color: #6f42c1;
 }
 
-:root[data-theme='light'] .markdown .hljs-attr,
-:root[data-theme='light'] .markdown .hljs-attribute,
-:root[data-theme='light'] .markdown .hljs-literal,
-:root[data-theme='light'] .markdown .hljs-meta,
-:root[data-theme='light'] .markdown .hljs-number,
-:root[data-theme='light'] .markdown .hljs-operator,
-:root[data-theme='light'] .markdown .hljs-variable,
-:root[data-theme='light'] .markdown .hljs-selector-attr,
-:root[data-theme='light'] .markdown .hljs-selector-class,
-:root[data-theme='light'] .markdown .hljs-selector-id {
+:root[data-theme-family='light'] .markdown .hljs-attr,
+:root[data-theme-family='light'] .markdown .hljs-attribute,
+:root[data-theme-family='light'] .markdown .hljs-literal,
+:root[data-theme-family='light'] .markdown .hljs-meta,
+:root[data-theme-family='light'] .markdown .hljs-number,
+:root[data-theme-family='light'] .markdown .hljs-operator,
+:root[data-theme-family='light'] .markdown .hljs-variable,
+:root[data-theme-family='light'] .markdown .hljs-selector-attr,
+:root[data-theme-family='light'] .markdown .hljs-selector-class,
+:root[data-theme-family='light'] .markdown .hljs-selector-id {
   color: #005cc5;
 }
 
-:root[data-theme='light'] .markdown .hljs-regexp,
-:root[data-theme='light'] .markdown .hljs-string,
-:root[data-theme='light'] .markdown .hljs-meta .hljs-string {
+:root[data-theme-family='light'] .markdown .hljs-regexp,
+:root[data-theme-family='light'] .markdown .hljs-string,
+:root[data-theme-family='light'] .markdown .hljs-meta .hljs-string {
   color: #032f62;
 }
 
-:root[data-theme='light'] .markdown .hljs-built_in,
-:root[data-theme='light'] .markdown .hljs-symbol {
+:root[data-theme-family='light'] .markdown .hljs-built_in,
+:root[data-theme-family='light'] .markdown .hljs-symbol {
   color: #e36209;
 }
 
-:root[data-theme='light'] .markdown .hljs-comment,
-:root[data-theme='light'] .markdown .hljs-code,
-:root[data-theme='light'] .markdown .hljs-formula {
+:root[data-theme-family='light'] .markdown .hljs-comment,
+:root[data-theme-family='light'] .markdown .hljs-code,
+:root[data-theme-family='light'] .markdown .hljs-formula {
   color: #6a737d;
 }
 
-:root[data-theme='light'] .markdown .hljs-name,
-:root[data-theme='light'] .markdown .hljs-quote,
-:root[data-theme='light'] .markdown .hljs-selector-tag,
-:root[data-theme='light'] .markdown .hljs-selector-pseudo {
+:root[data-theme-family='light'] .markdown .hljs-name,
+:root[data-theme-family='light'] .markdown .hljs-quote,
+:root[data-theme-family='light'] .markdown .hljs-selector-tag,
+:root[data-theme-family='light'] .markdown .hljs-selector-pseudo {
   color: #22863a;
 }
 
-:root[data-theme='light'] .markdown .hljs-subst {
+:root[data-theme-family='light'] .markdown .hljs-subst {
   color: #24292e;
 }
 
-:root[data-theme='light'] .markdown .hljs-section {
+:root[data-theme-family='light'] .markdown .hljs-section {
   color: #005cc5;
   font-weight: bold;
 }
 
-:root[data-theme='light'] .markdown .hljs-bullet {
+:root[data-theme-family='light'] .markdown .hljs-bullet {
   color: #735c0f;
 }
 
-:root[data-theme='light'] .markdown .hljs-emphasis {
+:root[data-theme-family='light'] .markdown .hljs-emphasis {
   color: #24292e;
   font-style: italic;
 }
 
-:root[data-theme='light'] .markdown .hljs-strong {
+:root[data-theme-family='light'] .markdown .hljs-strong {
   color: #24292e;
   font-weight: bold;
 }
 
-:root[data-theme='light'] .markdown .hljs-addition {
+:root[data-theme-family='light'] .markdown .hljs-addition {
   color: #22863a;
   background-color: #f0fff4;
 }
 
-:root[data-theme='light'] .markdown .hljs-deletion {
+:root[data-theme-family='light'] .markdown .hljs-deletion {
   color: #b31d28;
   background-color: #ffeef0;
 }
 
-:root[data-theme='light'] .message .role {
+:root[data-theme-family='light'] .message .role {
   color: rgba(0, 0, 0, 0.45);
 }
 
@@ -538,7 +791,7 @@ body {
   border-radius: 50%;
   border: none;
   background: transparent;
-  color: whitesmoke;
+  color: var(--text-dim);
   font-size: 16px;
   cursor: pointer;
   display: flex;
@@ -776,7 +1029,7 @@ body {
 }
 
 .btn-secondary:hover {
-  background: #343434;
+  background: color-mix(in srgb, var(--text) 15%, transparent);
 }
 
 .btn-icon {
@@ -1162,8 +1415,8 @@ body {
 }
 
 .message.user .markdown a {
-  color: #ffffff;
-  text-decoration-color: rgba(255, 255, 255, 0.5);
+  color: var(--accent-contrast);
+  text-decoration-color: color-mix(in srgb, var(--accent-contrast) 50%, transparent);
 }
 
 .markdown blockquote {
@@ -1600,7 +1853,7 @@ body {
   border-radius: 50%;
   border: none;
   background: transparent;
-  color: whitesmoke;
+  color: var(--text-dim);
   font-size: 16px;
   cursor: pointer;
   display: flex;
@@ -2163,8 +2416,8 @@ body {
 }
 
 .editor-git-m {
-  background: color-mix(in srgb, #f2cc60 22%, transparent);
-  color: #b8860b;
+  background: color-mix(in srgb, var(--warning) 22%, transparent);
+  color: var(--warning);
 }
 
 .editor-git-a {
@@ -2404,7 +2657,7 @@ body {
   font-size: 0.8125rem;
 }
 
-:root[data-theme='light'] .settings-row {
+:root[data-theme-family='light'] .settings-row {
   background: var(--bg-window);
 }
 
@@ -2429,6 +2682,7 @@ body {
 
 .theme-toggle {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
 }
 
@@ -2499,7 +2753,8 @@ body {
 }
 
 .theme-option {
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 88px;
   padding: 8px 10px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-strong);
@@ -2513,7 +2768,7 @@ body {
 
 .theme-option.active {
   background: var(--accent);
-  color: white;
+  color: var(--accent-contrast);
   border-color: var(--accent);
 }
 
@@ -2596,7 +2851,7 @@ body {
   text-align: right;
 }
 
-:root[data-theme='light'] .rag-field input {
+:root[data-theme-family='light'] .rag-field input {
   background: var(--bg-window);
 }
 
@@ -2625,7 +2880,7 @@ body {
   font-size: 0.8125rem;
 }
 
-:root[data-theme='light'] .danger-row {
+:root[data-theme-family='light'] .danger-row {
   background: var(--bg-window);
   border: 1px solid var(--border);
 }
