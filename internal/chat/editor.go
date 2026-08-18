@@ -11,6 +11,7 @@ package chat
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"path/filepath"
@@ -287,6 +288,62 @@ func (h *Handler) EditorGitStatus(w http.ResponseWriter, r *http.Request) {
 		statuses = []gitrepo.FileStatus{}
 	}
 	writeJSON(w, statuses)
+}
+
+// EditorGitWatch streams a "changed" SSE event every time something in
+// the sandboxed root's .git directory changes — a commit, branch switch,
+// staging, or any other update to HEAD/refs/the index, from any source
+// (this app's own git actions, a `git` command typed into the Terminal
+// panel, or an external tool touching the same repo). The frontend's git
+// panel subscribes to this instead of polling on a timer, matching how
+// desktop IDEs like VS Code pick up out-of-band git changes: a
+// filesystem watcher (see gitrepo.Watch) rather than a fixed-interval
+// refetch, so there's no cost while nothing is happening and no polling
+// lag when something does. The event carries no payload — like the rest
+// of this app's SSE endpoints, the client already knows how to refetch
+// (see EditorGitStatus/EditorGitBranches); this only tells it when to.
+func (h *Handler) EditorGitWatch(w http.ResponseWriter, r *http.Request) {
+	root, ok := h.editorRoot(w)
+	if !ok {
+		return
+	}
+	ctx := r.Context()
+	if !gitrepo.IsRepo(ctx, root) {
+		h.writeGitError(w, gitrepo.ErrNotARepo)
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	changes, stop, err := gitrepo.Watch(root)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer stop()
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case _, ok := <-changes:
+			if !ok {
+				return
+			}
+			fmt.Fprint(w, "event: changed\ndata: {}\n\n")
+			flusher.Flush()
+		}
+	}
 }
 
 // EditorGitDiff returns the diff for one file — worktree-vs-index by

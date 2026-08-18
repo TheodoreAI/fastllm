@@ -189,6 +189,33 @@ export default function EditorView({
     refreshBranches()
   }, [enabled])
 
+  // Git state also changes from outside this panel entirely — most
+  // commonly the user typing `git commit`/`git branch`/etc. directly into
+  // the Editor's own Terminal panel, but really any external tool could
+  // touch .git while fastllm is open. Rather than poll on a timer (which
+  // has an idle cost even when nothing changes, and up to a full interval
+  // of lag when something does), this subscribes to the backend's
+  // GET /api/editor/git/watch SSE stream — internal/chat.EditorGitWatch —
+  // which is itself backed by a real filesystem watcher on .git/HEAD,
+  // .git/refs, and .git/index (see internal/gitrepo.Watch), the same
+  // "notified, not polled" approach VS Code and other IDEs use for git
+  // status. Only subscribes while the git sub-panel is the one actually
+  // visible (no point refreshing status the user isn't looking at), and
+  // only while file access is enabled at all.
+  useEffect(() => {
+    if (!enabled || !visible || panel !== 'git') return
+    const source = new EventSource('/api/editor/git/watch')
+    source.addEventListener('changed', () => {
+      refreshGitStatus()
+      refreshBranches()
+    })
+    // EventSource retries on its own after a drop (e.g. the sandbox root
+    // changed in Settings, closing the stream server-side) — no manual
+    // reconnect logic needed here, same as the browser's default SSE
+    // behavior anywhere else.
+    return () => source.close()
+  }, [enabled, visible, panel])
+
   // Git's change count now surfaces as a badge on App.jsx's rail button
   // (see the Git button there) rather than only inside this component's
   // own tab row, so the count needs to travel up whenever it changes.
