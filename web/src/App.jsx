@@ -192,6 +192,14 @@ export default function App() {
   const [thinkLevel, setThinkLevel] = useState('medium')
   const [theme, setTheme] = useTheme()
   const offline = useConnectionStatus()
+  // Dismissing the banner only hides it for the CURRENT outage — reset by
+  // the effect below as soon as offline flips back to false, so a later,
+  // genuinely new disconnect isn't silently suppressed by a dismissal the
+  // user gave for a previous, already-resolved one.
+  const [offlineDismissed, setOfflineDismissed] = useState(false)
+  useEffect(() => {
+    if (!offline) setOfflineDismissed(false)
+  }, [offline])
   const [fontFamily, setFontFamily] = useFontFamily()
   const [fontScale, setFontScale] = useFontScale()
   const [sectionOrder, moveSection] = useSectionOrder(DEFAULT_SECTION_ORDER)
@@ -825,9 +833,15 @@ export default function App() {
 
   return (
     <div className="app">
-      {offline && (
-        <div className="offline-banner">Can't reach the fastllm backend — showing the last data that loaded.</div>
+      {offline && !offlineDismissed && (
+        <div className="offline-banner">
+          <span>Can't reach the fastllm backend — showing the last data that loaded.</span>
+          <button type="button" className="offline-banner-close" title="Dismiss" onClick={() => setOfflineDismissed(true)}>
+            ✕
+          </button>
+        </div>
       )}
+      <div className="app-body">
       <nav className="view-rail">
         <button
           type="button"
@@ -1072,6 +1086,7 @@ export default function App() {
               )
             })}
       </aside>
+      </div>
       </div>
 
       {conversationToDelete != null && (
