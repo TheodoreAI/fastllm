@@ -508,7 +508,7 @@ export default function App() {
   async function indexFile(file, label) {
     setDocStatus(`Uploading ${label}…`)
     try {
-      const res = await uploadFile(file)
+      const res = await uploadFile(file, label)
       if (!res.ok) {
         const message = await res.text()
         // Empty/whitespace-only files are common and harmless in a folder
