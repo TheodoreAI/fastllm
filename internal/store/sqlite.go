@@ -595,6 +595,50 @@ func SaveTerminalSettings(db *sql.DB, s TerminalSettings) error {
 	return err
 }
 
+// CloudProviderSettings holds the user's own API keys for cloud model
+// providers, entered via Settings → Cloud providers. Empty ApiKey means
+// that provider isn't configured — its models are left out of the
+// combined model list (see internal/llm.Router) rather than shown
+// disabled, since there's nothing useful to click on until a key is
+// entered anyway.
+type CloudProviderSettings struct {
+	AnthropicAPIKey string `json:"anthropic_api_key"`
+	OpenAIAPIKey    string `json:"openai_api_key"`
+	GeminiAPIKey    string `json:"gemini_api_key"`
+}
+
+var DefaultCloudProviderSettings = CloudProviderSettings{}
+
+const settingCloudProviders = "cloud_providers"
+
+// GetCloudProviderSettings loads the persisted cloud API keys, or the
+// zero-value defaults (none configured) when nothing has been saved yet.
+func GetCloudProviderSettings(db *sql.DB) (CloudProviderSettings, error) {
+	s := DefaultCloudProviderSettings
+	var value string
+	err := db.QueryRow(`SELECT value FROM settings WHERE key = ?`, settingCloudProviders).Scan(&value)
+	if err == sql.ErrNoRows {
+		return s, nil
+	}
+	if err != nil {
+		return s, err
+	}
+	if err := json.Unmarshal([]byte(value), &s); err != nil {
+		return s, err
+	}
+	return s, nil
+}
+
+// SaveCloudProviderSettings persists the given cloud API keys.
+func SaveCloudProviderSettings(db *sql.DB, s CloudProviderSettings) error {
+	payload, err := json.Marshal(s)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, settingCloudProviders, string(payload))
+	return err
+}
+
 // SaveRAGSettings persists the given RAG settings, validating that they're
 // sane (positive sizes, overlap smaller than the chunk itself).
 func SaveRAGSettings(db *sql.DB, s RAGSettings) error {

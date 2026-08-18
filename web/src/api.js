@@ -153,6 +153,12 @@ export function fetchTerminalSettings() {
     .catch(swallowNetworkError({ enabled: false }))
 }
 
+export function fetchCloudProviderSettings() {
+  return fetch('/api/settings/cloud-providers')
+    .then((r) => okJson(r, 'fetchCloudProviderSettings'))
+    .catch(swallowNetworkError({ anthropic_configured: false, openai_configured: false, gemini_configured: false }))
+}
+
 // Opens a native OS folder-picker dialog on the machine running the
 // server (not the browser) and resolves with the chosen absolute path.
 // The request blocks server-side until the user picks a folder or
@@ -375,6 +381,14 @@ export function saveFileAccessSettings(settings) {
 
 export function saveTerminalSettings(settings) {
   return fetch('/api/settings/terminal', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settings),
+  })
+}
+
+export function saveCloudProviderSettings(settings) {
+  return fetch('/api/settings/cloud-providers', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(settings),

@@ -129,7 +129,7 @@ type PendingWrite struct {
 
 type Handler struct {
 	DB       *sql.DB
-	LLM      *llm.Client
+	LLM      *llm.Router
 	Vector   *vector.Store
 	Files    *files.Reader
 	Terminal *terminal.Gate
@@ -150,8 +150,8 @@ type Handler struct {
 	writes   map[string]*PendingWrite
 }
 
-func New(db *sql.DB, llmClient *llm.Client, vec *vector.Store, fileReader *files.Reader, terminalGate *terminal.Gate) *Handler {
-	return &Handler{DB: db, LLM: llmClient, Vector: vec, Files: fileReader, Terminal: terminalGate, FolderChooser: folderpicker.Choose, writes: make(map[string]*PendingWrite)}
+func New(db *sql.DB, llmRouter *llm.Router, vec *vector.Store, fileReader *files.Reader, terminalGate *terminal.Gate) *Handler {
+	return &Handler{DB: db, LLM: llmRouter, Vector: vec, Files: fileReader, Terminal: terminalGate, FolderChooser: folderpicker.Choose, writes: make(map[string]*PendingWrite)}
 }
 
 func newWriteID() string {
@@ -224,9 +224,9 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 
 	effectiveModel := req.Model
 	if effectiveModel == "" {
-		effectiveModel = h.LLM.ChatModel
+		effectiveModel = h.LLM.ChatModel()
 	}
-	if h.Files.Enabled() && llm.SupportsTools(effectiveModel) {
+	if h.Files.Enabled() && !llm.IsCloudModel(effectiveModel) && llm.SupportsTools(effectiveModel) {
 		reads, writes, buildChecks, budgetExhausted := h.runFileTools(ctx, req.Model, &messages, normalizeThinkLevel(req.ThinkLevel))
 		for _, fr := range reads {
 			payload, _ := json.Marshal(fr)
@@ -325,7 +325,7 @@ func (h *Handler) buildPrompt(ctx context.Context, conversationID int64, questio
 	messages := []llm.Message{{Role: "system", Content: prompt}}
 	var sources []source
 
-	if h.LLM.EmbedModel != "" {
+	if h.LLM.EmbedModel() != "" {
 		if embedding, err := h.LLM.Embed(ctx, question); err == nil {
 			topK := store.DefaultRAGSettings.TopK
 			if rag, err := store.GetRAGSettings(h.DB); err == nil {
@@ -625,9 +625,9 @@ func (h *Handler) Settings(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, settingsResponse{
 		Username:   username,
-		ChatModel:  h.LLM.ChatModel,
-		EmbedModel: h.LLM.EmbedModel,
-		LLMBaseURL: h.LLM.BaseURL,
+		ChatModel:  h.LLM.ChatModel(),
+		EmbedModel: h.LLM.EmbedModel(),
+		LLMBaseURL: h.LLM.BaseURL(),
 	})
 }
 
@@ -674,6 +674,95 @@ func (h *Handler) UpdateFileAccessSettings(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, settings)
+}
+
+// GetCloudProviderSettings returns whether each cloud provider has an API
+// key configured, WITHOUT ever sending the keys themselves back to the
+// browser — see cloudProviderSettingsResponse's doc comment.
+func (h *Handler) GetCloudProviderSettings(w http.ResponseWriter, r *http.Request) {
+	settings, err := store.GetCloudProviderSettings(h.DB)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, toCloudProviderSettingsResponse(settings))
+}
+
+// cloudProviderSettingsResponse reports only whether a key is set, not
+// its value — once saved, a key has no reason to ever round-trip back to
+// the browser again (the Settings form shows a masked placeholder for an
+// already-configured provider instead of the real key; see
+// SettingsPanel.jsx). Saving still goes through the real
+// store.CloudProviderSettings shape (see UpdateCloudProviderSettings).
+type cloudProviderSettingsResponse struct {
+	AnthropicConfigured bool `json:"anthropic_configured"`
+	OpenAIConfigured    bool `json:"openai_configured"`
+	GeminiConfigured    bool `json:"gemini_configured"`
+}
+
+func toCloudProviderSettingsResponse(s store.CloudProviderSettings) cloudProviderSettingsResponse {
+	return cloudProviderSettingsResponse{
+		AnthropicConfigured: s.AnthropicAPIKey != "",
+		OpenAIConfigured:    s.OpenAIAPIKey != "",
+		GeminiConfigured:    s.GeminiAPIKey != "",
+	}
+}
+
+// cloudProviderSettingsRequest uses *string (rather than plain string, as
+// the persisted store.CloudProviderSettings does) specifically so
+// UpdateCloudProviderSettings can tell "field omitted" (nil — leave
+// whatever key is already saved alone) apart from "field sent as an empty
+// string" (non-nil, points at "" — explicitly clear that key). A plain
+// string field can't distinguish those two cases, but the form needs to:
+// GetCloudProviderSettings never sends real key values back to the
+// browser (see that handler), so the only way an already-configured
+// provider's key survives an unrelated field's edit is for "didn't send
+// it" to mean "don't touch it" rather than "clear it".
+type cloudProviderSettingsRequest struct {
+	AnthropicAPIKey *string `json:"anthropic_api_key"`
+	OpenAIAPIKey    *string `json:"openai_api_key"`
+	GeminiAPIKey    *string `json:"gemini_api_key"`
+}
+
+// UpdateCloudProviderSettings merges the given fields into the persisted
+// API keys (see cloudProviderSettingsRequest's doc comment for the
+// omitted-vs-empty distinction that makes "merge" the right verb here)
+// and immediately rebuilds h.LLM's cloud clients around the result, so a
+// newly-entered key is usable for the very next chat message without a
+// server restart — same save-then-apply-live pattern as
+// UpdateFileAccessSettings/UpdateTerminalSettings.
+func (h *Handler) UpdateCloudProviderSettings(w http.ResponseWriter, r *http.Request) {
+	var req cloudProviderSettingsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid cloud provider settings payload", http.StatusBadRequest)
+		return
+	}
+
+	settings, err := store.GetCloudProviderSettings(h.DB)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if req.AnthropicAPIKey != nil {
+		settings.AnthropicAPIKey = *req.AnthropicAPIKey
+	}
+	if req.OpenAIAPIKey != nil {
+		settings.OpenAIAPIKey = *req.OpenAIAPIKey
+	}
+	if req.GeminiAPIKey != nil {
+		settings.GeminiAPIKey = *req.GeminiAPIKey
+	}
+
+	if err := store.SaveCloudProviderSettings(h.DB, settings); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	h.LLM.SetCloudProviders(llm.CloudProviderConfig{
+		AnthropicAPIKey: settings.AnthropicAPIKey,
+		OpenAIAPIKey:    settings.OpenAIAPIKey,
+		GeminiAPIKey:    settings.GeminiAPIKey,
+	})
+	writeJSON(w, toCloudProviderSettingsResponse(settings))
 }
 
 func (h *Handler) GetTerminalSettings(w http.ResponseWriter, r *http.Request) {

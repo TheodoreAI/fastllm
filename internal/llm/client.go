@@ -77,6 +77,20 @@ type Model struct {
 	SupportsFileTools bool     `json:"supports_file_tools"`
 }
 
+// OpenAIModels lists the models offered in the model picker when an
+// OpenAI API key is configured. OpenAI's real hosted API is already
+// wire-compatible with this file's Client (it's what "OpenAI-compatible"
+// in the package doc comment refers to), so — unlike Anthropic/Gemini —
+// no separate client type was needed; Router just points a second Client
+// at api.openai.com. See AnthropicModels's doc comment for why this is a
+// fixed list rather than a live query.
+var OpenAIModels = []string{
+	"gpt-5.1",
+	"gpt-5.1-mini",
+	"gpt-5.1-nano",
+	"o3",
+}
+
 type tagsResponse struct {
 	Models []struct {
 		Name         string   `json:"name"`

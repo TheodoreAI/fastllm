@@ -35,6 +35,8 @@ import {
   saveFileAccessSettings,
   fetchTerminalSettings,
   saveTerminalSettings,
+  fetchCloudProviderSettings,
+  saveCloudProviderSettings,
   clearKnowledgeBase,
   clearConversations,
   createSkill as apiCreateSkill,
@@ -186,6 +188,7 @@ export default function App() {
   const [ragSettings, setRagSettings] = useState(null)
   const [fileAccessSettings, setFileAccessSettings] = useState({ root: '', read_enabled: false, write_enabled: false })
   const [terminalSettings, setTerminalSettings] = useState({ enabled: false })
+  const [cloudProviderSettings, setCloudProviderSettings] = useState({ anthropic_configured: false, openai_configured: false, gemini_configured: false })
   const [thinkLevel, setThinkLevel] = useState('medium')
   const [theme, setTheme] = useTheme()
   const offline = useConnectionStatus()
@@ -221,6 +224,9 @@ export default function App() {
     fetchRagSettings().then(setRagSettings)
     fetchFileAccessSettings().then((settings) => setFileAccessSettings(settings ?? { root: '', read_enabled: false, write_enabled: false }))
     fetchTerminalSettings().then((settings) => setTerminalSettings(settings ?? { enabled: false }))
+    fetchCloudProviderSettings().then((settings) =>
+      setCloudProviderSettings(settings ?? { anthropic_configured: false, openai_configured: false, gemini_configured: false }),
+    )
   }, [])
 
   // Native File → Open Folder… menu item (see cmd/desktop/main.go) has no
@@ -641,6 +647,18 @@ export default function App() {
     if (!res.ok) throw new Error(await res.text())
     const saved = await res.json()
     setFileAccessSettings(saved)
+    return saved
+  }
+
+  // On success, re-fetches the model list — a newly-configured provider's
+  // models should show up in the picker immediately, without waiting for
+  // some other unrelated refresh to happen to run first.
+  async function handleSaveCloudProviderSettings(next) {
+    const res = await saveCloudProviderSettings(next)
+    if (!res.ok) throw new Error(await res.text())
+    const saved = await res.json()
+    setCloudProviderSettings(saved)
+    fetchModels().then(setModels)
     return saved
   }
 
@@ -1087,6 +1105,8 @@ export default function App() {
           onSaveFileAccessSettings={handleSaveFileAccessSettings}
           terminalSettings={terminalSettings}
           onSaveTerminalSettings={handleSaveTerminalSettings}
+          cloudProviderSettings={cloudProviderSettings}
+          onSaveCloudProviderSettings={handleSaveCloudProviderSettings}
           thinkLevel={thinkLevel}
           onThinkLevelChange={setThinkLevel}
           onClearKnowledgeBase={handleClearKnowledgeBase}
