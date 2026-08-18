@@ -268,6 +268,19 @@ export function deleteEditorFile(path) {
   })
 }
 
+export function fetchEditorFolderFileCount(path) {
+  return fetch(`/api/editor/folder/file-count?path=${encodeURIComponent(path)}`)
+    .then((r) => okJson(r, 'fetchEditorFolderFileCount'))
+}
+
+export function deleteEditorFolder(path) {
+  return fetch('/api/editor/folder', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  })
+}
+
 export function renameEditorFile(from, to) {
   return fetch('/api/editor/file/rename', {
     method: 'POST',

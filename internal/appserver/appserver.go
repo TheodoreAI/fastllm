@@ -190,6 +190,8 @@ func Build(cfg Config) (*Built, error) {
 	mux.HandleFunc("GET /api/editor/file", handler.EditorReadFile)
 	mux.HandleFunc("PUT /api/editor/file", handler.EditorSaveFile)
 	mux.HandleFunc("DELETE /api/editor/file", handler.EditorDeleteFile)
+	mux.HandleFunc("GET /api/editor/folder/file-count", handler.EditorFolderFileCount)
+	mux.HandleFunc("DELETE /api/editor/folder", handler.EditorDeleteFolder)
 	mux.HandleFunc("POST /api/editor/file/rename", handler.EditorRenameFile)
 	mux.HandleFunc("GET /api/editor/search", handler.EditorSearch)
 	mux.HandleFunc("GET /api/editor/git/status", handler.EditorGitStatus)

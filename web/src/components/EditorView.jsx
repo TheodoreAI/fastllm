@@ -7,6 +7,8 @@ import {
   saveEditorFile,
   createEditorFile,
   deleteEditorFile,
+  fetchEditorFolderFileCount,
+  deleteEditorFolder,
   renameEditorFile,
   searchEditor,
   fetchGitStatus,
@@ -373,6 +375,40 @@ export default function EditorView({
     }
   }
 
+  async function handleDeleteFolder(path) {
+    let fileCount = null
+    try {
+      const info = await fetchEditorFolderFileCount(path)
+      fileCount = info.file_count
+    } catch (err) {
+      setTreeStatus(`Couldn't check "${path}": ${err.message}`)
+      return
+    }
+    const ok = await confirmDialog({
+      heading: 'Delete this folder?',
+      description: `This deletes "${path}" and everything in it (${fileCount} file${fileCount === 1 ? '' : 's'}) from disk. This can't be undone.`,
+      confirmLabel: 'Delete folder',
+    })
+    if (!ok) return
+    try {
+      const res = await deleteEditorFolder(path)
+      if (!res.ok) throw new Error(await res.text())
+      // The currently open file (if any) may have lived inside the
+      // deleted folder — same close-if-affected behavior as
+      // handleDeleteFile, just checking a path prefix instead of an
+      // exact match since a whole subtree just disappeared, not one file.
+      if (openPath === path || openPath?.startsWith(`${path}/`)) {
+        setOpenPath(null)
+        setContent('')
+        setSavedContent('')
+      }
+      refreshTree()
+      refreshGitStatus()
+    } catch (err) {
+      setTreeStatus(`Couldn't delete ${path}: ${err.message}`)
+    }
+  }
+
   async function handleRenameFile(fromPath, toPath) {
     try {
       const res = await renameEditorFile(fromPath, toPath)
@@ -607,6 +643,7 @@ export default function EditorView({
               canWrite={canWrite}
               onCreateFile={handleCreateFile}
               onDeleteFile={handleDeleteFile}
+              onDeleteFolder={handleDeleteFolder}
               onRenameFile={handleRenameFile}
             />
           </div>

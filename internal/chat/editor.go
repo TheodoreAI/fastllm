@@ -165,6 +165,50 @@ func (h *Handler) EditorDeleteFile(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// EditorFolderFileCount reports how many files live under a given
+// directory in the sandbox, for the "delete this folder and its N
+// files?" confirmation copy the frontend shows before calling
+// EditorDeleteFolder — see ConfirmDeleteModal usage in EditorView.jsx.
+// Read-only; doesn't require write access, unlike the delete itself.
+func (h *Handler) EditorFolderFileCount(w http.ResponseWriter, r *http.Request) {
+	if !h.Files.Enabled() {
+		http.Error(w, "file access is not enabled", http.StatusForbidden)
+		return
+	}
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		http.Error(w, "path is required", http.StatusBadRequest)
+		return
+	}
+	count, err := h.Files.CountFilesUnder(path)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, map[string]any{"path": path, "file_count": count})
+}
+
+// EditorDeleteFolder recursively removes a folder and everything in it.
+// The frontend is expected to have already shown a confirmation (see
+// EditorFolderFileCount) before calling this — same "the UI's own
+// confirmation step is the approval" convention as EditorDeleteFile.
+func (h *Handler) EditorDeleteFolder(w http.ResponseWriter, r *http.Request) {
+	if !h.Files.WritesEnabled() {
+		http.Error(w, "file writes are not enabled", http.StatusForbidden)
+		return
+	}
+	var req editorDeleteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Path == "" {
+		http.Error(w, "path is required", http.StatusBadRequest)
+		return
+	}
+	if err := h.Files.DeleteFolder(req.Path); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 type editorRenameRequest struct {
 	From string `json:"from"`
 	To   string `json:"to"`

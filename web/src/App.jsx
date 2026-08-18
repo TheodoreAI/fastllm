@@ -298,6 +298,24 @@ export default function App() {
     setEditorPanel(panel)
   }
 
+  // The Files rail button mirrors VS Code's Explorer icon: clicking it
+  // while Files is already the visible panel collapses the sidebar
+  // (a second click re-expands, same toggle Ctrl+B already does — see
+  // the keydown handler above); clicking it from anywhere else switches
+  // into a real view, selects the Files panel, and makes sure the
+  // sidebar is actually expanded to show it, rather than leaving it
+  // collapsed from an earlier Ctrl+B/manual collapse.
+  function toggleFilesPanel() {
+    const alreadyShowingFiles = activeView !== 'chat' && editorPanel === 'files' && !editorSidebarCollapsed
+    if (alreadyShowingFiles) {
+      setEditorSidebarCollapsed(true)
+      return
+    }
+    setActiveView((v) => (v === 'chat' ? 'editor' : v))
+    setEditorPanel('files')
+    setEditorSidebarCollapsed(false)
+  }
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
@@ -841,6 +859,16 @@ export default function App() {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <rect x="3" y="4" width="18" height="16" rx="2" />
             <path d="M12 4v16" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          className={activeView !== 'chat' && editorPanel === 'files' && !editorSidebarCollapsed ? 'is-active' : ''}
+          title="Files"
+          onClick={toggleFilesPanel}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4l1.7 2H19.5A1.5 1.5 0 0 1 21 9.5v8A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5v-10Z" />
           </svg>
         </button>
         <button
