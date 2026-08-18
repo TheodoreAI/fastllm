@@ -43,12 +43,30 @@ var ErrNotSupported = errors.New("lint: no oxlint available for this file")
 // Diagnostic is one oxlint finding, positioned as a byte offset/length
 // into the file content — matches what CodeMirror's @codemirror/lint
 // panel expects for from/to, so the frontend needs no line/column math.
+// Severity is always exactly "error" or "warning" (see normalizeSeverity)
+// — the frontend's @codemirror/lint severity prop only accepts those two
+// values plus "info", so this package normalizes at the source rather
+// than each caller having to know oxlint's full severity vocabulary
+// (oxlint also emits "advice" for some rules) and re-collapse it itself.
 type Diagnostic struct {
 	Message  string `json:"message"`
 	Rule     string `json:"rule"`
 	Severity string `json:"severity"`
 	Offset   int    `json:"offset"`
 	Length   int    `json:"length"`
+}
+
+// normalizeSeverity maps oxlint's severity vocabulary (which includes at
+// least "error", "warning", and "advice") down to the two values
+// Diagnostic.Severity ever holds. Unrecognized/future values fall back to
+// "warning" rather than "error", so an oxlint upgrade adding a new
+// severity level can't start surfacing informational findings as if they
+// were build-breaking.
+func normalizeSeverity(s string) string {
+	if s == "error" {
+		return "error"
+	}
+	return "warning"
 }
 
 // Lint runs oxlint against absPath (the file the editor just saved to
@@ -92,7 +110,7 @@ func Lint(ctx context.Context, absPath string) ([]Diagnostic, error) {
 
 	diagnostics := make([]Diagnostic, 0, len(parsed.Diagnostics))
 	for _, d := range parsed.Diagnostics {
-		diag := Diagnostic{Message: d.Message, Rule: d.Code, Severity: d.Severity}
+		diag := Diagnostic{Message: d.Message, Rule: d.Code, Severity: normalizeSeverity(d.Severity)}
 		if len(d.Labels) > 0 {
 			diag.Offset = d.Labels[0].Span.Offset
 			diag.Length = d.Labels[0].Span.Length

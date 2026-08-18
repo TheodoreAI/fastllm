@@ -45,6 +45,10 @@ const KEYBINDINGS = [
   { keys: 'Ctrl+Q', description: 'Exit fastllm', native: true },
   { keys: 'Ctrl+Z', description: 'Undo', native: true },
   { keys: 'Ctrl+Y', description: 'Redo', native: true },
+  { keys: 'Ctrl+X', description: 'Cut', native: true },
+  { keys: 'Ctrl+C', description: 'Copy', native: true },
+  { keys: 'Ctrl+V', description: 'Paste', native: true },
+  { keys: 'Ctrl+A', description: 'Select all', native: true },
   { keys: 'Ctrl+Shift+C', description: 'Copy selection (in the Terminal panel)', native: false },
   { keys: 'Ctrl+Shift+V', description: 'Paste (in the Terminal panel)', native: false },
 ]
@@ -343,6 +347,9 @@ export default function SettingsPanel({
       <SubSection id="thinking" label="Thinking" expanded={!!expanded.thinking} onToggle={toggleSection}>
         <label className="settings-field">
           <span>Reasoning effort</span>
+          {/* These three values must match normalizeThinkLevel's accepted
+              set in internal/chat/handler.go — nothing derives one list
+              from the other, so an addition/rename needs both edits. */}
           <select className="model-select" value={thinkLevel || 'medium'} onChange={(e) => onThinkLevelChange(e.target.value)}>
             <option value="low">Low</option>
             <option value="medium">Medium</option>

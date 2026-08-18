@@ -544,14 +544,17 @@ export default function EditorView({
 
   // Stable across renders (the ref it reads is mutated in place, not
   // replaced) so CodeMirror never needs to tear down and rebuild the
-  // linter extension on every save.
+  // linter extension on every save. severity is used as-is — the backend
+  // (internal/lint.normalizeSeverity) already collapses oxlint's full
+  // severity vocabulary down to exactly "error"/"warning" before it ever
+  // reaches here, so this doesn't need its own copy of that mapping.
   const oxlintExtension = useMemo(
     () => [
       linter(() =>
         lintDiagnosticsRef.current.map((d) => ({
           from: Math.max(0, d.offset),
           to: Math.max(d.offset, d.offset + d.length),
-          severity: d.severity === 'error' ? 'error' : 'warning',
+          severity: d.severity,
           message: d.message,
           source: d.rule,
         }))

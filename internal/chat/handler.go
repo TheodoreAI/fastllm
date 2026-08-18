@@ -724,6 +724,11 @@ func (h *Handler) GetRAGSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, rag)
 }
 
+// normalizeThinkLevel validates a client-supplied thinking-effort level.
+// The three accepted values are also hardcoded as <option>s in
+// SettingsPanel.jsx's "Reasoning effort" select — if a level is ever
+// added/removed/renamed here, that select needs the matching edit, since
+// nothing currently derives one list from the other.
 func normalizeThinkLevel(level string) string {
 	switch strings.ToLower(strings.TrimSpace(level)) {
 	case "low", "medium", "high":

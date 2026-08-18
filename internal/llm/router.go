@@ -204,19 +204,19 @@ func (r *Router) ListModels(ctx context.Context) ([]Model, error) {
 	if clouds.anthropic != nil {
 		for _, name := range AnthropicModels {
 			full := AnthropicPrefix + name
-			out = append(out, Model{Name: full, SupportsFileTools: SupportsToolsForModel(full)})
+			out = append(out, Model{Name: full, SupportsFileTools: SupportsToolsForModel(full), Provider: "anthropic"})
 		}
 	}
 	if clouds.openai != nil {
 		for _, name := range OpenAIModels {
 			full := OpenAIPrefix + name
-			out = append(out, Model{Name: full, SupportsFileTools: SupportsToolsForModel(full)})
+			out = append(out, Model{Name: full, SupportsFileTools: SupportsToolsForModel(full), Provider: "openai"})
 		}
 	}
 	if clouds.gemini != nil {
 		for _, name := range GeminiModels {
 			full := GeminiPrefix + name
-			out = append(out, Model{Name: full, SupportsFileTools: SupportsToolsForModel(full)})
+			out = append(out, Model{Name: full, SupportsFileTools: SupportsToolsForModel(full), Provider: "gemini"})
 		}
 	}
 	return out, nil

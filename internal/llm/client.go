@@ -75,6 +75,13 @@ type Model struct {
 	Name              string   `json:"name"`
 	Capabilities      []string `json:"capabilities,omitempty"`
 	SupportsFileTools bool     `json:"supports_file_tools"`
+	// Provider is "anthropic"/"openai"/"gemini" for a cloud model, or ""
+	// for a local Ollama model — the frontend model picker groups options
+	// by this field instead of re-deriving it from Name's "provider:"
+	// prefix with its own hardcoded copy of AnthropicPrefix/OpenAIPrefix/
+	// GeminiPrefix, which would otherwise be a second place those prefixes
+	// have to be kept in sync by hand.
+	Provider string `json:"provider,omitempty"`
 }
 
 // OpenAIModels lists the models offered in the model picker when an

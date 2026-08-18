@@ -1,26 +1,34 @@
-// Cloud model names carry a "provider:" prefix (see internal/llm.Router)
-// so the backend can tell which API a picked model routes to — the
-// prefix is what StreamChat dispatches on, not just a display label, so
-// it has to stay in the <option>'s value. Splitting it out here is purely
-// about how the dropdown reads: a flat "anthropic:claude-sonnet-5" next
-// to a bare "llama3.1" looks like an error, whereas grouping under an
-// "Anthropic (Claude)" optgroup with the bare model name reads the way a
-// user would expect a provider picker to.
-const PROVIDER_GROUPS = [
-  { prefix: 'anthropic:', label: 'Anthropic (Claude)' },
-  { prefix: 'openai:', label: 'OpenAI (ChatGPT)' },
-  { prefix: 'gemini:', label: 'Google (Gemini)' },
-]
+// Display labels only — purely presentational, so hardcoding these here
+// is fine. What's NOT hardcoded here is the "provider:" name prefix
+// itself (e.g. "anthropic:") or which models belong to which provider:
+// that comes from each model's `provider` field, set once in
+// internal/llm.Router.ListModels (see internal/llm/client.go's Model.
+// Provider doc comment) — the actual routing prefix
+// (AnthropicPrefix/OpenAIPrefix/GeminiPrefix in router.go) lives in
+// exactly one place instead of also being copied into this file.
+const PROVIDER_LABELS = {
+  anthropic: 'Anthropic (Claude)',
+  openai: 'OpenAI (ChatGPT)',
+  gemini: 'Google (Gemini)',
+}
 
 function groupModels(models) {
   const local = []
-  const cloud = PROVIDER_GROUPS.map((g) => ({ ...g, models: [] }))
+  const cloudByProvider = new Map()
   for (const m of models) {
-    const group = cloud.find((g) => m.name.startsWith(g.prefix))
-    if (group) group.models.push(m)
-    else local.push(m)
+    if (!m.provider) {
+      local.push(m)
+      continue
+    }
+    if (!cloudByProvider.has(m.provider)) cloudByProvider.set(m.provider, [])
+    cloudByProvider.get(m.provider).push(m)
   }
-  return { local, cloud: cloud.filter((g) => g.models.length > 0) }
+  const cloud = [...cloudByProvider.entries()].map(([provider, groupModels]) => ({
+    provider,
+    label: PROVIDER_LABELS[provider] ?? provider,
+    models: groupModels,
+  }))
+  return { local, cloud }
 }
 
 export default function ModelPicker({ models, model, onChange, fileAccessSettings, onOpenSettings }) {
@@ -53,10 +61,10 @@ export default function ModelPicker({ models, model, onChange, fileAccessSetting
           </option>
         ))}
         {cloud.map((group) => (
-          <optgroup key={group.prefix} label={group.label}>
+          <optgroup key={group.provider} label={group.label}>
             {group.models.map((m) => (
               <option key={m.name} value={m.name}>
-                {m.name.slice(group.prefix.length)}
+                {m.name.slice(m.name.indexOf(':') + 1)}
               </option>
             ))}
           </optgroup>
