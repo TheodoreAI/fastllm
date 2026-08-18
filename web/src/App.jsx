@@ -37,6 +37,8 @@ import {
   saveTerminalSettings,
   fetchCloudProviderSettings,
   saveCloudProviderSettings,
+  fetchEditorSettings,
+  saveEditorSettings,
   clearKnowledgeBase,
   clearConversations,
   createSkill as apiCreateSkill,
@@ -189,6 +191,7 @@ export default function App() {
   const [fileAccessSettings, setFileAccessSettings] = useState({ root: '', read_enabled: false, write_enabled: false })
   const [terminalSettings, setTerminalSettings] = useState({ enabled: false })
   const [cloudProviderSettings, setCloudProviderSettings] = useState({ anthropic_configured: false, openai_configured: false, gemini_configured: false })
+  const [editorSettings, setEditorSettings] = useState({ completion_model: '' })
   const [thinkLevel, setThinkLevel] = useState('medium')
   const [theme, setTheme] = useTheme()
   const offline = useConnectionStatus()
@@ -235,6 +238,7 @@ export default function App() {
     fetchCloudProviderSettings().then((settings) =>
       setCloudProviderSettings(settings ?? { anthropic_configured: false, openai_configured: false, gemini_configured: false }),
     )
+    fetchEditorSettings().then((settings) => setEditorSettings(settings ?? { completion_model: '' }))
   }, [])
 
   // Native File → Open Folder… menu item (see cmd/desktop/main.go) has no
@@ -755,6 +759,20 @@ export default function App() {
     setSettingsOpen(true)
   }
 
+  // completionModel is '' for "use the backend's default chat model"
+  // (see store.EditorSettings' doc comment) — saved optimistically so the
+  // dropdown reflects the pick immediately rather than waiting on a
+  // round-trip, matching how setModel itself is a plain synchronous
+  // setter with no save-confirmation step.
+  async function handleSetCompletionModel(completionModel) {
+    setEditorSettings((prev) => ({ ...prev, completion_model: completionModel }))
+    try {
+      await saveEditorSettings({ completion_model: completionModel })
+    } catch (err) {
+      console.error('Failed to save completion model setting:', err)
+    }
+  }
+
   async function confirmDeleteSkill() {
     const id = skillToDelete
     setSkillToDelete(null)
@@ -1043,6 +1061,8 @@ export default function App() {
                 onChange={setModel}
                 fileAccessSettings={fileAccessSettings}
                 onOpenSettings={() => handleOpenSettings('llmBackend')}
+                completionModel={editorSettings.completion_model}
+                onCompletionModelChange={handleSetCompletionModel}
               />
             ),
                 skills: (

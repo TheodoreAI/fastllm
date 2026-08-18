@@ -176,6 +176,23 @@ export function fetchCloudProviderSettings() {
     .catch(swallowNetworkError({ anthropic_configured: false, openai_configured: false, gemini_configured: false, deepseek_configured: false }))
 }
 
+// Editor preferences — currently just which local model powers inline AI
+// completion (see ModelPicker.jsx's "Completion model" field and
+// internal/chat.EditorComplete).
+export function fetchEditorSettings() {
+  return fetch('/api/settings/editor')
+    .then((r) => okJson(r, 'fetchEditorSettings'))
+    .catch(swallowNetworkError({ completion_model: '' }))
+}
+
+export function saveEditorSettings(settings) {
+  return fetch('/api/settings/editor', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settings),
+  })
+}
+
 // Opens a native OS folder-picker dialog on the machine running the
 // server (not the browser) and resolves with the chosen absolute path.
 // The request blocks server-side until the user picks a folder or
@@ -268,6 +285,24 @@ export function saveEditorFile(path, content) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ path, content }),
   })
+}
+
+// fetchEditorCompletion powers the editor's inline ghost-text suggestion
+// (see EditorView.jsx). Always uses the local model server-side (see
+// internal/chat.EditorComplete's doc comment), independent of whatever
+// model is selected in the chat Model picker. Takes an AbortSignal since
+// this fires on a debounce timer while the user types — a fast typist
+// can trigger several overlapping requests, and only the most recent
+// one's result should ever be shown.
+export function fetchEditorCompletion(prefix, suffix, language, signal) {
+  return fetch('/api/editor/complete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prefix, suffix, language }),
+    signal,
+  })
+    .then((r) => okJson(r, 'fetchEditorCompletion'))
+    .then((data) => data?.completion ?? '')
 }
 
 // Creating a file is just saving an empty (or given) body to a

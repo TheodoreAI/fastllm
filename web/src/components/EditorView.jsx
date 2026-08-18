@@ -24,7 +24,8 @@ import {
   browseForFolder,
   saveFileAccessSettings,
 } from '../api'
-import { languageExtensionFor } from '../editorLanguages'
+import { languageExtensionFor, languageNameFor } from '../editorLanguages'
+import { aiCompletionExtension } from '../aiCompletion'
 import { useEditorSidebarWidth } from '../useEditorSidebarWidth'
 import { useTerminalPanelHeight } from '../useTerminalPanelHeight'
 import FileTree from './FileTree'
@@ -590,9 +591,20 @@ export default function EditorView({
     ],
     []
   )
+  // Rebuilt whenever openPath changes (new language label, and — more
+  // importantly — aiCompletionExtension's ViewPlugin.destroy() cancels
+  // any pending debounce/in-flight request for the file that was just
+  // closed, so switching files can't have a stale suggestion from the
+  // previous file arrive and get applied to the new one). Gated on
+  // canWrite the same way Save is — completion is pointless in a
+  // read-only file access configuration.
+  const aiCompletion = useMemo(
+    () => aiCompletionExtension(openPath ? languageNameFor(openPath) : '', canWrite),
+    [openPath, canWrite]
+  )
   const languageExtensions = useMemo(
-    () => (openPath ? [...languageExtensionFor(openPath), ...oxlintExtension] : []),
-    [openPath, oxlintExtension]
+    () => (openPath ? [...languageExtensionFor(openPath), ...oxlintExtension, ...aiCompletion] : []),
+    [openPath, oxlintExtension, aiCompletion]
   )
   const staged = gitStatus.filter((s) => s.staged)
   const unstaged = gitStatus.filter((s) => s.unstaged)

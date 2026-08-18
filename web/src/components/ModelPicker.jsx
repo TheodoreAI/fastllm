@@ -32,7 +32,15 @@ function groupModels(models) {
   return { local, cloud }
 }
 
-export default function ModelPicker({ models, model, onChange, fileAccessSettings, onOpenSettings }) {
+export default function ModelPicker({
+  models,
+  model,
+  onChange,
+  fileAccessSettings,
+  onOpenSettings,
+  completionModel,
+  onCompletionModelChange,
+}) {
   const readOn = !!fileAccessSettings?.read_enabled
   const writeOn = !!fileAccessSettings?.write_enabled
   const selected = models.find((m) => m.name === model)
@@ -71,6 +79,24 @@ export default function ModelPicker({ models, model, onChange, fileAccessSetting
           </optgroup>
         ))}
       </select>
+
+      {local.length > 0 && (
+        <label className="model-completion-field">
+          <span>Completion model</span>
+          <select
+            className="model-select"
+            value={completionModel || ''}
+            onChange={(e) => onCompletionModelChange?.(e.target.value)}
+          >
+            <option value="">Same as backend default</option>
+            {local.map((m) => (
+              <option key={m.name} value={m.name}>
+                {m.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
 
       <button type="button" className="file-access-status" onClick={onOpenSettings}>
         <span className={`file-access-dot ${readOn && modelSupportsFileTools ? 'is-on' : 'is-off'}`} />

@@ -860,6 +860,38 @@ func (h *Handler) UpdateCloudProviderSettings(w http.ResponseWriter, r *http.Req
 	writeJSON(w, toCloudProviderSettingsResponse(settings))
 }
 
+// GetEditorSettings returns the persisted editor preferences — currently
+// just which local model is pinned for inline AI completion (see
+// internal/chat.EditorComplete), settable from the Model panel in the
+// chat sidebar since that's where the rest of the app's model picking
+// already lives.
+func (h *Handler) GetEditorSettings(w http.ResponseWriter, r *http.Request) {
+	settings, err := store.GetEditorSettings(h.DB)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, settings)
+}
+
+// UpdateEditorSettings persists the given editor preferences. No live
+// in-memory state to reconfigure afterward (unlike
+// UpdateTerminalSettings/UpdateCloudProviderSettings) — EditorComplete
+// reads store.GetEditorSettings fresh on every request, so a saved change
+// applies to the very next completion with nothing else to wire up.
+func (h *Handler) UpdateEditorSettings(w http.ResponseWriter, r *http.Request) {
+	var settings store.EditorSettings
+	if err := json.NewDecoder(r.Body).Decode(&settings); err != nil {
+		http.Error(w, "invalid editor settings payload", http.StatusBadRequest)
+		return
+	}
+	if err := store.SaveEditorSettings(h.DB, settings); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, settings)
+}
+
 func (h *Handler) GetTerminalSettings(w http.ResponseWriter, r *http.Request) {
 	settings, err := store.GetTerminalSettings(h.DB)
 	if err != nil {
