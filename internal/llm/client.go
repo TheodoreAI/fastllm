@@ -98,6 +98,22 @@ var OpenAIModels = []string{
 	"o3",
 }
 
+// DeepSeekModels lists the models offered in the model picker when a
+// DeepSeek API key is configured. DeepSeek's hosted API
+// (api.deepseek.com) is also OpenAI-compatible, same as OpenAIModels
+// above — no separate client type needed, Router just points a third
+// Client at it. deepseek-chat/deepseek-reasoner are legacy aliases
+// DeepSeek retired on 2026-07-24; deepseek-v4-flash/-pro are the current
+// model family (non-thinking/thinking modes). Unlike Gemini's model
+// list, these haven't been confirmed against a live ListModels call
+// against a real DeepSeek key — verify against a real account before
+// relying on this list (see this session's repeated Gemini model-ID
+// corrections for why that verification step matters).
+var DeepSeekModels = []string{
+	"deepseek-v4-flash",
+	"deepseek-v4-pro",
+}
+
 type tagsResponse struct {
 	Models []struct {
 		Name         string   `json:"name"`
@@ -170,18 +186,19 @@ var toolCapableModelPrefixes = []string{
 // "provider:"-prefixed cloud model — see Router) can be offered file
 // read/write tools at all. Cloud providers each need their own tool-call
 // wire-format translation (see e.g. GeminiClient.Chat) — implemented for
-// Gemini and OpenAI (OpenAI's hosted API already speaks Client's tool
-// format natively) but not yet Anthropic, so an "anthropic:" model is
-// excluded here even though Claude models are generally excellent at
-// tool use — this is a "not implemented in fastllm yet" gate, not a
-// judgment about the model. Unlike local models (see SupportsTools's
-// allowlist below), a configured cloud provider needs no per-model
+// Gemini, OpenAI, and DeepSeek (OpenAI's and DeepSeek's hosted APIs both
+// already speak Client's tool format natively) but not yet Anthropic, so
+// an "anthropic:" model is excluded here even though Claude models are
+// generally excellent at tool use — this is a "not implemented in
+// fastllm yet" gate, not a judgment about the model. Unlike local models
+// (see SupportsTools's allowlist below), a configured cloud provider
+// needs no per-model
 // allowlist: the uncertainty SupportsTools guards against is whether a
 // given local model reliably emits real tool_calls at all, which doesn't
 // apply to hosted providers fastllm has implemented tool support for.
 func SupportsToolsForModel(model string) bool {
 	if _, provider, ok := stripProviderPrefix(model); ok {
-		return provider == "gemini" || provider == "openai"
+		return provider == "gemini" || provider == "openai" || provider == "deepseek"
 	}
 	return SupportsTools(model)
 }

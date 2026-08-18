@@ -173,7 +173,7 @@ export function fetchTerminalSettings() {
 export function fetchCloudProviderSettings() {
   return fetch('/api/settings/cloud-providers')
     .then((r) => okJson(r, 'fetchCloudProviderSettings'))
-    .catch(swallowNetworkError({ anthropic_configured: false, openai_configured: false, gemini_configured: false }))
+    .catch(swallowNetworkError({ anthropic_configured: false, openai_configured: false, gemini_configured: false, deepseek_configured: false }))
 }
 
 // Opens a native OS folder-picker dialog on the machine running the

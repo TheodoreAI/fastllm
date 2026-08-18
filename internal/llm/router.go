@@ -17,6 +17,7 @@ const (
 	AnthropicPrefix = "anthropic:"
 	OpenAIPrefix    = "openai:"
 	GeminiPrefix    = "gemini:"
+	DeepSeekPrefix  = "deepseek:"
 )
 
 // CloudProviderConfig is the subset of store.CloudProviderSettings the
@@ -27,6 +28,7 @@ type CloudProviderConfig struct {
 	AnthropicAPIKey string
 	OpenAIAPIKey    string
 	GeminiAPIKey    string
+	DeepSeekAPIKey  string
 }
 
 // cloudClients bundles the three optional cloud clients so Router can
@@ -38,6 +40,7 @@ type cloudClients struct {
 	anthropic *AnthropicClient
 	openai    *Client // OpenAI's real API is wire-compatible with Client
 	gemini    *GeminiClient
+	deepseek  *Client // DeepSeek's hosted API is also OpenAI-compatible — see OpenAIModels's doc comment
 }
 
 // Router dispatches chat requests to the local OpenAI-compatible backend
@@ -81,6 +84,9 @@ func (r *Router) SetCloudProviders(cloud CloudProviderConfig) {
 	if cloud.GeminiAPIKey != "" {
 		next.gemini = NewGeminiClient(cloud.GeminiAPIKey)
 	}
+	if cloud.DeepSeekAPIKey != "" {
+		next.deepseek = New("https://api.deepseek.com/v1", cloud.DeepSeekAPIKey, "", "")
+	}
 	r.mu.Lock()
 	r.clouds = next
 	r.mu.Unlock()
@@ -98,6 +104,8 @@ func stripProviderPrefix(model string) (bare, provider string, ok bool) {
 		return strings.TrimPrefix(model, OpenAIPrefix), "openai", true
 	case strings.HasPrefix(model, GeminiPrefix):
 		return strings.TrimPrefix(model, GeminiPrefix), "gemini", true
+	case strings.HasPrefix(model, DeepSeekPrefix):
+		return strings.TrimPrefix(model, DeepSeekPrefix), "deepseek", true
 	default:
 		return "", "", false
 	}
@@ -129,6 +137,11 @@ func (r *Router) StreamChat(ctx context.Context, model string, messages []Messag
 			return fmt.Errorf("llm: Gemini isn't configured — add an API key in Settings → Cloud providers")
 		}
 		return clouds.gemini.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning)
+	case "deepseek":
+		if clouds.deepseek == nil {
+			return fmt.Errorf("llm: DeepSeek isn't configured — add an API key in Settings → Cloud providers")
+		}
+		return clouds.deepseek.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning)
 	}
 	return fmt.Errorf("llm: unknown provider for model %q", model)
 }
@@ -164,6 +177,11 @@ func (r *Router) Chat(ctx context.Context, model string, messages []Message, too
 			return Message{}, fmt.Errorf("llm: Gemini isn't configured — add an API key in Settings → Cloud providers")
 		}
 		return clouds.gemini.Chat(ctx, bare, messages, tools, thinkLevel)
+	case "deepseek":
+		if clouds.deepseek == nil {
+			return Message{}, fmt.Errorf("llm: DeepSeek isn't configured — add an API key in Settings → Cloud providers")
+		}
+		return clouds.deepseek.Chat(ctx, bare, messages, tools, thinkLevel)
 	case "anthropic":
 		return Message{}, fmt.Errorf("llm: file read/write tools aren't supported for Anthropic models yet")
 	}
@@ -217,6 +235,12 @@ func (r *Router) ListModels(ctx context.Context) ([]Model, error) {
 		for _, name := range GeminiModels {
 			full := GeminiPrefix + name
 			out = append(out, Model{Name: full, SupportsFileTools: SupportsToolsForModel(full), Provider: "gemini"})
+		}
+	}
+	if clouds.deepseek != nil {
+		for _, name := range DeepSeekModels {
+			full := DeepSeekPrefix + name
+			out = append(out, Model{Name: full, SupportsFileTools: SupportsToolsForModel(full), Provider: "deepseek"})
 		}
 	}
 	return out, nil

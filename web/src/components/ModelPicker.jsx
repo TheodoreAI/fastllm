@@ -10,6 +10,7 @@ const PROVIDER_LABELS = {
   anthropic: 'Anthropic (Claude)',
   openai: 'OpenAI (ChatGPT)',
   gemini: 'Google (Gemini)',
+  deepseek: 'DeepSeek',
 }
 
 function groupModels(models) {

@@ -124,6 +124,7 @@ func Build(cfg Config) (*Built, error) {
 		AnthropicAPIKey: cloudSettings.AnthropicAPIKey,
 		OpenAIAPIKey:    cloudSettings.OpenAIAPIKey,
 		GeminiAPIKey:    cloudSettings.GeminiAPIKey,
+		DeepSeekAPIKey:  cloudSettings.DeepSeekAPIKey,
 	})
 
 	if err := store.SeedFileAccessSettingsFromEnv(db, cfg.FilesRoot, cfg.FilesWrite); err != nil {

@@ -256,6 +256,7 @@ export default function SettingsPanel({
       if ('anthropic' in cloudProviderForm) next.anthropic_api_key = cloudProviderForm.anthropic
       if ('openai' in cloudProviderForm) next.openai_api_key = cloudProviderForm.openai
       if ('gemini' in cloudProviderForm) next.gemini_api_key = cloudProviderForm.gemini
+      if ('deepseek' in cloudProviderForm) next.deepseek_api_key = cloudProviderForm.deepseek
       await onSaveCloudProviderSettings(next)
       setCloudProviderForm({})
       setCloudProviderStatus('Saved. Newly added models appear in the Model list immediately.')
@@ -453,12 +454,13 @@ export default function SettingsPanel({
       <SubSection id="cloudProviders" label="Cloud providers" expanded={!!expanded.cloudProviders} onToggle={toggleSection}>
         <form onSubmit={handleSaveCloudProviders} className="rag-form">
           <p className="settings-hint">
-            Add your own API key for a cloud provider to use its models from the Model picker alongside your local models. Keys are stored on this machine and sent only to that provider. Gemini and OpenAI models support file read/write tools when file access is enabled below; Anthropic (Claude) models don't yet.
+            Add your own API key for a cloud provider to use its models from the Model picker alongside your local models. Keys are stored on this machine and sent only to that provider. Gemini, OpenAI, and DeepSeek models support file read/write tools when file access is enabled below; Anthropic (Claude) models don't yet.
           </p>
           {[
             { id: 'anthropic', label: 'Anthropic (Claude)', configured: cloudProviderSettings?.anthropic_configured },
             { id: 'openai', label: 'OpenAI (ChatGPT)', configured: cloudProviderSettings?.openai_configured },
             { id: 'gemini', label: 'Google (Gemini)', configured: cloudProviderSettings?.gemini_configured },
+            { id: 'deepseek', label: 'DeepSeek', configured: cloudProviderSettings?.deepseek_configured },
           ].map(({ id, label, configured }) => (
             <label className="settings-field" key={id}>
               <span>{label}{configured && !(id in cloudProviderForm) && <span className="settings-hint-inline"> (key saved)</span>}</span>
