@@ -45,6 +45,8 @@ const KEYBINDINGS = [
   { keys: 'Ctrl+Q', description: 'Exit fastllm', native: true },
   { keys: 'Ctrl+Z', description: 'Undo', native: true },
   { keys: 'Ctrl+Y', description: 'Redo', native: true },
+  { keys: 'Ctrl+Shift+C', description: 'Copy selection (in the Terminal panel)', native: false },
+  { keys: 'Ctrl+Shift+V', description: 'Paste (in the Terminal panel)', native: false },
 ]
 
 // One collapsible sub-block within the Settings panel — mirrors
