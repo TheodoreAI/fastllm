@@ -644,6 +644,51 @@ func SaveTerminalSettings(db *sql.DB, s TerminalSettings) error {
 	return err
 }
 
+// EditorSettings holds editor-only preferences that aren't part of the
+// main chat Model picker's selection — currently just which local model
+// powers inline AI completion (see internal/chat.EditorComplete).
+// CompletionModel == "" means "use the local backend's configured
+// default chat model" (h.LLM.ChatModel()) rather than a specific pick —
+// the same fallback behavior EditorComplete had before this setting
+// existed, so an empty/never-configured value is a safe, working default,
+// not an error state.
+type EditorSettings struct {
+	CompletionModel string `json:"completion_model"`
+}
+
+var DefaultEditorSettings = EditorSettings{}
+
+const settingEditor = "editor"
+
+// GetEditorSettings loads the persisted editor preferences, or the
+// zero-value default (use the backend's default chat model for
+// completion) when nothing has been saved yet.
+func GetEditorSettings(db *sql.DB) (EditorSettings, error) {
+	s := DefaultEditorSettings
+	var value string
+	err := db.QueryRow(`SELECT value FROM settings WHERE key = ?`, settingEditor).Scan(&value)
+	if err == sql.ErrNoRows {
+		return s, nil
+	}
+	if err != nil {
+		return s, err
+	}
+	if err := json.Unmarshal([]byte(value), &s); err != nil {
+		return s, err
+	}
+	return s, nil
+}
+
+// SaveEditorSettings persists the given editor preferences.
+func SaveEditorSettings(db *sql.DB, s EditorSettings) error {
+	payload, err := json.Marshal(s)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, settingEditor, string(payload))
+	return err
+}
+
 // CloudProviderSettings holds the user's own API keys for cloud model
 // providers, entered via Settings → Cloud providers. Empty ApiKey means
 // that provider isn't configured — its models are left out of the
