@@ -51,6 +51,45 @@ import {
 // client never needs to read their bytes) plus PDF (extracted server-side).
 const UPLOAD_FILE_PATTERN = /\.(txt|md|markdown|mdx|json|ya?ml|csv|tsv|log|go|js|jsx|ts|tsx|py|rb|java|c|cc|cpp|h|hpp|rs|sh|sql|html|css|xml|pdf)$/i
 
+// Directories to skip entirely on a folder upload — dependency/build/VCS
+// output that's typically huge, low-value to index, and would otherwise
+// slip through UPLOAD_FILE_PATTERN anyway since e.g. node_modules is full
+// of .js/.json/.md files that individually look legitimate. Matched
+// against any path segment in webkitRelativePath, not just the folder
+// root, so a nested node_modules (or a vendored copy) is skipped too.
+const UPLOAD_EXCLUDED_DIRS = new Set([
+  'node_modules',
+  '.yarn', // yarn's own cache/unplugged storage under the repo, not source
+  '.git',
+  '.hg',
+  '.svn',
+  'dist',
+  'build',
+  'out',
+  '.next',
+  '.nuxt',
+  '.turbo',
+  '.cache',
+  'coverage',
+  'venv',
+  '.venv',
+  '__pycache__',
+  'target', // Rust/Java build output
+  'vendor', // Go/PHP dependency vendoring
+  '.dart_tool', // Dart/Flutter
+  '.pub-cache', // Dart/Flutter
+  '.stack-work', // Haskell (stack)
+  'dist-newstyle', // Haskell (cabal)
+  '.idea', // JetBrains project metadata
+  '.vs', // Visual Studio project metadata
+  'obj', // MSBuild intermediate output (C++/.NET)
+])
+
+function isInExcludedDir(relativePath) {
+  const segments = relativePath.split(/[/\\]/)
+  return segments.some((segment) => UPLOAD_EXCLUDED_DIRS.has(segment))
+}
+
 const DEFAULT_SECTION_ORDER = ['conversations', 'model', 'skills', 'knowledge']
 
 const SECTION_LABELS = {
@@ -442,11 +481,18 @@ export default function App() {
   // the embedding backend with concurrent requests).
   async function indexFileList(files, { relativeLabel } = {}) {
     for (const file of files) {
+      const label = relativeLabel ? file.webkitRelativePath || file.name : file.name
+      // Only a folder upload has real directory segments to check —
+      // webkitRelativePath is empty for the flat file picker, so
+      // isInExcludedDir would never match there anyway, but relativeLabel
+      // makes the intent explicit rather than relying on that being empty.
+      if (relativeLabel && isInExcludedDir(label)) {
+        continue
+      }
       if (!UPLOAD_FILE_PATTERN.test(file.name)) {
         setDocStatus(`Skipped ${file.name}: unsupported file type.`)
         continue
       }
-      const label = relativeLabel ? file.webkitRelativePath || file.name : file.name
       await indexFile(file, label)
     }
   }
