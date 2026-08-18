@@ -454,7 +454,7 @@ func (h *Handler) EditorGitWatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	changes, stop, err := gitrepo.Watch(root)
+	changes, stop, err := gitrepo.Watch(ctx, root)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
