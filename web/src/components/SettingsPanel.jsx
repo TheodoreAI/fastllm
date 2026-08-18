@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { FONT_OPTIONS } from '../useFontFamily'
 import { FONT_SCALE_OPTIONS } from '../useFontScale'
+import { THEMES } from '../themes'
 import { browseForFolder } from '../api'
 import { useEscapeKey } from '../useEscapeKey'
 
@@ -227,20 +228,16 @@ export default function SettingsPanel({
 
       <SubSection id="appearance" label="Appearance" expanded={!!expanded.appearance} onToggle={toggleSection}>
         <div className="theme-toggle">
-          <button
-            type="button"
-            className={`theme-option ${theme === 'light' ? 'active' : ''}`}
-            onClick={() => onThemeChange('light')}
-          >
-            Light
-          </button>
-          <button
-            type="button"
-            className={`theme-option ${theme === 'dark' ? 'active' : ''}`}
-            onClick={() => onThemeChange('dark')}
-          >
-            Dark
-          </button>
+          {THEMES.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              className={`theme-option ${theme === t.id ? 'active' : ''}`}
+              onClick={() => onThemeChange(t.id)}
+            >
+              {t.label}
+            </button>
+          ))}
         </div>
 
         <label className="settings-field">

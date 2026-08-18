@@ -101,6 +101,8 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useSidebarCollapsed()
   const [activeView, setActiveView] = useState('chat')
   const [openFolderSignal, setOpenFolderSignal] = useState(0)
+  const [editorPanel, setEditorPanel] = useState('files')
+  const [gitChangeCount, setGitChangeCount] = useState(0)
   const [splitWidth, setSplitWidth] = useSplitWidth()
   const splitContainerRef = useRef(null)
   const bottomRef = useRef(null)
@@ -140,6 +142,28 @@ export default function App() {
     })
     return unsubscribe
   }, [])
+
+  // Native Help → About fastllm menu item (see cmd/desktop/main.go) opens
+  // the existing Settings → About sub-section instead of a separate
+  // native dialog, so it's themed like the rest of the app rather than
+  // rendering in plain OS chrome.
+  useEffect(() => {
+    if (!isWails()) return
+    const unsubscribe = window.runtime.EventsOn('menu:about', () => {
+      handleOpenSettings('about')
+    })
+    return unsubscribe
+  }, [])
+
+  // Search and Git live on the main rail (see the Search/Git buttons
+  // below) rather than as tabs inside EditorView's own sidebar, so
+  // picking either one needs to both switch into a view that actually
+  // renders EditorView and select the panel within it — a plain
+  // setEditorPanel call would do nothing if the user is still on Chat.
+  function openEditorPanel(panel) {
+    setActiveView((v) => (v === 'chat' ? 'editor' : v))
+    setEditorPanel(panel)
+  }
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -568,7 +592,7 @@ export default function App() {
           title="Chat"
           onClick={() => setActiveView('chat')}
         >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M4 4h16v12H8l-4 4V4Z" />
           </svg>
         </button>
@@ -578,7 +602,7 @@ export default function App() {
           title="Editor"
           onClick={() => setActiveView('editor')}
         >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9l-6-6Z" />
             <path d="M14 3v6h6" />
           </svg>
@@ -589,10 +613,35 @@ export default function App() {
           title="Split"
           onClick={() => setActiveView('split')}
         >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <rect x="3" y="4" width="18" height="16" rx="2" />
             <path d="M12 4v16" />
           </svg>
+        </button>
+        <button
+          type="button"
+          className={activeView !== 'chat' && editorPanel === 'search' ? 'is-active' : ''}
+          title="Search"
+          onClick={() => openEditorPanel('search')}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <circle cx="11" cy="11" r="7" />
+            <path d="m20 20-3.5-3.5" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          className={`view-rail-git ${activeView !== 'chat' && editorPanel === 'git' ? 'is-active' : ''}`}
+          title="Git"
+          onClick={() => openEditorPanel('git')}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <circle cx="6" cy="6" r="2.5" />
+            <circle cx="6" cy="18" r="2.5" />
+            <circle cx="18" cy="12" r="2.5" />
+            <path d="M6 8.5v7M8 6h4a4 4 0 0 1 4 4v0" />
+          </svg>
+          {gitChangeCount > 0 && <span className="view-rail-badge">{gitChangeCount}</span>}
         </button>
 
         <div className="view-rail-spacer" />
@@ -604,7 +653,7 @@ export default function App() {
             disabled={capturingScreenshot}
             onClick={handleScreenshot}
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z" />
               <circle cx="12" cy="13.5" r="3.5" />
             </svg>
@@ -636,6 +685,9 @@ export default function App() {
           terminalEnabled={terminalSettings.enabled}
           visible={activeView === 'editor' || activeView === 'split'}
           openFolderSignal={openFolderSignal}
+          panel={editorPanel}
+          onPanelChange={setEditorPanel}
+          onGitChangeCountChange={setGitChangeCount}
         />
       </div>
 
@@ -805,6 +857,10 @@ export default function App() {
           onClose={() => setSettingsOpen(false)}
         />
       )}
+
+      <span className="app-version" title={__BUILD_TIME__}>
+        v{__APP_VERSION__}
+      </span>
     </div>
   )
 }

@@ -99,7 +99,7 @@ func main() {
 			Handler: built.Mux,
 		},
 		BackgroundColour: &options.RGBA{R: 30, G: 30, B: 30, A: 1},
-		Bind:             []interface{}{bridge},
+		Bind:             []interface{}{bridge, &menuTheme{}},
 		Menu:             app.menu(),
 		OnStartup:        app.startup,
 		OnBeforeClose:    app.beforeClose,
@@ -162,6 +162,56 @@ func (a *desktopApp) menu() *menu.Menu {
 			return
 		}
 		wailsruntime.EventsEmit(a.ctx, "menu:open-folder")
+	})
+	fileMenu.AddSeparator()
+	fileMenu.AddText("Exit", keys.CmdOrCtrl("q"), func(_ *menu.CallbackData) {
+		if a.ctx == nil {
+			return
+		}
+		wailsruntime.Quit(a.ctx)
+	})
+
+	// menu.EditMenu() (the Role-based shortcut) only has a working
+	// implementation in Wails' macOS backend — on Windows an AppMenu/
+	// EditMenu Role is silently unimplemented and renders nothing, so
+	// Undo/Redo/Cut/Copy/Paste have to be spelled out explicitly here
+	// instead. These all target whatever text control currently has
+	// focus (native WebView2 editing commands), same as their standard
+	// Ctrl+Z/Y/X/C/V shortcuts already did — this just also surfaces
+	// them as clickable menu items.
+	editMenu := m.AddSubmenu("Edit")
+	editMenu.AddText("Undo", keys.CmdOrCtrl("z"), func(_ *menu.CallbackData) {
+		wailsruntime.WindowExecJS(a.ctx, "document.execCommand('undo')")
+	})
+	editMenu.AddText("Redo", keys.CmdOrCtrl("y"), func(_ *menu.CallbackData) {
+		wailsruntime.WindowExecJS(a.ctx, "document.execCommand('redo')")
+	})
+	editMenu.AddSeparator()
+	editMenu.AddText("Cut", keys.CmdOrCtrl("x"), func(_ *menu.CallbackData) {
+		wailsruntime.WindowExecJS(a.ctx, "document.execCommand('cut')")
+	})
+	editMenu.AddText("Copy", keys.CmdOrCtrl("c"), func(_ *menu.CallbackData) {
+		wailsruntime.WindowExecJS(a.ctx, "document.execCommand('copy')")
+	})
+	editMenu.AddText("Paste", keys.CmdOrCtrl("v"), func(_ *menu.CallbackData) {
+		wailsruntime.WindowExecJS(a.ctx, "document.execCommand('paste')")
+	})
+	editMenu.AddSeparator()
+	editMenu.AddText("Select All", keys.CmdOrCtrl("a"), func(_ *menu.CallbackData) {
+		wailsruntime.WindowExecJS(a.ctx, "document.execCommand('selectAll')")
+	})
+
+	// About opens the existing in-app Settings → About panel (styled by
+	// the app's own theme) rather than a native OS message box, which
+	// would always render in plain system chrome regardless of which
+	// fastllm theme is active — same event-emit pattern as Open Folder…
+	// above, since this menu has no direct line into React state either.
+	helpMenu := m.AddSubmenu("Help")
+	helpMenu.AddText("About fastllm", nil, func(_ *menu.CallbackData) {
+		if a.ctx == nil {
+			return
+		}
+		wailsruntime.EventsEmit(a.ctx, "menu:about")
 	})
 	return m
 }
