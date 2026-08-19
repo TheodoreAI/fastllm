@@ -178,10 +178,21 @@ type Model struct {
 // no separate client type was needed; Router just points a second Client
 // at api.openai.com. See AnthropicModels's doc comment for why this is a
 // fixed list rather than a live query.
+//
+// "gpt-5.1-mini" and "gpt-5.1-nano" were removed 2026-08-19: a real
+// request hit "The model gpt-5.1-mini does not exist or you do not have
+// access to it", and cross-checking OpenAI's own pricing page confirmed
+// neither ID has ever existed — they were a plausible-looking guess
+// (following the mini/nano naming pattern from gpt-5.2/gpt-5.4) that
+// never matched a real release. Replaced with gpt-5.6-luna, OpenAI's
+// current cheap/fast tier ($0.20/$1.20 per 1M tokens) — already confirmed
+// reachable and working via Cloudflare Workers AI's hosted copy earlier
+// this session, and here called directly against OpenAI's own API
+// instead. gpt-5.1 and o3 were confirmed still real on the same pricing
+// page and are unchanged.
 var OpenAIModels = []string{
 	"gpt-5.1",
-	"gpt-5.1-mini",
-	"gpt-5.1-nano",
+	"gpt-5.6-luna",
 	"o3",
 }
 
@@ -217,18 +228,68 @@ var OpenAIModels = []string{
 // meta/llama-3.2-11b-vision-instruct is the only one of these confirmed
 // in that same sweep to accept image input — see SupportsVisionForModel
 // and nvidiaVisionModels.
+//
+// Trimmed 2026-08-19 at the user's request from the full 11-model
+// verified set down to one representative per distinct family/use-case,
+// to cut down redundant near-duplicates in the picker (not a failure —
+// every dropped model still worked): llama-3.1-8b-instruct and
+// llama-3.1-70b-instruct were dropped as redundant with the newer
+// llama-3.3-70b-instruct; nemotron-3-super-120b-a12b and
+// llama-3.3-nemotron-super-49b-v1 were dropped as two more Nemotron sizes
+// in between the nano/ultra ends already kept below. If any of these were
+// wanted back, they're known-good as of the sweep above.
 var NvidiaModels = []string{
-	"meta/llama-3.1-8b-instruct",
-	"meta/llama-3.1-70b-instruct",
 	"meta/llama-3.3-70b-instruct",
 	"meta/llama-3.2-11b-vision-instruct",
 	"mistralai/mistral-nemotron",
-	"nvidia/nemotron-3-ultra-550b-a55b",
-	"nvidia/nemotron-3-super-120b-a12b",
 	"nvidia/nemotron-3-nano-30b-a3b",
-	"nvidia/llama-3.3-nemotron-super-49b-v1",
+	"nvidia/nemotron-3-ultra-550b-a55b",
 	"openai/gpt-oss-120b",
 	"z-ai/glm-5.2",
+}
+
+// CloudflareModels lists the models offered in the picker when a
+// Cloudflare Workers AI API token + account ID are configured. UNLIKE
+// NvidiaModels and OpenAIModels above, this list is NOT yet hand-verified
+// against a real account via an actual chat completion — it's seeded from
+// Cloudflare's own docs (developers.cloudflare.com/workers-ai/models/) at
+// setup time. Workers AI ships new models weekly and retires old ones
+// without notice per Cloudflare's own docs, so treat every entry here as
+// provisional until it's been confirmed with a real successful chat
+// completion, the same way NvidiaModels' doc comment describes NVIDIA
+// Build's catalog going stale twice from trusting docs alone. If an entry
+// here 404s or errors, remove it; don't add a new one without testing it
+// first.
+var CloudflareModels = []string{
+	"@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+	// llama-3.1-8b-instruct-fast and llama-3.2-3b-instruct removed
+	// 2026-08-19 at the user's request (keeping the picker to just the
+	// 70B Llama and gpt-5.6-luna below) — not a failure, just trimming
+	// unwanted options.
+	//
+	// deepseek-v4-flash-0731 removed 2026-08-19: confirmed unusable on the
+	// account's current plan tier (needs Workers Paid or prepaid AI
+	// Gateway credits, per Cloudflare's own docs). Don't re-add unless a
+	// real chat completion succeeds against an account actually entitled
+	// to call it.
+	//
+	// gpt-5.6-luna only speaks Cloudflare's Responses API, not Chat
+	// Completions — confirmed via two failed attempts against Chat
+	// Completions (2026-08-19): "@cf/openai/gpt-5.6-luna" 400'd "No such
+	// model" (code 5007), and the bare "openai/gpt-5.6-luna" form 400'd
+	// "Invalid value at input" (code 7003) — the model was found but
+	// rejected the {"messages": [...]} body shape. Routed through
+	// ResponsesClient instead (see NeedsResponsesAPI in
+	// responses_client.go and responsesOnlyModels there) using this
+	// same bare "openai/gpt-5.6-luna" ID, which matches the ID Cloudflare's
+	// own docs show for the Responses API.
+	"openai/gpt-5.6-luna",
+	// anthropic/claude-haiku-4.5 added 2026-08-19: served through Workers
+	// AI's unified model catalog, which speaks Anthropic's native Messages
+	// API (not Chat Completions) — routed through cloudflareAnthropic
+	// instead of the plain Client (see NeedsAnthropicAPI in anthropic.go
+	// and cloudflareAnthropicModels there).
+	"anthropic/claude-haiku-4.5",
 }
 
 type tagsResponse struct {
@@ -294,36 +355,82 @@ func containsString(list []string, s string) bool {
 // parseFallbackToolCall) — so file read/write access is only offered to
 // models on this allowlist, matched by name prefix (e.g. "gemma4" matches
 // "gemma4:12b").
+//
+// "qwen3.5" added 2026-08-19 after verifying qwen3.5:9b directly against
+// /v1/chat/completions: a read_file request returned real
+// finish_reason:"tool_calls" with correctly-shaped arguments, and a
+// second request simulating the tool-result round-trip correctly
+// consumed the result and gave a clean final answer (no redundant re-
+// calls). yi-coder:9b was checked the same way and rejected outright by
+// Ollama ("does not support tools") — it has no tools capability at all
+// (confirmed via /api/tags: capabilities is ["completion"] only) and is
+// deliberately NOT on this list.
 var toolCapableModelPrefixes = []string{
 	"gemma4",
 	"gpt-oss",
+	"qwen3.5",
 }
 
 // SupportsToolsForModel reports whether model (bare local name, or a
 // "provider:"-prefixed cloud model — see Router) can be offered file
 // read/write tools at all. Cloud providers each need their own tool-call
 // wire-format translation (see e.g. GeminiClient.Chat) — implemented for
-// Gemini, OpenAI, and NVIDIA Build (OpenAI's and NVIDIA Build's hosted
-// APIs both already speak Client's tool format natively) but not yet
-// Anthropic, so an "anthropic:" model is excluded here even though Claude
-// models are generally excellent at tool use — this is a "not
-// implemented in fastllm yet" gate, not a judgment about the model.
-// Unlike local models (see SupportsTools's allowlist below), a
-// configured cloud provider needs no per-model allowlist: the
-// uncertainty SupportsTools guards against is whether a given local
-// model reliably emits real tool_calls at all, which doesn't apply to
-// hosted providers fastllm has implemented tool support for. NVIDIA
-// Build's own docs note tool-calling support varies per model on their
-// platform (e.g. confirmed present on the Llama 3.2 Vision models,
+// Gemini, OpenAI, NVIDIA Build, and Anthropic (AnthropicClient.Chat's
+// tool_use/tool_result translation, added 2026-08-19 alongside Cloudflare's
+// "anthropic/claude-haiku-4.5"). Unlike local models (see SupportsTools's
+// allowlist below), a configured cloud provider needs no per-model
+// allowlist: the uncertainty SupportsTools guards against is whether a
+// given local model reliably emits real tool_calls at all, which doesn't
+// apply to hosted providers fastllm has implemented tool support for.
+// NVIDIA Build's own docs note tool-calling support varies per model on
+// their platform (e.g. confirmed present on the Llama 3.2 Vision models,
 // confirmed absent on DeepSeek-R1-Distill) — offering it at the whole-
 // provider level here is optimistic for NvidiaModels as a set; verify
 // each listed model actually returns real tool_calls before trusting
 // this blindly, same caveat as NvidiaModels' own doc comment.
+//
+// Cloudflare is a partial exception to the "whole provider" rule above —
+// tool support is allowlisted per model, not for the whole provider: a
+// model routed through the Responses API (NeedsResponsesAPI) gets tools
+// via ResponsesClient.Chat's translation, verified working end-to-end for
+// "cloudflare:openai/gpt-5.6-luna" (see NeedsResponsesAPI's doc comment); a
+// model routed through the Anthropic Messages API (NeedsAnthropicAPI) gets
+// tools via AnthropicClient.Chat's translation; every other Cloudflare
+// model needs to be on cloudflareToolCapableModels below, confirmed the
+// same hand-verified way as NvidiaModels.
 func SupportsToolsForModel(model string) bool {
-	if _, provider, ok := stripProviderPrefix(model); ok {
-		return provider == "gemini" || provider == "openai" || provider == "nvidia"
+	if bare, provider, ok := stripProviderPrefix(model); ok {
+		if provider == "cloudflare" {
+			return NeedsResponsesAPI("cloudflare", bare) || NeedsAnthropicAPI(bare) || cloudflareToolCapableModels[bare]
+		}
+		return provider == "gemini" || provider == "openai" || provider == "nvidia" || provider == "anthropic"
 	}
 	return SupportsTools(model)
+}
+
+// cloudflareToolCapableModels lists which CloudflareModels entries are
+// confirmed, via a real tool-calling request against a live account, to
+// reliably return proper structured tool_calls rather than writing the
+// call out as plain text.
+//
+//   - "@cf/meta/llama-3.3-70b-instruct-fp8-fast": confirmed 2026-08-19 —
+//     a real read_file request returned finish_reason:"tool_calls" with
+//     correctly-shaped function.arguments on every round (4 rounds, one
+//     redundant re-read of the same file each time — a model-behavior
+//     quirk bounded by maxToolRounds, not a wiring problem — but every
+//     round used real tool_calls, never the parseFallbackToolCall path).
+//   - "openai/gpt-5.6-luna": tool-capable via the Responses API, not this
+//     Chat-Completions path — see NeedsResponsesAPI/ResponsesClient.Chat
+//     instead; not listed here.
+//   - "anthropic/claude-haiku-4.5": tool-capable via the Anthropic Messages
+//     API, not this Chat-Completions path — see
+//     NeedsAnthropicAPI/AnthropicClient.Chat instead; not listed here.
+//
+// Every other CloudflareModels entry is unverified and stays excluded
+// until checked the same way, same caution as NvidiaModels' own doc
+// comment.
+var cloudflareToolCapableModels = map[string]bool{
+	"@cf/meta/llama-3.3-70b-instruct-fp8-fast": true,
 }
 
 // SupportsTools reports whether model is on the allowlist of models

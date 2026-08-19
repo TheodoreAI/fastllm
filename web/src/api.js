@@ -173,7 +173,7 @@ export function fetchTerminalSettings() {
 export function fetchCloudProviderSettings() {
   return fetch('/api/settings/cloud-providers')
     .then((r) => okJson(r, 'fetchCloudProviderSettings'))
-    .catch(swallowNetworkError({ anthropic_configured: false, openai_configured: false, gemini_configured: false, nvidia_configured: false }))
+    .catch(swallowNetworkError({ anthropic_configured: false, openai_configured: false, gemini_configured: false, nvidia_configured: false, cloudflare_configured: false }))
 }
 
 // Editor preferences — currently just which local model powers inline AI

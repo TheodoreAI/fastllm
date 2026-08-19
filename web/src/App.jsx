@@ -197,12 +197,13 @@ export default function App() {
   // Holds the pending write awaiting confirmation before it's actually
   // written to disk — unlike Reject (which only discards a proposal),
   // Approve touches a real file with no undo, so it gets the same
-  // confirm-modal gate as conversation/skill delete rather than
-  // executing on a single click.
+  // confirm-modal gate as skill delete rather than executing on a single
+  // click. Conversation delete deliberately skips this gate (see
+  // handleDeleteConversation) — chats are low-stakes to lose compared to a
+  // file on disk.
   const [writeToConfirm, setWriteToConfirm] = useState(null)
   const [conversations, setConversations] = useState([])
   const [conversationId, setConversationId] = useState(null)
-  const [conversationToDelete, setConversationToDelete] = useState(null)
   const [conversationError, setConversationError] = useState('')
   const [settings, setSettings] = useState(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -418,9 +419,11 @@ export default function App() {
     window.addEventListener('mouseup', handleUp)
   }
 
-  async function confirmDeleteConversation() {
-    const id = conversationToDelete
-    setConversationToDelete(null)
+  // No confirm modal for chat deletion — chats are low-stakes and easy to
+  // regenerate/re-derive compared to overwriting a file on disk, so this
+  // deletes immediately on click rather than routing through
+  // ConfirmDeleteModal the way skill/file-write/quit do.
+  async function handleDeleteConversation(id) {
     if (id == null) return
     setConversationError('')
     try {
@@ -1121,7 +1124,7 @@ export default function App() {
                     conversationId={conversationId}
                     onNewChat={startNewChat}
                     onOpen={openConversation}
-                    onRequestDelete={setConversationToDelete}
+                    onRequestDelete={handleDeleteConversation}
                     error={conversationError}
                   />
                 ),
@@ -1180,16 +1183,6 @@ export default function App() {
       </aside>
       </div>
       </div>
-
-      {conversationToDelete != null && (
-        <ConfirmDeleteModal
-          heading="Delete conversation?"
-          description={`This deletes "${conversations.find((c) => c.id === conversationToDelete)?.title ?? 'this conversation'}" and all its messages. This can't be undone.`}
-          confirmLabel="Delete"
-          onCancel={() => setConversationToDelete(null)}
-          onConfirm={confirmDeleteConversation}
-        />
-      )}
 
       {skillToDelete != null && (
         <ConfirmDeleteModal

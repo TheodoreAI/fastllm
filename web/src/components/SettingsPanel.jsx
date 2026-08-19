@@ -258,6 +258,8 @@ export default function SettingsPanel({
       if ('openai' in cloudProviderForm) next.openai_api_key = cloudProviderForm.openai
       if ('gemini' in cloudProviderForm) next.gemini_api_key = cloudProviderForm.gemini
       if ('nvidia' in cloudProviderForm) next.nvidia_api_key = cloudProviderForm.nvidia
+      if ('cloudflare' in cloudProviderForm) next.cloudflare_api_key = cloudProviderForm.cloudflare
+      if ('cloudflare_account_id' in cloudProviderForm) next.cloudflare_account_id = cloudProviderForm.cloudflare_account_id
       await onSaveCloudProviderSettings(next)
       setCloudProviderForm({})
       setCloudProviderStatus('Saved. Newly added models appear in the Model list immediately.')
@@ -450,7 +452,7 @@ export default function SettingsPanel({
       <SubSection id="cloudProviders" label="Cloud providers" expanded={!!expanded.cloudProviders} onToggle={toggleSection}>
         <form onSubmit={handleSaveCloudProviders} className="rag-form">
           <p className="settings-hint">
-            Add your own API key for a cloud provider to use its models from the Model picker alongside your local models. Keys are stored on this machine and sent only to that provider. Gemini, OpenAI, and NVIDIA Build models support file read/write tools when file access is enabled below; Anthropic (Claude) models don't yet.
+            Add your own API key for a cloud provider to use its models from the Model picker alongside your local models. Keys are stored on this machine and sent only to that provider. Gemini, OpenAI, and NVIDIA Build models support file read/write tools when file access is enabled below; Anthropic (Claude) and Cloudflare Workers AI models don't yet.
           </p>
           {[
             { id: 'anthropic', label: 'Anthropic (Claude)', configured: cloudProviderSettings?.anthropic_configured },
@@ -469,6 +471,36 @@ export default function SettingsPanel({
               />
             </label>
           ))}
+          {/* Cloudflare Workers AI needs both an API token AND an account
+              ID to build a working client — its endpoint is scoped under
+              /accounts/{id}/ai/v1/... rather than identified by the token
+              alone (see llm.Router.SetCloudProviders), so it gets a second
+              input the other providers above don't need. */}
+          <label className="settings-field">
+            <span>
+              Cloudflare Workers AI (token)
+              {cloudProviderSettings?.cloudflare_configured && !('cloudflare' in cloudProviderForm) && (
+                <span className="settings-hint-inline"> (key saved)</span>
+              )}
+            </span>
+            <input
+              type="password"
+              autoComplete="off"
+              value={cloudProviderForm.cloudflare ?? ''}
+              placeholder={cloudProviderSettings?.cloudflare_configured ? 'Enter a new token to replace the saved one' : 'API token'}
+              onChange={(e) => setCloudProviderForm((prev) => ({ ...prev, cloudflare: e.target.value }))}
+            />
+          </label>
+          <label className="settings-field">
+            <span>Cloudflare account ID</span>
+            <input
+              type="text"
+              autoComplete="off"
+              value={cloudProviderForm.cloudflare_account_id ?? ''}
+              placeholder="Found in the Cloudflare dashboard sidebar"
+              onChange={(e) => setCloudProviderForm((prev) => ({ ...prev, cloudflare_account_id: e.target.value }))}
+            />
+          </label>
           <button type="submit" className="btn-primary" disabled={Object.keys(cloudProviderForm).length === 0}>
             Save cloud providers
           </button>
