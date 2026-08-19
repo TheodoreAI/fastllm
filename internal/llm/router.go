@@ -17,7 +17,7 @@ const (
 	AnthropicPrefix = "anthropic:"
 	OpenAIPrefix    = "openai:"
 	GeminiPrefix    = "gemini:"
-	DeepSeekPrefix  = "deepseek:"
+	NvidiaPrefix    = "nvidia:"
 )
 
 // CloudProviderConfig is the subset of store.CloudProviderSettings the
@@ -28,19 +28,19 @@ type CloudProviderConfig struct {
 	AnthropicAPIKey string
 	OpenAIAPIKey    string
 	GeminiAPIKey    string
-	DeepSeekAPIKey  string
+	NvidiaAPIKey    string
 }
 
-// cloudClients bundles the three optional cloud clients so Router can
+// cloudClients bundles the four optional cloud clients so Router can
 // swap all of them out atomically under one lock (see
-// Router.SetCloudProviders) instead of three separately-locked fields,
-// which could otherwise let a concurrent StreamChat see one provider from
-// the old settings and another from the new mid-update.
+// Router.SetCloudProviders) instead of separately-locked fields, which
+// could otherwise let a concurrent StreamChat see one provider from the
+// old settings and another from the new mid-update.
 type cloudClients struct {
 	anthropic *AnthropicClient
 	openai    *Client // OpenAI's real API is wire-compatible with Client
 	gemini    *GeminiClient
-	deepseek  *Client // DeepSeek's hosted API is also OpenAI-compatible — see OpenAIModels's doc comment
+	nvidia    *Client // NVIDIA Build's hosted API is also OpenAI-compatible — see OpenAIModels's doc comment
 }
 
 // Router dispatches chat requests to the local OpenAI-compatible backend
@@ -84,8 +84,8 @@ func (r *Router) SetCloudProviders(cloud CloudProviderConfig) {
 	if cloud.GeminiAPIKey != "" {
 		next.gemini = NewGeminiClient(cloud.GeminiAPIKey)
 	}
-	if cloud.DeepSeekAPIKey != "" {
-		next.deepseek = New("https://api.deepseek.com/v1", cloud.DeepSeekAPIKey, "", "")
+	if cloud.NvidiaAPIKey != "" {
+		next.nvidia = New("https://integrate.api.nvidia.com/v1", cloud.NvidiaAPIKey, "", "")
 	}
 	r.mu.Lock()
 	r.clouds = next
@@ -104,8 +104,8 @@ func stripProviderPrefix(model string) (bare, provider string, ok bool) {
 		return strings.TrimPrefix(model, OpenAIPrefix), "openai", true
 	case strings.HasPrefix(model, GeminiPrefix):
 		return strings.TrimPrefix(model, GeminiPrefix), "gemini", true
-	case strings.HasPrefix(model, DeepSeekPrefix):
-		return strings.TrimPrefix(model, DeepSeekPrefix), "deepseek", true
+	case strings.HasPrefix(model, NvidiaPrefix):
+		return strings.TrimPrefix(model, NvidiaPrefix), "nvidia", true
 	default:
 		return "", "", false
 	}
@@ -137,11 +137,11 @@ func (r *Router) StreamChat(ctx context.Context, model string, messages []Messag
 			return fmt.Errorf("llm: Gemini isn't configured — add an API key in Settings → Cloud providers")
 		}
 		return clouds.gemini.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning)
-	case "deepseek":
-		if clouds.deepseek == nil {
-			return fmt.Errorf("llm: DeepSeek isn't configured — add an API key in Settings → Cloud providers")
+	case "nvidia":
+		if clouds.nvidia == nil {
+			return fmt.Errorf("llm: NVIDIA Build isn't configured — add an API key in Settings → Cloud providers")
 		}
-		return clouds.deepseek.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning)
+		return clouds.nvidia.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning)
 	}
 	return fmt.Errorf("llm: unknown provider for model %q", model)
 }
@@ -177,11 +177,11 @@ func (r *Router) Chat(ctx context.Context, model string, messages []Message, too
 			return Message{}, fmt.Errorf("llm: Gemini isn't configured — add an API key in Settings → Cloud providers")
 		}
 		return clouds.gemini.Chat(ctx, bare, messages, tools, thinkLevel)
-	case "deepseek":
-		if clouds.deepseek == nil {
-			return Message{}, fmt.Errorf("llm: DeepSeek isn't configured — add an API key in Settings → Cloud providers")
+	case "nvidia":
+		if clouds.nvidia == nil {
+			return Message{}, fmt.Errorf("llm: NVIDIA Build isn't configured — add an API key in Settings → Cloud providers")
 		}
-		return clouds.deepseek.Chat(ctx, bare, messages, tools, thinkLevel)
+		return clouds.nvidia.Chat(ctx, bare, messages, tools, thinkLevel)
 	case "anthropic":
 		return Message{}, fmt.Errorf("llm: file read/write tools aren't supported for Anthropic models yet")
 	}
@@ -237,10 +237,10 @@ func (r *Router) ListModels(ctx context.Context) ([]Model, error) {
 			out = append(out, Model{Name: full, SupportsFileTools: SupportsToolsForModel(full), SupportsVision: SupportsVisionForModel(full), Provider: "gemini"})
 		}
 	}
-	if clouds.deepseek != nil {
-		for _, name := range DeepSeekModels {
-			full := DeepSeekPrefix + name
-			out = append(out, Model{Name: full, SupportsFileTools: SupportsToolsForModel(full), SupportsVision: SupportsVisionForModel(full), Provider: "deepseek"})
+	if clouds.nvidia != nil {
+		for _, name := range NvidiaModels {
+			full := NvidiaPrefix + name
+			out = append(out, Model{Name: full, SupportsFileTools: SupportsToolsForModel(full), SupportsVision: SupportsVisionForModel(full), Provider: "nvidia"})
 		}
 	}
 	return out, nil

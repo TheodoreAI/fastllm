@@ -735,7 +735,7 @@ type CloudProviderSettings struct {
 	AnthropicAPIKey string `json:"anthropic_api_key"`
 	OpenAIAPIKey    string `json:"openai_api_key"`
 	GeminiAPIKey    string `json:"gemini_api_key"`
-	DeepSeekAPIKey  string `json:"deepseek_api_key"`
+	NvidiaAPIKey    string `json:"nvidia_api_key"`
 }
 
 var DefaultCloudProviderSettings = CloudProviderSettings{}
