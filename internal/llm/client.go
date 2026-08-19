@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -177,6 +178,91 @@ type Usage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
+
+	// RateLimit is nil when the backend's HTTP response carried none of
+	// the rate-limit headers this parses — a local Ollama server, or any
+	// provider whose header contract isn't confirmed (see
+	// parseRateLimitHeaders), simply never sets this rather than reporting
+	// a misleading zero.
+	RateLimit *RateLimit `json:"rate_limit,omitempty"`
+}
+
+// RateLimit is fastllm's provider-agnostic view of the remaining-capacity
+// headers a cloud API attaches to every response (not the JSON body —
+// these ride on the HTTP response itself, confirmed present on OpenAI's
+// and Anthropic's APIs: x-ratelimit-remaining-{requests,tokens} and
+// anthropic-ratelimit-{requests,input-tokens,output-tokens}-remaining
+// respectively — see parseRateLimitHeaders/parseAnthropicRateLimitHeaders).
+// OpenAI-wire reports one combined "tokens" figure; Anthropic tracks
+// input/output tokens against independent limits, so both are kept here
+// rather than collapsed into one number — a provider that only reports
+// the combined figure (OpenAI-wire) sets TokensRemaining/TokensLimit and
+// leaves Input/OutputTokens* zero; Anthropic sets Input/OutputTokens* and
+// leaves the combined pair zero. Callers should check which pair is
+// populated rather than assuming both are always present.
+type RateLimit struct {
+	RequestsRemaining int `json:"requests_remaining"`
+	RequestsLimit     int `json:"requests_limit"`
+	TokensRemaining   int `json:"tokens_remaining"`
+	TokensLimit       int `json:"tokens_limit"`
+
+	InputTokensRemaining  int `json:"input_tokens_remaining,omitempty"`
+	InputTokensLimit      int `json:"input_tokens_limit,omitempty"`
+	OutputTokensRemaining int `json:"output_tokens_remaining,omitempty"`
+	OutputTokensLimit     int `json:"output_tokens_limit,omitempty"`
+}
+
+// parseRateLimitHeaders reads OpenAI-wire's x-ratelimit-* response
+// headers (confirmed present on OpenAI's own API; NVIDIA Build and
+// Cloudflare Workers AI proxy the same OpenAI-compatible wire format but
+// their own header support isn't confirmed, so this simply returns nil
+// when the headers are absent rather than guessing). Local Ollama never
+// sends these either, so a local chat naturally gets no RateLimit.
+func parseRateLimitHeaders(h http.Header) *RateLimit {
+	reqRemaining, reqOK := parseHeaderInt(h, "x-ratelimit-remaining-requests")
+	reqLimit, _ := parseHeaderInt(h, "x-ratelimit-limit-requests")
+	tokRemaining, tokOK := parseHeaderInt(h, "x-ratelimit-remaining-tokens")
+	tokLimit, _ := parseHeaderInt(h, "x-ratelimit-limit-tokens")
+	if !reqOK && !tokOK {
+		return nil
+	}
+	return &RateLimit{RequestsRemaining: reqRemaining, RequestsLimit: reqLimit, TokensRemaining: tokRemaining, TokensLimit: tokLimit}
+}
+
+func parseHeaderInt(h http.Header, key string) (int, bool) {
+	v := h.Get(key)
+	if v == "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+// parseAnthropicRateLimitHeaders reads Anthropic's anthropic-ratelimit-*
+// response headers — see RateLimit's doc comment for why input/output
+// tokens are kept separate here rather than collapsed into one figure the
+// way OpenAI-wire's parseRateLimitHeaders does.
+func parseAnthropicRateLimitHeaders(h http.Header) *RateLimit {
+	reqRemaining, reqOK := parseHeaderInt(h, "anthropic-ratelimit-requests-remaining")
+	reqLimit, _ := parseHeaderInt(h, "anthropic-ratelimit-requests-limit")
+	inRemaining, inOK := parseHeaderInt(h, "anthropic-ratelimit-input-tokens-remaining")
+	inLimit, _ := parseHeaderInt(h, "anthropic-ratelimit-input-tokens-limit")
+	outRemaining, outOK := parseHeaderInt(h, "anthropic-ratelimit-output-tokens-remaining")
+	outLimit, _ := parseHeaderInt(h, "anthropic-ratelimit-output-tokens-limit")
+	if !reqOK && !inOK && !outOK {
+		return nil
+	}
+	return &RateLimit{
+		RequestsRemaining:     reqRemaining,
+		RequestsLimit:         reqLimit,
+		InputTokensRemaining:  inRemaining,
+		InputTokensLimit:      inLimit,
+		OutputTokensRemaining: outRemaining,
+		OutputTokensLimit:     outLimit,
+	}
 }
 
 // Model describes one chat-capable model available on the backend.
@@ -624,6 +710,12 @@ func (c *Client) StreamChat(ctx context.Context, model string, messages []Messag
 		return readChatError(resp)
 	}
 
+	// Rate-limit headers arrive on the response itself, available the
+	// instant it comes back — no need to wait for the body to finish
+	// streaming. See parseRateLimitHeaders's doc comment for which
+	// providers actually send these.
+	rateLimit := parseRateLimitHeaders(resp.Header)
+
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
@@ -652,6 +744,7 @@ func (c *Client) StreamChat(ctx context.Context, model string, messages []Messag
 				PromptTokens:     chunk.Usage.PromptTokens,
 				CompletionTokens: chunk.Usage.CompletionTokens,
 				TotalTokens:      chunk.Usage.TotalTokens,
+				RateLimit:        rateLimit,
 			})
 		}
 	}

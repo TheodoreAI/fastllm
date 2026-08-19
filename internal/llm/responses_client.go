@@ -243,6 +243,12 @@ func (c *ResponsesClient) StreamChat(ctx context.Context, model string, messages
 		return responsesError(resp)
 	}
 
+	// Confirmed present on OpenAI's own /v1/responses; Cloudflare's hosted
+	// copy isn't confirmed to send these, but parseRateLimitHeaders
+	// degrades to nil when absent rather than needing a separate path per
+	// backend.
+	rateLimit := parseRateLimitHeaders(resp.Header)
+
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
@@ -269,6 +275,7 @@ func (c *ResponsesClient) StreamChat(ctx context.Context, model string, messages
 					PromptTokens:     event.Response.Usage.InputTokens,
 					CompletionTokens: event.Response.Usage.OutputTokens,
 					TotalTokens:      event.Response.Usage.TotalTokens,
+					RateLimit:        rateLimit,
 				})
 			}
 		case "error":

@@ -2771,6 +2771,19 @@ body {
   color: var(--success);
 }
 
+/* Rate-limit headroom chip — neutral like the in/out chips normally, but
+   flips to the danger color once capacity is genuinely low (<=10%) so a
+   near-exhausted window is impossible to miss rather than blending in
+   with the routine per-turn numbers next to it. */
+.composer-usage-limit {
+  color: var(--text-dim);
+}
+
+.composer-usage-limit.is-low {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 15%, transparent);
+}
+
 .composer-usage-total {
   font-size: 0.75rem;
   color: var(--text-dim);

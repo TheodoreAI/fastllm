@@ -84,6 +84,18 @@ function ArrowUpIcon(props) {
   )
 }
 
+// Used on the composer's rate-limit-remaining chip — a half-circle dial,
+// evoking a fuel/capacity gauge for "how much headroom is left."
+function GaugeIcon(props) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      <path d="M4 18a8 8 0 0 1 16 0" />
+      <path d="M12 18l4-6" />
+      <circle cx="12" cy="18" r="1.2" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+
 export default function ChatPanel({
   messages,
   messagesLoading,
@@ -137,6 +149,33 @@ export default function ChatPanel({
     { promptTokens: 0, completionTokens: 0 }
   )
   const hasTotalUsage = totalUsage.promptTokens > 0 || totalUsage.completionTokens > 0
+
+  // Rate-limit headroom, if the backend reported one (see llm.RateLimit's
+  // doc comment — only confirmed for OpenAI and Anthropic; other
+  // providers simply never set rate_limit, and this stays null for them).
+  // Tokens are the usual binding constraint, so this prefers the
+  // token-remaining percentage over the request-count one; falls back to
+  // Anthropic's separate input-token figure when the combined "tokens"
+  // pair isn't present, and picks the lower of input/output percentages
+  // since either one hitting zero blocks the next request.
+  const rl = lastUsage?.rate_limit
+  let rateLimitPct = null
+  let rateLimitTitle = ''
+  if (rl) {
+    const pct = (remaining, limit) => (limit > 0 ? Math.round((remaining / limit) * 100) : null)
+    if (rl.tokens_limit > 0) {
+      rateLimitPct = pct(rl.tokens_remaining, rl.tokens_limit)
+      rateLimitTitle = `${rl.tokens_remaining.toLocaleString()} / ${rl.tokens_limit.toLocaleString()} tokens remaining this window`
+    } else if (rl.input_tokens_limit > 0 || rl.output_tokens_limit > 0) {
+      const inPct = pct(rl.input_tokens_remaining, rl.input_tokens_limit)
+      const outPct = pct(rl.output_tokens_remaining, rl.output_tokens_limit)
+      rateLimitPct = [inPct, outPct].filter((v) => v != null).sort((a, b) => a - b)[0] ?? null
+      rateLimitTitle = `${rl.input_tokens_remaining.toLocaleString()} / ${rl.input_tokens_limit.toLocaleString()} input tokens, ${rl.output_tokens_remaining.toLocaleString()} / ${rl.output_tokens_limit.toLocaleString()} output tokens remaining this window`
+    } else if (rl.requests_limit > 0) {
+      rateLimitPct = pct(rl.requests_remaining, rl.requests_limit)
+      rateLimitTitle = `${rl.requests_remaining.toLocaleString()} / ${rl.requests_limit.toLocaleString()} requests remaining this window`
+    }
+  }
 
   function handleComposerKeyDown(e) {
     if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return
@@ -316,6 +355,15 @@ export default function ChatPanel({
               <ArrowUpIcon className="inline-icon" />
               {lastUsage.completion_tokens.toLocaleString()}
             </span>
+            {rateLimitPct != null && (
+              <span
+                className={`composer-usage-chip composer-usage-limit ${rateLimitPct <= 10 ? 'is-low' : ''}`}
+                title={rateLimitTitle}
+              >
+                <GaugeIcon className="inline-icon" />
+                {rateLimitPct}% left
+              </span>
+            )}
             {hasTotalUsage && (
               <span className="composer-usage-total">
                 session {totalUsage.promptTokens.toLocaleString()} in · {totalUsage.completionTokens.toLocaleString()} out

@@ -380,6 +380,8 @@ func (c *AnthropicClient) StreamChat(ctx context.Context, model string, messages
 		return anthropicError(resp)
 	}
 
+	rateLimit := parseAnthropicRateLimitHeaders(resp.Header)
+
 	var inputTokens, outputTokens int
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -415,7 +417,7 @@ func (c *AnthropicClient) StreamChat(ctx context.Context, model string, messages
 		return err
 	}
 	if onUsage != nil && (inputTokens > 0 || outputTokens > 0) {
-		onUsage(Usage{PromptTokens: inputTokens, CompletionTokens: outputTokens, TotalTokens: inputTokens + outputTokens})
+		onUsage(Usage{PromptTokens: inputTokens, CompletionTokens: outputTokens, TotalTokens: inputTokens + outputTokens, RateLimit: rateLimit})
 	}
 	return nil
 }
