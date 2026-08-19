@@ -2404,6 +2404,17 @@ body {
   line-height: 1.5;
 }
 
+/* Shared sizing for every small inline SVG icon that replaced an emoji
+   glyph in ChatPanel (tool-call/build-check status, vision flag, stop
+   button, active-file label) — sized to sit on the text baseline rather
+   than as a display-block icon. */
+.inline-icon {
+  flex: 0 0 auto;
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.15em;
+}
+
 .tool-calls {
   list-style: none;
   margin: 0 0 8px;
@@ -2444,6 +2455,10 @@ body {
 
 .build-checks summary {
   cursor: pointer;
+}
+
+.build-checks summary .inline-icon {
+  margin-right: 3px;
 }
 
 .build-check-output {
@@ -2656,12 +2671,6 @@ body {
   white-space: nowrap;
 }
 
-.composer-active-file-icon {
-  flex: 0 0 auto;
-  width: 13px;
-  height: 13px;
-}
-
 /* Persistent flag next to the composer input showing whether the
    selected model accepts pasted images — unlike the placeholder text
    (which disappears the moment the user starts typing), this stays
@@ -2729,6 +2738,10 @@ body {
 
 .composer .btn-stop {
   background: var(--danger);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
 }
 
 .composer .btn-stop:hover {
