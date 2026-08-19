@@ -2081,6 +2081,12 @@ body {
   filter: brightness(1.1);
 }
 
+.btn-danger:focus-visible {
+  outline: 2px solid var(--danger);
+  outline-offset: 2px;
+  filter: brightness(1.1);
+}
+
 /* ---------- screenshot ---------- */
 
 .screenshot-preview-modal {
