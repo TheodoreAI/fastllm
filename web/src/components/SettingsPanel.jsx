@@ -6,6 +6,7 @@ import { browseForFolder, isWails } from '../api'
 import { useEscapeKey } from '../useEscapeKey'
 import { useSettingsExpanded } from '../useSettingsExpanded'
 import ConfirmDeleteModal from './ConfirmDeleteModal'
+import GroupedDropdown from './GroupedDropdown'
 
 // __APP_VERSION__ / __BUILD_TIME__ are baked in at build time by
 // vite.config.js from package.json + the build clock — see there for why.
@@ -256,7 +257,7 @@ export default function SettingsPanel({
       if ('anthropic' in cloudProviderForm) next.anthropic_api_key = cloudProviderForm.anthropic
       if ('openai' in cloudProviderForm) next.openai_api_key = cloudProviderForm.openai
       if ('gemini' in cloudProviderForm) next.gemini_api_key = cloudProviderForm.gemini
-      if ('deepseek' in cloudProviderForm) next.deepseek_api_key = cloudProviderForm.deepseek
+      if ('nvidia' in cloudProviderForm) next.nvidia_api_key = cloudProviderForm.nvidia
       await onSaveCloudProviderSettings(next)
       setCloudProviderForm({})
       setCloudProviderStatus('Saved. Newly added models appear in the Model list immediately.')
@@ -304,21 +305,16 @@ export default function SettingsPanel({
 
         <label className="settings-field">
           <span>Font</span>
-          <select
-            className="model-select"
+          <GroupedDropdown
+            groups={FONT_OPTIONS.map((group) => ({
+              key: group.group,
+              label: group.group,
+              options: group.choices.map((choice) => ({ value: choice.value, label: choice.label })),
+            }))}
             value={fontFamily}
-            onChange={(e) => onFontFamilyChange(e.target.value)}
-          >
-            {FONT_OPTIONS.map((group) => (
-              <optgroup key={group.group} label={group.group}>
-                {group.choices.map((choice) => (
-                  <option key={choice.label} value={choice.value}>
-                    {choice.label}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
+            onChange={onFontFamilyChange}
+            placeholder="Select a font"
+          />
         </label>
 
         <label className="settings-field">
@@ -454,13 +450,13 @@ export default function SettingsPanel({
       <SubSection id="cloudProviders" label="Cloud providers" expanded={!!expanded.cloudProviders} onToggle={toggleSection}>
         <form onSubmit={handleSaveCloudProviders} className="rag-form">
           <p className="settings-hint">
-            Add your own API key for a cloud provider to use its models from the Model picker alongside your local models. Keys are stored on this machine and sent only to that provider. Gemini, OpenAI, and DeepSeek models support file read/write tools when file access is enabled below; Anthropic (Claude) models don't yet.
+            Add your own API key for a cloud provider to use its models from the Model picker alongside your local models. Keys are stored on this machine and sent only to that provider. Gemini, OpenAI, and NVIDIA Build models support file read/write tools when file access is enabled below; Anthropic (Claude) models don't yet.
           </p>
           {[
             { id: 'anthropic', label: 'Anthropic (Claude)', configured: cloudProviderSettings?.anthropic_configured },
             { id: 'openai', label: 'OpenAI (ChatGPT)', configured: cloudProviderSettings?.openai_configured },
             { id: 'gemini', label: 'Google (Gemini)', configured: cloudProviderSettings?.gemini_configured },
-            { id: 'deepseek', label: 'DeepSeek', configured: cloudProviderSettings?.deepseek_configured },
+            { id: 'nvidia', label: 'NVIDIA Build', configured: cloudProviderSettings?.nvidia_configured },
           ].map(({ id, label, configured }) => (
             <label className="settings-field" key={id}>
               <span>{label}{configured && !(id in cloudProviderForm) && <span className="settings-hint-inline"> (key saved)</span>}</span>

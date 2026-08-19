@@ -791,7 +791,6 @@ body {
 
 body {
   font-family: var(--font-ui);
-  -webkit-font-smoothing: antialiased;
 }
 
 #root {
@@ -822,6 +821,89 @@ body {
   display: flex;
   flex-direction: row;
   min-height: 0;
+}
+
+/* Replaces cmd/desktop's native Windows menu bar (see TopBar.jsx's doc
+   comment for why) — this app-drag region matters here specifically:
+   Wails' frameless-adjacent title bar treats the area right below itself
+   as non-draggable by default, but this row visually reads as part of
+   that title bar, so it gets the same "drag the window" affordance a
+   native menu bar area would have. */
+.top-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 6px;
+  background: var(--bg-window);
+  border-bottom: 1px solid var(--border);
+  --wails-draggable: drag;
+}
+
+.top-bar-menu {
+  position: relative;
+}
+
+.top-bar-menu-trigger {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 0.8125rem;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  --wails-draggable: no-drag;
+}
+
+.top-bar-menu-trigger:hover,
+.top-bar-menu-trigger.is-open {
+  background: color-mix(in srgb, var(--text), transparent 90%);
+  color: var(--text);
+}
+
+.top-bar-menu-list {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  z-index: 30;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  min-width: 200px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-overlay);
+}
+
+.top-bar-menu-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  background: transparent;
+  border: none;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 0.8125rem;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.top-bar-menu-item:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.top-bar-menu-shortcut {
+  color: var(--text-faint);
+  font-size: 0.75rem;
+}
+
+.top-bar-menu-separator {
+  margin: 4px 2px;
+  border-top: 1px solid var(--border);
 }
 
 .offline-banner {
@@ -1395,6 +1477,111 @@ body {
   opacity: 0.5;
 }
 
+.model-select option {
+  font-weight: 400;
+  color: var(--text);
+  background: var(--bg-panel);
+}
+
+/* Custom dropdown replacing the main model <select> — see ModelDropdown
+   in ModelPicker.jsx for why: a native <select> popup's internal
+   scrollbar is OS-rendered and narrows/shifts the popup once the (now
+   grouped, potentially long) model list needs to scroll, and nothing in
+   page CSS can reach inside that popup to fix it. This list is plain
+   markup instead, so it gets this app's own scrollbar and layout. */
+.model-dropdown {
+  position: relative;
+}
+
+.model-dropdown-trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: color-mix(in srgb, var(--bg-panel), var(--text) 6%);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+  font-size: 0.8125rem;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.model-dropdown-trigger:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.model-dropdown-trigger:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.model-dropdown-trigger-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-dropdown-caret {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-right: 1.5px solid var(--text-dim);
+  border-bottom: 1.5px solid var(--text-dim);
+  transform: rotate(45deg) translateY(-2px);
+}
+
+.model-dropdown-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-overlay);
+}
+
+.model-dropdown-group-label {
+  padding: 6px 8px 4px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-faint);
+}
+
+.model-dropdown-option {
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 0.8125rem;
+  color: var(--text);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-dropdown-option:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.model-dropdown-option.is-selected {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  color: var(--text);
+  font-weight: 600;
+}
+
 .model-completion-field {
   display: flex;
   flex-direction: column;
@@ -1926,6 +2113,50 @@ body {
   color: var(--danger);
 }
 
+.typing-indicator {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 1.1em;
+  padding: 2px 0;
+}
+
+.typing-indicator span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  animation: typing-bounce 1.2s ease-in-out infinite;
+}
+
+.typing-indicator span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.typing-indicator span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes typing-bounce {
+  0%,
+  60%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .typing-indicator span {
+    animation: none;
+    opacity: 0.7;
+  }
+}
+
 .message .role {
   display: block;
   font-size: 0.625rem;
@@ -2402,7 +2633,7 @@ body {
 .composer input {
   flex: 1;
   padding: 9px 12px;
-  border-radius: 999px;
+  border-radius: var(--radius);
   border: 1px solid var(--border-strong);
   background: var(--bg-input);
   color: var(--text);
@@ -2425,7 +2656,7 @@ body {
   width: auto;
   margin-top: 0;
   padding: 9px 18px;
-  border-radius: 999px;
+  border-radius: var(--radius);
   white-space: nowrap;
 }
 
@@ -2511,46 +2742,21 @@ body {
 }
 
 .editor-sidebar {
-  /* Width when expanded is set inline from useEditorSidebarWidth (see
-     EditorView.jsx) via the draggable divider right after this element —
-     no fixed width here, just the collapsed-state override below. */
+  /* Width is set inline from useEditorSidebarWidth (see EditorView.jsx)
+     via the draggable divider right after this element. When collapsed,
+     EditorView doesn't render this <aside> at all (see its
+     sidebarCollapsed check) rather than shrinking it to a narrow
+     strip — collapsing already has a control (the view-rail's
+     Files/Search/Git buttons in App.jsx, which toggle the same
+     sidebarCollapsed state), so a second dedicated strip just to hold
+     an expand button was pure overhead: giving the editor/terminal that
+     space back when collapsed. */
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border);
   overflow: hidden;
-}
-
-.editor-sidebar.is-collapsed {
-  width: 44px;
-  min-width: 44px;
-}
-
-.editor-sidebar-collapse-toggle {
-  flex: 0 0 auto;
-  align-self: flex-end;
-  width: 22px;
-  height: 22px;
-  margin: 6px 6px 0;
-  border-radius: 50%;
-  border: none;
-  background: transparent;
-  color: var(--text-dim);
-  font-size: 16px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.editor-sidebar.is-collapsed .editor-sidebar-collapse-toggle {
-  align-self: center;
-}
-
-.editor-sidebar-collapse-toggle:hover {
-  background: rgba(128, 128, 128, 0.18);
-  color: var(--text);
 }
 
 .editor-sidebar-divider {
@@ -3410,6 +3616,9 @@ body {
 
 .settings-subsection-body {
   margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 
 .settings-label {
@@ -3433,12 +3642,18 @@ body {
   font-size: 0.8125rem;
 }
 
-:root[data-theme-family='light'] .settings-row {
-  background: var(--bg-window);
+/* .settings-subsection-body's flex gap (14px) is right for spacing
+   between distinct fields, but a run of .settings-row siblings (e.g.
+   "LLM backend"'s three rows, "About"'s version/build rows) reads as one
+   compact key-value table, not separate fields — so consecutive rows
+   pull themselves back to a tighter 6px rather than inheriting the full
+   field-level gap. */
+.settings-row + .settings-row {
+  margin-top: -8px;
 }
 
-.settings-row + .settings-row {
-  margin-top: 6px;
+:root[data-theme-family='light'] .settings-row {
+  background: var(--bg-window);
 }
 
 .settings-row-key {

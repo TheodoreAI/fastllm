@@ -115,6 +115,13 @@ func Build(cfg Config) (*Built, error) {
 	log.Printf("loaded %d chunks into vector store", len(chunks))
 
 	llmClient := llm.New(cfg.LLMBaseURL, cfg.LLMAPIKey, cfg.LLMChatModel, cfg.LLMEmbedModel)
+	// The local backend is assumed to be Ollama (or an Ollama-compatible
+	// server), which understands the "think" reasoning-effort field —
+	// unlike the cloud clients llm.Router constructs below, which are
+	// real OpenAI-wire-compatible APIs with no such field and, at least
+	// for NVIDIA Build, a confirmed 400 if it's sent anyway. See
+	// llm.Client.SendThink's doc comment.
+	llmClient.SendThink = true
 	cloudSettings, err := store.GetCloudProviderSettings(db)
 	if err != nil {
 		log.Printf("load cloud provider settings: %v", err)
@@ -124,7 +131,7 @@ func Build(cfg Config) (*Built, error) {
 		AnthropicAPIKey: cloudSettings.AnthropicAPIKey,
 		OpenAIAPIKey:    cloudSettings.OpenAIAPIKey,
 		GeminiAPIKey:    cloudSettings.GeminiAPIKey,
-		DeepSeekAPIKey:  cloudSettings.DeepSeekAPIKey,
+		NvidiaAPIKey:    cloudSettings.NvidiaAPIKey,
 	})
 
 	if err := store.SeedFileAccessSettingsFromEnv(db, cfg.FilesRoot, cfg.FilesWrite); err != nil {

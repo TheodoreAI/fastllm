@@ -26,14 +26,15 @@ export function useTheme() {
     document.documentElement.setAttribute('data-theme', theme)
     document.documentElement.setAttribute('data-theme-family', familyOf(theme))
     localStorage.setItem(STORAGE_KEY, theme)
-    // Wails' native menu bar (File → …) is drawn by Windows itself, not by
-    // this page's CSS — it stays on the OS's default light chrome unless
-    // explicitly told to follow dark mode, which is why it looked like a
-    // stray white bar above an otherwise fully dark window. Syncing it
-    // here means picking a theme in Settings also flips the native
-    // chrome, not just the in-page colors. Only light/dark exist at the
-    // OS level, so every theme maps to whichever of those two its family
-    // is closest to.
+    // Wails' native title bar is drawn by Windows itself, not by this
+    // page's CSS — it stays on the OS's default light chrome unless
+    // explicitly told to follow dark mode. Syncing it here means picking
+    // a theme in Settings also flips the native chrome, not just the
+    // in-page colors. Only light/dark exist at the OS level, so every
+    // theme maps to whichever of those two its family is closest to.
+    // (The File/Edit/Help menu that used to sit below this title bar is
+    // now TopBar.jsx, an in-app component — it just follows the page's
+    // own theme like everything else, no native syncing needed.)
     if (isWails() && window.runtime) {
       const dark = familyOf(theme) === 'dark'
       if (dark) {
@@ -41,13 +42,6 @@ export function useTheme() {
       } else {
         window.runtime.WindowSetLightTheme()
       }
-      // WindowSetDarkTheme/WindowSetLightTheme only reach Wails' own
-      // title bar — the native File/Edit/Help menu bar underneath it is
-      // a separate Win32 surface with no Wails API of its own, so it's
-      // driven directly through a bound Go method instead (see
-      // cmd/desktop/menutheme_windows.go). No-ops on non-Windows builds
-      // and harmlessly missing (optional chaining) outside Wails.
-      window.go?.main?.menuTheme?.SetDark?.(dark)
     }
   }, [theme])
 

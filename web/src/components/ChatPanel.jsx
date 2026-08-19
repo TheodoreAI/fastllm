@@ -76,9 +76,23 @@ export default function ChatPanel({
     <main className="chat">
       <div className="messages">
         {messagesLoading && <div className="messages-loading">Loading…</div>}
-        {!messagesLoading && messages.map((m, i) => (
+        {!messagesLoading && messages.map((m, i) => {
+          const isLastMessage = i === messages.length - 1
+          const isAwaitingResponse =
+            streaming &&
+            isLastMessage &&
+            m.role === 'assistant' &&
+            !m.content &&
+            !m.reasoning &&
+            (!m.toolCalls || m.toolCalls.length === 0)
+          return (
           <div key={i} className={`message ${m.role} ${m.isError ? 'is-error' : ''}`}>
             <span className="role">{m.role === 'user' ? userDisplayName || 'user' : m.role}</span>
+            {isAwaitingResponse && (
+              <div className="typing-indicator" role="status" aria-label="Waiting for model response">
+                <span></span><span></span><span></span>
+              </div>
+            )}
             {m.reasoning && (
               <details className="reasoning" open={!m.content}>
                 <summary>{m.content ? 'Thinking' : 'Thinking…'}</summary>
@@ -134,7 +148,8 @@ export default function ChatPanel({
               </details>
             )}
           </div>
-        ))}
+          )
+        })}
         <div ref={bottomRef} />
       </div>
 
