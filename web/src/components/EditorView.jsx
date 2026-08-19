@@ -25,6 +25,7 @@ import {
   createGitBranch,
   browseForFolder,
   saveFileAccessSettings,
+  apiOrigin,
 } from '../api'
 import { languageExtensionFor, languageNameFor } from '../editorLanguages'
 import { parseDiff } from '../diffFormat'
@@ -53,18 +54,36 @@ export default function EditorView({
 }) {
   const [tree, setTree] = useState([])
   const [treeStatus, setTreeStatus] = useState('')
-  const [openPath, setOpenPath] = useState(null)
-  const [content, setContent] = useState('')
-  const [savedContent, setSavedContent] = useState('')
-  const [fileStatus, setFileStatus] = useState('')
+  // Every currently open file is its own tab, each with its own buffer —
+  // switching tabs must never lose an unsaved edit in another one, so
+  // content/savedContent/fileStatus all live per-tab here rather than as
+  // single top-level fields. Keyed by path since a file can only be open
+  // once (opening an already-open path just activates its existing tab).
+  const [openTabs, setOpenTabs] = useState([]) // [{ path, content, savedContent, fileStatus }]
+  const [activeTabPath, setActiveTabPath] = useState(null)
+  const openPath = activeTabPath
+  const activeTab = openTabs.find((t) => t.path === activeTabPath) ?? null
+  const content = activeTab?.content ?? ''
+  const savedContent = activeTab?.savedContent ?? ''
+  const fileStatus = activeTab?.fileStatus ?? ''
+  function setFileStatus(value) {
+    setOpenTabs((prev) => prev.map((t) => (t.path === activeTabPath ? { ...t, fileStatus: value } : t)))
+  }
   // Lint findings from the most recent save (see api.js's saveEditorFile —
   // the backend lints JS/JSX files with the target project's own oxlint
-  // right after writing). Kept in a ref (read by the linter() extension's
-  // source function below) rather than only React state, since CodeMirror
-  // pulls diagnostics by calling that function itself — forceLinting()
-  // after a save is what actually triggers it to re-read the ref.
-  const lintDiagnosticsRef = useRef([])
-  const codeMirrorViewRef = useRef(null)
+  // right after writing). Kept in per-path refs (read by each tab's own
+  // linter() extension source function below) rather than only React
+  // state, since CodeMirror pulls diagnostics by calling that function
+  // itself — forceLinting() after a save is what actually triggers a given
+  // tab's view to re-read its entry. A plain object keyed by path, not a
+  // single ref, because every open tab's CodeMirror instance stays mounted
+  // at once (see the "full instance per tab" tab strategy below) and each
+  // needs its own diagnostics untouched by saves happening in other tabs.
+  const lintDiagnosticsByPath = useRef({})
+  // Same per-path keying as lintDiagnosticsByPath, and for the same
+  // reason: forceLinting() needs the specific tab's CodeMirror view, not
+  // whichever tab happened to mount most recently.
+  const codeMirrorViewsByPath = useRef({})
   const [saving, setSaving] = useState(false)
 
   const [query, setQuery] = useState('')
@@ -183,14 +202,27 @@ export default function EditorView({
     pendingConfirm?.resolve(result)
     setPendingConfirm(null)
   }
-  // Three call sites below (open folder, open file, view diff) guard an
-  // in-progress edit the exact same way — factored out so the copy can't
-  // drift between them the way the three near-identical error phrasings
-  // elsewhere in this codebase already have.
-  function confirmDiscardChanges() {
+  // closeTab below guards a tab's in-progress edit this same way — takes
+  // the path explicitly since a tab can be closed without being the
+  // active one, so it can't rely on the top-level openPath.
+  function confirmDiscardChanges(path) {
     return confirmDialog({
       heading: 'Discard unsaved changes?',
-      description: `"${openPath}" has unsaved changes that will be lost.`,
+      description: `"${path}" has unsaved changes that will be lost.`,
+      confirmLabel: 'Discard changes',
+    })
+  }
+  // Folder switches, branch switches, and "open folder" all used to
+  // guard on the single `dirty` flag before nuking the one open file —
+  // now that any number of tabs can be dirty at once, they need to know
+  // whether ANY of them are, and confirmDiscardChanges' message doesn't
+  // fit that plural case, so those call sites get their own dedicated
+  // check instead of the single-file one below.
+  const anyDirty = openTabs.some((t) => t.content !== t.savedContent)
+  function confirmDiscardAllChanges() {
+    return confirmDialog({
+      heading: 'Discard unsaved changes?',
+      description: 'One or more open files have unsaved changes that will be lost.',
       confirmLabel: 'Discard changes',
     })
   }
@@ -213,29 +245,46 @@ export default function EditorView({
   // filesystem watcher on the whole working tree plus .git/HEAD,
   // .git/refs, and .git/index (see internal/gitrepo.Watch), the same
   // "notified, not polled" approach VS Code and other IDEs use for git
-  // status. Only subscribes while the git sub-panel is the one actually
-  // visible (no point watching for changes the user isn't looking at),
-  // and only while file access is enabled at all — which means a change
-  // that happens while the user is on a different panel (e.g. mid-chat
-  // with the model while sitting on the Files panel) is missed by the
-  // live stream entirely, so switching back to the Git panel always does
-  // one immediate refetch first, independent of whatever the SSE stream
-  // reports afterward.
+  // status. Subscribes any time file access is enabled at all — not just
+  // while the Git sub-panel is the visible one — because the rail badge
+  // (see App.jsx's gitChangeCount) needs a live count regardless of which
+  // panel the user is looking at; gating this on panel === 'git' left the
+  // badge frozen at whatever it was on mount whenever the user was
+  // anywhere else. Switching to the Git panel still does one immediate
+  // refetch of its own (see the `enabled` effect above), independent of
+  // whatever the SSE stream reports afterward.
   useEffect(() => {
-    if (!enabled || !visible || panel !== 'git') return
+    if (!enabled) return
     refreshGitStatus()
     refreshBranches()
-    const source = new EventSource('/api/editor/git/watch')
-    source.addEventListener('changed', () => {
-      refreshGitStatus()
-      refreshBranches()
+    // Routed through apiOrigin() for the same reason streamChat is (see
+    // api.js): the desktop build's Wails in-process AssetServer bridge
+    // (cmd/desktop/main.go) doesn't implement http.Flusher, so this SSE
+    // stream 500s with "streaming unsupported" over that bridge and the
+    // EventSource never receives a single event — the live git-change
+    // badge/panel refresh silently never fires in the desktop app,
+    // leaving it stuck on whatever the last one-off refetch above saw.
+    // Plain relative URL is unaffected and still used for the
+    // plain-browser build (apiOrigin() resolves to '' there).
+    let source
+    let cancelled = false
+    apiOrigin().then((origin) => {
+      if (cancelled) return
+      source = new EventSource(`${origin}/api/editor/git/watch`)
+      source.addEventListener('changed', () => {
+        refreshGitStatus()
+        refreshBranches()
+      })
     })
     // EventSource retries on its own after a drop (e.g. the sandbox root
     // changed in Settings, closing the stream server-side) — no manual
     // reconnect logic needed here, same as the browser's default SSE
     // behavior anywhere else.
-    return () => source.close()
-  }, [enabled, visible, panel])
+    return () => {
+      cancelled = true
+      source?.close()
+    }
+  }, [enabled])
 
   // Git's change count now surfaces as a badge on App.jsx's rail button
   // (see the Git button there) rather than only inside this component's
@@ -274,12 +323,13 @@ export default function EditorView({
   // git status can all be stale afterward, so refresh everything rather
   // than just the branch list.
   async function handleSwitchBranch(name) {
+    if (anyDirty && !(await confirmDiscardAllChanges())) return
     setBranchBusy(true)
     setBranchError('')
     try {
       const res = await switchGitBranch(name)
       if (!res.ok) throw new Error(await res.text())
-      setOpenPath(null)
+      closeAllTabs()
       setDiffPath(null)
       refreshTree()
       refreshGitStatus()
@@ -325,7 +375,7 @@ export default function EditorView({
     try {
       const picked = await browseForFolder()
       if (picked.cancelled || !picked.path) return
-      if (dirty && !(await confirmDiscardChanges())) return
+      if (anyDirty && !(await confirmDiscardAllChanges())) return
       const res = await saveFileAccessSettings({
         ...fileAccessSettings,
         root: picked.path,
@@ -333,7 +383,7 @@ export default function EditorView({
       if (!res.ok) throw new Error(await res.text())
       const saved = await res.json()
       onFileAccessSettingsChange?.(saved)
-      setOpenPath(null)
+      closeAllTabs()
       setDiffPath(null)
       setSearchResults([])
       refreshTree()
@@ -364,34 +414,114 @@ export default function EditorView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openFolderSignal])
 
-  async function openFile(path) {
-    if (dirty && !(await confirmDiscardChanges())) return
-    setDiffPath(null)
-    setFileStatus('Loading…')
+  // Shared by openFile (new tab) and reloadTabFromDisk (existing tab,
+  // forced refresh) below — fetches path's on-disk content and writes it
+  // into whichever tab already has that path, clearing stale lint
+  // diagnostics and re-triggering the linter against the new content.
+  async function loadFileIntoTab(path) {
     try {
       const data = await fetchEditorFile(path)
-      setOpenPath(path)
-      setContent(data.content)
-      setSavedContent(data.content)
-      setFileStatus(data.truncated ? 'File truncated (too large to fully load).' : '')
-      lintDiagnosticsRef.current = []
-      if (codeMirrorViewRef.current) forceLinting(codeMirrorViewRef.current)
+      setOpenTabs((prev) =>
+        prev.map((t) =>
+          t.path === path
+            ? {
+                ...t,
+                content: data.content,
+                savedContent: data.content,
+                fileStatus: data.truncated ? 'File truncated (too large to fully load).' : '',
+              }
+            : t
+        )
+      )
+      delete lintDiagnosticsByPath.current[path]
+      const view = codeMirrorViewsByPath.current[path]
+      if (view) forceLinting(view)
     } catch (err) {
-      setFileStatus(`Couldn't open this file: ${err.message}`)
+      setOpenTabs((prev) =>
+        prev.map((t) => (t.path === path ? { ...t, fileStatus: `Couldn't open this file: ${err.message}` } : t))
+      )
     }
+  }
+
+  // Opening a file that's already got a tab just activates that tab (same
+  // as clicking an already-open tab in VS Code) rather than re-fetching it
+  // from disk and clobbering whatever unsaved edits it might have — the
+  // only path that touches the network is genuinely opening a new tab.
+  async function openFile(path) {
+    setDiffPath(null)
+    if (openTabs.some((t) => t.path === path)) {
+      setActiveTabPath(path)
+      return
+    }
+    setOpenTabs((prev) => [...prev, { path, content: '', savedContent: '', fileStatus: 'Loading…' }])
+    setActiveTabPath(path)
+    await loadFileIntoTab(path)
+  }
+
+  // Re-fetches an already-open tab's content from disk, overwriting
+  // whatever's in the buffer — used after a discard, where the in-memory
+  // content is known-stale rather than a real unsaved edit worth keeping.
+  function reloadTabFromDisk(path) {
+    loadFileIntoTab(path)
+  }
+
+  async function closeTab(path) {
+    const tab = openTabs.find((t) => t.path === path)
+    if (tab && tab.content !== tab.savedContent && !(await confirmDiscardChanges(path))) return
+    delete lintDiagnosticsByPath.current[path]
+    delete codeMirrorViewsByPath.current[path]
+    setOpenTabs((prev) => {
+      const next = prev.filter((t) => t.path !== path)
+      if (path === activeTabPath) {
+        setActiveTabPath(next.length > 0 ? next[next.length - 1].path : null)
+      }
+      return next
+    })
+  }
+
+  // Used where an operation invalidates every open file at once (folder
+  // switch, branch switch) — callers are responsible for confirming with
+  // anyDirty/confirmDiscardAllChanges first, since a per-tab confirm here
+  // would mean answering one popup per open tab.
+  function closeAllTabs() {
+    lintDiagnosticsByPath.current = {}
+    codeMirrorViewsByPath.current = {}
+    setOpenTabs([])
+    setActiveTabPath(null)
+  }
+
+  // Removes a tab without asking about unsaved changes — for the delete
+  // and discard flows below, where the file's on-disk content just
+  // changed out from under the tab (or vanished entirely), so keeping the
+  // in-memory edit around isn't "unsaved work," it's already stale.
+  function removeTabNoConfirm(path) {
+    delete lintDiagnosticsByPath.current[path]
+    delete codeMirrorViewsByPath.current[path]
+    setOpenTabs((prev) => {
+      const next = prev.filter((t) => t.path !== path)
+      if (path === activeTabPath) {
+        setActiveTabPath(next.length > 0 ? next[next.length - 1].path : null)
+      }
+      return next
+    })
   }
 
   async function handleSave() {
     if (!openPath || !dirty) return
+    const path = openPath
+    const savingContent = content
     setSaving(true)
     setFileStatus('')
     try {
-      const res = await saveEditorFile(openPath, content)
+      const res = await saveEditorFile(path, savingContent)
       if (!res.ok) throw new Error(await res.text())
       const data = await res.json()
-      setSavedContent(content)
-      lintDiagnosticsRef.current = data.diagnostics ?? []
-      if (codeMirrorViewRef.current) forceLinting(codeMirrorViewRef.current)
+      setOpenTabs((prev) =>
+        prev.map((t) => (t.path === path ? { ...t, savedContent: savingContent } : t))
+      )
+      lintDiagnosticsByPath.current[path] = data.diagnostics ?? []
+      const view = codeMirrorViewsByPath.current[path]
+      if (view) forceLinting(view)
       refreshGitStatus()
     } catch (err) {
       setFileStatus(`Couldn't save this file: ${err.message}`)
@@ -434,11 +564,7 @@ export default function EditorView({
     try {
       const res = await deleteEditorFile(path)
       if (!res.ok) throw new Error(await res.text())
-      if (openPath === path) {
-        setOpenPath(null)
-        setContent('')
-        setSavedContent('')
-      }
+      if (openTabs.some((t) => t.path === path)) removeTabNoConfirm(path)
       refreshTree()
       refreshGitStatus()
     } catch (err) {
@@ -464,14 +590,12 @@ export default function EditorView({
     try {
       const res = await deleteEditorFolder(path)
       if (!res.ok) throw new Error(await res.text())
-      // The currently open file (if any) may have lived inside the
-      // deleted folder — same close-if-affected behavior as
-      // handleDeleteFile, just checking a path prefix instead of an
-      // exact match since a whole subtree just disappeared, not one file.
-      if (openPath === path || openPath?.startsWith(`${path}/`)) {
-        setOpenPath(null)
-        setContent('')
-        setSavedContent('')
+      // Any open tabs that lived inside the deleted folder — same
+      // close-if-affected behavior as handleDeleteFile, just matching a
+      // path prefix across every open tab instead of one exact path,
+      // since a whole subtree just disappeared, not one file.
+      for (const t of openTabs) {
+        if (t.path === path || t.path.startsWith(`${path}/`)) removeTabNoConfirm(t.path)
       }
       refreshTree()
       refreshGitStatus()
@@ -484,7 +608,14 @@ export default function EditorView({
     try {
       const res = await renameEditorFile(fromPath, toPath)
       if (!res.ok) throw new Error(await res.text())
-      if (openPath === fromPath) setOpenPath(toPath)
+      if (openTabs.some((t) => t.path === fromPath)) {
+        lintDiagnosticsByPath.current[toPath] = lintDiagnosticsByPath.current[fromPath]
+        delete lintDiagnosticsByPath.current[fromPath]
+        codeMirrorViewsByPath.current[toPath] = codeMirrorViewsByPath.current[fromPath]
+        delete codeMirrorViewsByPath.current[fromPath]
+        setOpenTabs((prev) => prev.map((t) => (t.path === fromPath ? { ...t, path: toPath } : t)))
+        if (activeTabPath === fromPath) setActiveTabPath(toPath)
+      }
       refreshTree()
       refreshGitStatus()
     } catch (err) {
@@ -514,8 +645,6 @@ export default function EditorView({
   }
 
   async function viewDiff(entry) {
-    if (dirty && !(await confirmDiscardChanges())) return
-    setOpenPath(null)
     setDiffPath(entry.path)
     setDiffText('Loading…')
     try {
@@ -617,15 +746,16 @@ export default function EditorView({
         if (!res.ok) throw new Error(await res.text())
       }
       const discardedPaths = new Set([...trackedPaths, ...untrackedPaths])
-      if (openPath && discardedPaths.has(openPath)) {
-        if (trackedPaths.includes(openPath)) {
-          // Re-open the file so the editor shows its reverted content
-          // instead of the discarded in-memory edit.
-          openFile(openPath)
+      for (const t of openTabs) {
+        if (!discardedPaths.has(t.path)) continue
+        if (trackedPaths.includes(t.path)) {
+          // Re-fetch so the tab shows its reverted content instead of the
+          // discarded in-memory edit (reloadTabFromDisk, not openFile —
+          // openFile treats an already-open path as "just activate it,"
+          // which would leave the stale discarded content on screen).
+          reloadTabFromDisk(t.path)
         } else {
-          setOpenPath(null)
-          setContent('')
-          setSavedContent('')
+          removeTabNoConfirm(t.path)
         }
       }
       setSelectedPaths((prev) => {
@@ -711,16 +841,20 @@ export default function EditorView({
     }
   }
 
-  // Stable across renders (the ref it reads is mutated in place, not
-  // replaced) so CodeMirror never needs to tear down and rebuild the
-  // linter extension on every save. severity is used as-is — the backend
-  // (internal/lint.normalizeSeverity) already collapses oxlint's full
-  // severity vocabulary down to exactly "error"/"warning" before it ever
-  // reaches here, so this doesn't need its own copy of that mapping.
-  const oxlintExtension = useMemo(
-    () => [
+  // Every open tab mounts its own persistent CodeMirror instance (so
+  // switching tabs preserves undo history/scroll/selection instead of
+  // rebuilding the editor each time — see the tab strategy note by
+  // openTabs above), which means each tab needs its OWN linter source
+  // reading only ITS OWN path's diagnostics out of lintDiagnosticsByPath,
+  // not one shared extension array like the single-file version had.
+  // severity is used as-is — the backend (internal/lint.normalizeSeverity)
+  // already collapses oxlint's full severity vocabulary down to exactly
+  // "error"/"warning" before it ever reaches here, so this doesn't need
+  // its own copy of that mapping.
+  function oxlintExtensionFor(path) {
+    return [
       linter(() =>
-        lintDiagnosticsRef.current.map((d) => ({
+        (lintDiagnosticsByPath.current[path] ?? []).map((d) => ({
           from: Math.max(0, d.offset),
           to: Math.max(d.offset, d.offset + d.length),
           severity: d.severity,
@@ -729,24 +863,16 @@ export default function EditorView({
         }))
       ),
       lintGutter(),
-    ],
-    []
-  )
-  // Rebuilt whenever openPath changes (new language label, and — more
-  // importantly — aiCompletionExtension's ViewPlugin.destroy() cancels
-  // any pending debounce/in-flight request for the file that was just
-  // closed, so switching files can't have a stale suggestion from the
-  // previous file arrive and get applied to the new one). Gated on
+    ]
+  }
+  // Built fresh per tab (not memoized across tabs — each path needs its
+  // own aiCompletionExtension instance so one tab's ViewPlugin.destroy()
+  // on close can't cancel another tab's in-flight suggestion). Gated on
   // canWrite the same way Save is — completion is pointless in a
   // read-only file access configuration.
-  const aiCompletion = useMemo(
-    () => aiCompletionExtension(openPath ? languageNameFor(openPath) : '', canWrite),
-    [openPath, canWrite]
-  )
-  const languageExtensions = useMemo(
-    () => (openPath ? [...languageExtensionFor(openPath), ...oxlintExtension, ...aiCompletion] : []),
-    [openPath, oxlintExtension, aiCompletion]
-  )
+  function languageExtensionsFor(path) {
+    return [...languageExtensionFor(path), ...oxlintExtensionFor(path), ...aiCompletionExtension(languageNameFor(path), canWrite)]
+  }
   const staged = gitStatus.filter((s) => s.staged)
   const unstaged = gitStatus.filter((s) => s.unstaged)
 
@@ -1049,36 +1175,83 @@ export default function EditorView({
 
       <main className="editor-main" ref={mainColumnRef}>
         <div className="editor-main-content">
-          {openPath ? (
-            <>
-              <div className="editor-file-header">
-                <span className="editor-file-path">{openPath}</span>
-                {fileStatus && <span className="editor-file-status">{fileStatus}</span>}
-                <button
-                  type="button"
-                  className={`editor-save-button${saving ? ' is-saving' : ''}`}
-                  onClick={handleSave}
-                  disabled={!canWrite || !dirty || saving}
-                  title={canWrite ? '' : 'File writes are disabled in Settings → File access'}
-                >
-                  {saving ? 'Saving…' : dirty ? 'Save' : 'Saved'}
-                </button>
-              </div>
-              <div className="editor-codemirror" onKeyDown={handleEditorKeyDown}>
-                <CodeMirror
-                  value={content}
-                  height="100%"
-                  theme={theme === 'light' ? githubLight : githubDark}
-                  extensions={languageExtensions}
-                  onChange={setContent}
-                  onCreateEditor={(view) => {
-                    codeMirrorViewRef.current = view
-                  }}
-                  readOnly={!canWrite}
-                />
-              </div>
-            </>
-          ) : diffPath ? (
+          {openTabs.length > 0 && (
+            <div className="editor-tabs">
+              {openTabs.map((t) => {
+                const tabDirty = t.content !== t.savedContent
+                return (
+                  <div
+                    key={t.path}
+                    className={`editor-tab ${t.path === activeTabPath && !diffPath ? 'is-active' : ''}`}
+                  >
+                    <button
+                      type="button"
+                      className="editor-tab-label"
+                      title={t.path}
+                      onClick={() => {
+                        setDiffPath(null)
+                        setActiveTabPath(t.path)
+                      }}
+                    >
+                      {t.path.split(/[/\\]/).pop()}
+                      {tabDirty && <span className="editor-tab-dirty">●</span>}
+                    </button>
+                    <button
+                      type="button"
+                      className="editor-tab-close"
+                      title="Close"
+                      onClick={() => closeTab(t.path)}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+          {openTabs.length > 0 && !diffPath && (
+            <div className="editor-file-header">
+              <span className="editor-file-path">{openPath}</span>
+              {fileStatus && <span className="editor-file-status">{fileStatus}</span>}
+              <button
+                type="button"
+                className={`editor-save-button${saving ? ' is-saving' : ''}`}
+                onClick={handleSave}
+                disabled={!canWrite || !dirty || saving}
+                title={canWrite ? '' : 'File writes are disabled in Settings → File access'}
+              >
+                {saving ? 'Saving…' : dirty ? 'Save' : 'Saved'}
+              </button>
+            </div>
+          )}
+          {/* Every open tab keeps its own CodeMirror instance mounted (just
+              hidden) at all times, the same always-mounted-but-hidden
+              pattern the Terminal tabs below use — switching tabs must not
+              tear down and rebuild the editor, or undo history/scroll
+              position/selection would all reset on every switch. */}
+          {openTabs.map((t) => (
+            <div
+              key={t.path}
+              className="editor-codemirror"
+              style={{ display: t.path === activeTabPath && !diffPath ? 'block' : 'none' }}
+              onKeyDown={handleEditorKeyDown}
+            >
+              <CodeMirror
+                value={t.content}
+                height="100%"
+                theme={theme === 'light' ? githubLight : githubDark}
+                extensions={languageExtensionsFor(t.path)}
+                onChange={(value) =>
+                  setOpenTabs((prev) => prev.map((x) => (x.path === t.path ? { ...x, content: value } : x)))
+                }
+                onCreateEditor={(view) => {
+                  codeMirrorViewsByPath.current[t.path] = view
+                }}
+                readOnly={!canWrite}
+              />
+            </div>
+          ))}
+          {diffPath ? (
             <>
               <div className="editor-file-header">
                 <span className="editor-file-path">Diff: {diffPath}</span>
@@ -1095,11 +1268,11 @@ export default function EditorView({
                 ))}
               </div>
             </>
-          ) : (
+          ) : openTabs.length === 0 ? (
             <div className="editor-empty-state">
               <p>Select a file to open it.</p>
             </div>
-          )}
+          ) : null}
         </div>
 
         {!terminalCollapsed && (

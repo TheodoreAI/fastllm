@@ -39,12 +39,14 @@ const debounceWindow = 300 * time.Millisecond
 // separate `git` process are caught even though they don't always touch
 // a file under the working tree itself. A directory that holds no
 // tracked-or-unignored file (an empty dir, or one containing only
-// ignored files) won't get its own watch — nothing meaningful could
-// happen in it anyway. A directory created after the watch is set up
-// also won't automatically get one (fsnotify has no recursive-watch
-// primitive on Windows) — a following git action still catches the repo
-// up via the .git watch, so this is an acceptable gap for a best-effort
-// live-refresh signal, not a correctness issue.
+// ignored files) won't get its own watch at setup time — nothing
+// meaningful could happen in it yet — but the event loop below adds a
+// directory to the watch the moment fsnotify reports it being created
+// (fsnotify has no recursive-watch primitive on Windows, so this manual
+// catch-up is what stands in for one), so a file written into it
+// afterward — e.g. ApproveWrite's os.MkdirAll landing a model-proposed
+// file in a path that didn't exist when this watch started — is still
+// caught without waiting for an unrelated git action to force a refresh.
 func Watch(ctx context.Context, root string) (changes <-chan struct{}, stop func(), err error) {
 	gitDir := filepath.Join(root, ".git")
 
@@ -129,6 +131,21 @@ func Watch(ctx context.Context, root string) (changes <-chan struct{}, stop func
 				}
 				if isUnderAny(ev.Name, ignoredTopLevel) {
 					continue
+				}
+				// A directory created after the watcher started (e.g. by
+				// ApproveWrite's os.MkdirAll for a model-proposed file in a
+				// path that didn't exist yet) is invisible to fsnotify
+				// until something explicitly watches it — otherwise a
+				// SECOND write landing inside that same new directory
+				// later produces no event at all, even though the mkdir
+				// itself did. Catching Create events for directories here
+				// and adding them keeps up with the tree as it grows,
+				// covering the gap noted above for "a directory created
+				// after the watch is set up."
+				if ev.Op&fsnotify.Create != 0 {
+					if info, err := os.Stat(ev.Name); err == nil && info.IsDir() {
+						_ = w.Add(ev.Name)
+					}
 				}
 				if debounce == nil {
 					debounce = time.AfterFunc(debounceWindow, func() {
