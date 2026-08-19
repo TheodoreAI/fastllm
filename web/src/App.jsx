@@ -12,6 +12,7 @@ import ScreenshotPreviewModal from './components/ScreenshotPreviewModal'
 import DraggableSection from './components/DraggableSection'
 import SectionIcon from './components/SectionIcon'
 import TweakBar from './components/TweakBar'
+import TopBar from './components/TopBar'
 import { useTheme } from './useTheme'
 import { useFontFamily } from './useFontFamily'
 import { useFontScale } from './useFontScale'
@@ -262,33 +263,6 @@ export default function App() {
     fetchEditorSettings().then((settings) => setEditorSettings(settings ?? { completion_model: '' }))
   }, [])
 
-  // Native File → Open Folder… menu item (see cmd/desktop/main.go) has no
-  // direct line to React state, so it emits a Wails runtime event instead;
-  // window.runtime only exists in the desktop build, hence the isWails()
-  // guard — matches how the rest of this file feature-detects Wails (see
-  // api.js's isWails doc comment) rather than importing @wailsjs/runtime.
-  // Bumps openFolderSignal, which EditorView watches to re-run its own
-  // handleOpenFolder — the editor pane is always visible (split is the
-  // only layout), so there's no view to switch into first.
-  useEffect(() => {
-    if (!isWails()) return
-    const unsubscribe = window.runtime.EventsOn('menu:open-folder', () => {
-      setOpenFolderSignal((n) => n + 1)
-    })
-    return unsubscribe
-  }, [])
-
-  // Native Help → About fastllm menu item (see cmd/desktop/main.go) opens
-  // the existing Settings → About sub-section instead of a separate
-  // native dialog, so it's themed like the rest of the app rather than
-  // rendering in plain OS chrome.
-  useEffect(() => {
-    if (!isWails()) return
-    const unsubscribe = window.runtime.EventsOn('menu:about', () => {
-      handleOpenSettings('about')
-    })
-    return unsubscribe
-  }, [])
 
   // VS Code-style global panel shortcuts: Ctrl+B toggles the Files
   // sidebar, Ctrl+J toggles the terminal — both panels are always part
@@ -312,6 +286,20 @@ export default function App() {
       } else if (key === 'm' && e.shiftKey) {
         e.preventDefault()
         setSidebarCollapsed((c) => !c)
+      } else if (key === 'o' && !e.shiftKey && isWails()) {
+        // Matches TopBar's File → Open Folder… — Ctrl+O had a real native
+        // accelerator when that menu item was a Win32 HMENU entry (see
+        // TopBar.jsx's doc comment for why it's an in-app component now);
+        // a plain <button> gets no OS-level shortcut for free, so this
+        // keeps the binding working. Desktop-only, matching TopBar's own
+        // isWails() gating — there's no folder-open concept in the
+        // browser build this would otherwise shadow.
+        e.preventDefault()
+        setOpenFolderSignal((n) => n + 1)
+      } else if (key === 'q' && !e.shiftKey && isWails()) {
+        // Matches TopBar's File → Exit, same reasoning as Ctrl+O above.
+        e.preventDefault()
+        setQuitConfirmOpen(true)
       }
     }
     window.addEventListener('keydown', handleKeyDown)
@@ -941,6 +929,13 @@ export default function App() {
 
   return (
     <div className="app">
+      {isWails() && (
+        <TopBar
+          onOpenFolder={() => setOpenFolderSignal((n) => n + 1)}
+          onQuit={() => setQuitConfirmOpen(true)}
+          onAbout={() => handleOpenSettings('about')}
+        />
+      )}
       {offline && !offlineDismissed && (
         <div className="offline-banner">
           <span className="offline-banner-dot" aria-hidden="true" />
@@ -1212,7 +1207,11 @@ export default function App() {
       {quitConfirmOpen && (
         <ConfirmDeleteModal
           heading="Quit fastllm?"
-          description="This stops the local server. Any open browser tabs will stop working until you relaunch it from the Desktop shortcut."
+          description={
+            isWails()
+              ? 'This closes the app.'
+              : 'This stops the local server. Any open browser tabs will stop working until you relaunch it from the Desktop shortcut.'
+          }
           confirmLabel={quitting ? 'Quitting…' : 'Quit'}
           onCancel={() => setQuitConfirmOpen(false)}
           onConfirm={confirmQuit}

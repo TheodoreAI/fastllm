@@ -21,8 +21,6 @@ import (
 	"fastllm/internal/terminal"
 
 	"github.com/wailsapp/wails/v2"
-	"github.com/wailsapp/wails/v2/pkg/menu"
-	"github.com/wailsapp/wails/v2/pkg/menu/keys"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -103,8 +101,7 @@ func main() {
 			Handler: built.Mux,
 		},
 		BackgroundColour: &options.RGBA{R: 30, G: 30, B: 30, A: 1},
-		Bind:             []interface{}{bridge, &menuTheme{}},
-		Menu:             app.menu(),
+		Bind:             []interface{}{bridge},
 		OnStartup:        app.startup,
 		OnBeforeClose:    app.beforeClose,
 		OnShutdown:       app.shutdown,
@@ -166,79 +163,6 @@ type desktopApp struct {
 	ctx      context.Context
 	registry *terminal.Registry
 	handler  *chat.Handler
-}
-
-// menu builds fastllm's native Windows menu bar — just File → Open
-// Folder… for now. This runs as a real native menu (not an in-app
-// dropdown) because an in-app "File" button/dropdown, built the same way
-// as the working rail buttons right next to it, was reliably unclickable
-// when this exe was launched via automation (PowerShell's Start-Process)
-// — a normal double-click launch never showed the problem. Native menu
-// items sidestep whatever that launch-path quirk was. The click handler
-// can't call the folder-open flow directly — that logic (browseForFolder
-// → save settings → refresh tree/git) lives in React state inside
-// EditorView — so it emits a Wails event instead and lets the frontend
-// react.
-func (a *desktopApp) menu() *menu.Menu {
-	m := menu.NewMenu()
-	fileMenu := m.AddSubmenu("File")
-	fileMenu.AddText("Open Folder…", keys.CmdOrCtrl("o"), func(_ *menu.CallbackData) {
-		if a.ctx == nil {
-			return
-		}
-		wailsruntime.EventsEmit(a.ctx, "menu:open-folder")
-	})
-	fileMenu.AddSeparator()
-	fileMenu.AddText("Exit", keys.CmdOrCtrl("q"), func(_ *menu.CallbackData) {
-		if a.ctx == nil {
-			return
-		}
-		wailsruntime.Quit(a.ctx)
-	})
-
-	// menu.EditMenu() (the Role-based shortcut) only has a working
-	// implementation in Wails' macOS backend — on Windows an AppMenu/
-	// EditMenu Role is silently unimplemented and renders nothing, so
-	// Undo/Redo/Cut/Copy/Paste have to be spelled out explicitly here
-	// instead. These all target whatever text control currently has
-	// focus (native WebView2 editing commands), same as their standard
-	// Ctrl+Z/Y/X/C/V shortcuts already did — this just also surfaces
-	// them as clickable menu items.
-	editMenu := m.AddSubmenu("Edit")
-	editMenu.AddText("Undo", keys.CmdOrCtrl("z"), func(_ *menu.CallbackData) {
-		wailsruntime.WindowExecJS(a.ctx, "document.execCommand('undo')")
-	})
-	editMenu.AddText("Redo", keys.CmdOrCtrl("y"), func(_ *menu.CallbackData) {
-		wailsruntime.WindowExecJS(a.ctx, "document.execCommand('redo')")
-	})
-	editMenu.AddSeparator()
-	editMenu.AddText("Cut", keys.CmdOrCtrl("x"), func(_ *menu.CallbackData) {
-		wailsruntime.WindowExecJS(a.ctx, "document.execCommand('cut')")
-	})
-	editMenu.AddText("Copy", keys.CmdOrCtrl("c"), func(_ *menu.CallbackData) {
-		wailsruntime.WindowExecJS(a.ctx, "document.execCommand('copy')")
-	})
-	editMenu.AddText("Paste", keys.CmdOrCtrl("v"), func(_ *menu.CallbackData) {
-		wailsruntime.WindowExecJS(a.ctx, "document.execCommand('paste')")
-	})
-	editMenu.AddSeparator()
-	editMenu.AddText("Select All", keys.CmdOrCtrl("a"), func(_ *menu.CallbackData) {
-		wailsruntime.WindowExecJS(a.ctx, "document.execCommand('selectAll')")
-	})
-
-	// About opens the existing in-app Settings → About panel (styled by
-	// the app's own theme) rather than a native OS message box, which
-	// would always render in plain system chrome regardless of which
-	// fastllm theme is active — same event-emit pattern as Open Folder…
-	// above, since this menu has no direct line into React state either.
-	helpMenu := m.AddSubmenu("Help")
-	helpMenu.AddText("About fastllm", nil, func(_ *menu.CallbackData) {
-		if a.ctx == nil {
-			return
-		}
-		wailsruntime.EventsEmit(a.ctx, "menu:about")
-	})
-	return m
 }
 
 func (a *desktopApp) startup(ctx context.Context) {
