@@ -2,6 +2,67 @@ import { useEffect, useRef, useState } from 'react'
 import MessageContent from './MessageContent'
 import PendingWriteCard from './PendingWriteCard'
 
+// Small inline icon set replacing the emoji ChatPanel used to render
+// directly — emoji render inconsistently across platforms/fonts, while
+// these follow the stroke-based currentColor style already used for the
+// composer-active-file icon, so they inherit the surrounding text color
+// and theme automatically.
+function FileIcon(props) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      <path d="M6 2.5h8l4 4V21a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1Z" />
+      <path d="M14 2.5V6a1 1 0 0 0 1 1h3.5" />
+    </svg>
+  )
+}
+
+function CheckCircleIcon(props) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M8 12.5l2.5 2.5L16 9.5" />
+    </svg>
+  )
+}
+
+function XCircleIcon(props) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M9 9l6 6M15 9l-6 6" />
+    </svg>
+  )
+}
+
+function ImageIcon(props) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <circle cx="8.5" cy="9.5" r="1.5" fill="currentColor" stroke="none" />
+      <path d="M21 15.5l-5.5-5.5L5 20" />
+    </svg>
+  )
+}
+
+function ImageOffIcon(props) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <circle cx="8.5" cy="9.5" r="1.5" fill="currentColor" stroke="none" />
+      <path d="M21 15.5l-5.5-5.5L5 20" />
+      <path d="M2.5 2.5l19 19" />
+    </svg>
+  )
+}
+
+function StopIcon(props) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" {...props}>
+      <rect x="6" y="6" width="12" height="12" rx="2" />
+    </svg>
+  )
+}
+
 export default function ChatPanel({
   messages,
   messagesLoading,
@@ -20,6 +81,7 @@ export default function ChatPanel({
   onComposerPaste,
   onRemovePendingImage,
   visionSupported,
+  activeEditorFile,
 }) {
   // Shell-style prompt recall: ArrowUp/ArrowDown step through this
   // conversation's past user messages. historyIndex counts back from the
@@ -103,7 +165,7 @@ export default function ChatPanel({
               <ul className="tool-calls">
                 {m.toolCalls.map((call, ci) => (
                   <li key={ci} className={call.error ? 'is-error' : ''}>
-                    📄 Read <code>{call.path}</code>
+                    <FileIcon className="inline-icon" /> Read <code>{call.path}</code>
                     {call.truncated && ' (truncated)'}
                     {call.error && `: ${call.error}`}
                   </li>
@@ -115,7 +177,10 @@ export default function ChatPanel({
                 {m.buildChecks.map((check, bi) => (
                   <li key={bi} className={check.passed ? 'is-ok' : 'is-error'}>
                     <details>
-                      <summary>{check.passed ? '✅ Build check passed' : '❌ Build check failed'}</summary>
+                      <summary>
+                        {check.passed ? <CheckCircleIcon className="inline-icon" /> : <XCircleIcon className="inline-icon" />}
+                        {check.passed ? 'Build check passed' : 'Build check failed'}
+                      </summary>
                       <pre className="build-check-output">{check.output || '(no output)'}</pre>
                     </details>
                   </li>
@@ -178,7 +243,7 @@ export default function ChatPanel({
             className={`composer-vision-flag ${visionSupported ? 'is-supported' : 'is-unsupported'}`}
             title={visionSupported ? 'This model accepts pasted images.' : "This model doesn't accept images — paste is disabled."}
           >
-            🖼{visionSupported ? '' : '🚫'}
+            {visionSupported ? <ImageIcon className="inline-icon" /> : <ImageOffIcon className="inline-icon" />}
           </span>
           <input
             value={input}
@@ -190,7 +255,7 @@ export default function ChatPanel({
           />
           {streaming ? (
             <button type="button" className="btn-primary btn-stop" onClick={onStop}>
-              ⏹ Stop
+              <StopIcon className="inline-icon" /> Stop
             </button>
           ) : (
             <button type="submit" className="btn-primary" disabled={!input.trim() && (!pendingImages || pendingImages.length === 0)}>
@@ -198,6 +263,12 @@ export default function ChatPanel({
             </button>
           )}
         </div>
+        {activeEditorFile && (
+          <p className="composer-active-file" title={activeEditorFile}>
+            <FileIcon className="inline-icon" />
+            {activeEditorFile.split('/').pop()} is available to the model
+          </p>
+        )}
       </form>
     </main>
   )

@@ -198,6 +198,15 @@ type chatRequest struct {
 	// same as this handler doesn't re-validate SupportsToolsForModel
 	// before letting a request through with tools attached.
 	Images []string `json:"images,omitempty"`
+	// ActiveFile is the path (relative to the file-access root) of
+	// whatever file is currently open in the Editor tab, if any — see
+	// EditorView's onOpenPathChange in the frontend. Purely informational:
+	// it tells the model what "this file"/"the current file" refers to in
+	// the user's message, so it can read it via the file-read tool without
+	// being told the path explicitly. Not re-validated here; an unreadable
+	// or stale path just means the model's own file-read call fails same
+	// as any other bad path would.
+	ActiveFile string `json:"active_file,omitempty"`
 }
 
 // Chat streams the assistant's reply back to the client as Server-Sent
@@ -236,7 +245,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	messages, sources := h.buildPrompt(ctx, convID, req.Message, req.SkillID)
+	messages, sources := h.buildPrompt(ctx, convID, req.Message, req.SkillID, req.ActiveFile)
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -346,8 +355,12 @@ type source struct {
 // chunks from the vector store, and assembles the full message list. It
 // also returns the chunks that were retrieved, for display in the UI. If
 // skillID is non-zero and resolves to a saved skill, that skill's prompt
-// replaces the default system prompt.
-func (h *Handler) buildPrompt(ctx context.Context, conversationID int64, question string, skillID int64) ([]llm.Message, []source) {
+// replaces the default system prompt. activeFile, when non-empty, is the
+// path currently open in the Editor tab (see chatRequest.ActiveFile) — it's
+// appended as its own system message so the model knows what "this
+// file"/"the current file" means without the user having to spell out the
+// path, and can fetch it via the file-read tool.
+func (h *Handler) buildPrompt(ctx context.Context, conversationID int64, question string, skillID int64, activeFile string) ([]llm.Message, []source) {
 	prompt := systemPrompt
 	if skillID != 0 {
 		if s, err := store.GetSkill(h.DB, defaultWorkspace, skillID); err == nil {
@@ -355,6 +368,12 @@ func (h *Handler) buildPrompt(ctx context.Context, conversationID int64, questio
 		}
 	}
 	messages := []llm.Message{{Role: "system", Content: prompt}}
+	if activeFile != "" {
+		messages = append(messages, llm.Message{
+			Role:    "system",
+			Content: fmt.Sprintf("The user currently has this file open in their editor: %s\nIf their message refers to \"this file\", \"the current file\", or similar, they mean this path. Use the file-read tool to view its contents if you need them.", activeFile),
+		})
+	}
 	var sources []source
 
 	if h.LLM.EmbedModel() != "" {

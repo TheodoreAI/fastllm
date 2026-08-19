@@ -45,6 +45,7 @@ export default function EditorView({
   panel,
   onPanelChange,
   onGitChangeCountChange,
+  onOpenPathChange,
   sidebarCollapsed,
   onSidebarCollapsedChange,
   terminalCollapsed,
@@ -242,6 +243,14 @@ export default function EditorView({
   useEffect(() => {
     onGitChangeCountChange?.(gitStatus.length)
   }, [gitStatus, onGitChangeCountChange])
+
+  // The chat composer shows which file is currently open in the editor
+  // (see App.jsx's activeEditorFile) so the model knows what "this file" /
+  // "the current file" refers to, and so it's sent along with chat
+  // requests as context. Same lift-state-up pattern as gitStatus above.
+  useEffect(() => {
+    onOpenPathChange?.(openPath)
+  }, [openPath, onOpenPathChange])
 
   function refreshTree() {
     setTreeStatus('Loading…')
@@ -524,6 +533,23 @@ export default function EditorView({
     setGitError('')
     try {
       await stageGitPaths([...selectedPaths])
+      setSelectedPaths(new Set())
+      refreshGitStatus()
+    } catch (err) {
+      setGitError(err.message)
+    } finally {
+      setGitBusy(false)
+      setGitBusyAction(null)
+    }
+  }
+
+  async function handleStageAll() {
+    if (unstaged.length === 0) return
+    setGitBusy(true)
+    setGitBusyAction('stage')
+    setGitError('')
+    try {
+      await stageGitPaths(unstaged.map((entry) => entry.path))
       setSelectedPaths(new Set())
       refreshGitStatus()
     } catch (err) {
@@ -899,38 +925,31 @@ export default function EditorView({
             )}
 
             {gitError && <p className="editor-error">{gitError}</p>}
-            <form onSubmit={handleCommit} className="editor-commit-form">
-              <textarea
-                value={commitMessage}
-                onChange={(e) => setCommitMessage(e.target.value)}
-                placeholder="Commit message"
-                rows={2}
-              />
-              <button type="submit" disabled={gitBusy || !commitMessage.trim() || staged.length === 0}>
-                {gitBusy && gitBusyAction === 'commit'
-                  ? 'Committing…'
-                  : `Commit ${staged.length > 0 ? `(${staged.length})` : ''}`}
-              </button>
-            </form>
-
-            <div className="editor-push-row">
-              <button type="button" className="btn-secondary" onClick={handlePush} disabled={pushing}>
-                {pushing ? 'Pushing…' : 'Push'}
-              </button>
-              {pushNeedsUpstream && (
-                <button type="button" className="btn-primary" onClick={handlePushSetUpstream} disabled={pushing}>
-                  {pushing ? 'Pushing…' : 'Set upstream & push'}
-                </button>
-              )}
-              {pushStatus && <span className="editor-push-status">{pushStatus}</span>}
-            </div>
 
             <div className="editor-git-actions">
-              <button type="button" onClick={handleStageSelected} disabled={gitBusy || selectedPaths.size === 0}>
-                {gitBusy && gitBusyAction === 'stage' ? 'Staging…' : 'Stage selected'}
+              <button
+                type="button"
+                onClick={handleStageAll}
+                disabled={gitBusy || unstaged.length === 0}
+                title="Stage every unstaged change"
+              >
+                {gitBusy && gitBusyAction === 'stage' && selectedPaths.size === 0 ? 'Staging…' : 'Stage all'}
               </button>
-              <button type="button" onClick={handleUnstageSelected} disabled={gitBusy || selectedPaths.size === 0}>
-                {gitBusy && gitBusyAction === 'unstage' ? 'Unstaging…' : 'Unstage selected'}
+              <button
+                type="button"
+                onClick={handleStageSelected}
+                disabled={gitBusy || selectedPaths.size === 0}
+                title="Stage the selected files"
+              >
+                {gitBusy && gitBusyAction === 'stage' && selectedPaths.size > 0 ? 'Staging…' : 'Stage'}
+              </button>
+              <button
+                type="button"
+                onClick={handleUnstageSelected}
+                disabled={gitBusy || selectedPaths.size === 0}
+                title="Unstage the selected files"
+              >
+                {gitBusy && gitBusyAction === 'unstage' ? 'Unstaging…' : 'Unstage'}
               </button>
               <button
                 type="button"
@@ -939,9 +958,40 @@ export default function EditorView({
                 disabled={gitBusy || !unstaged.some((entry) => selectedPaths.has(entry.path))}
                 title="Revert selected unstaged changes to their last committed version"
               >
-                {gitBusy && gitBusyAction === 'discard' ? 'Discarding…' : 'Discard selected'}
+                {gitBusy && gitBusyAction === 'discard' ? 'Discarding…' : 'Discard'}
               </button>
             </div>
+
+            <form onSubmit={handleCommit} className="editor-commit-form">
+              <textarea
+                value={commitMessage}
+                onChange={(e) => setCommitMessage(e.target.value)}
+                placeholder="Commit message"
+                rows={2}
+              />
+              <div className="editor-commit-actions">
+                <button type="submit" disabled={gitBusy || !commitMessage.trim() || staged.length === 0}>
+                  {gitBusy && gitBusyAction === 'commit'
+                    ? 'Committing…'
+                    : `Commit ${staged.length > 0 ? `(${staged.length})` : ''}`}
+                </button>
+                <button type="button" onClick={handlePush} disabled={pushing} title="Push to the remote">
+                  {pushing ? 'Pushing…' : 'Push'}
+                </button>
+                {pushNeedsUpstream && (
+                  <button
+                    type="button"
+                    className="editor-push-upstream"
+                    onClick={handlePushSetUpstream}
+                    disabled={pushing}
+                    title="This branch has no upstream yet — push and set one"
+                  >
+                    {pushing ? 'Pushing…' : 'Set upstream & push'}
+                  </button>
+                )}
+              </div>
+              {pushStatus && <span className="editor-push-status">{pushStatus}</span>}
+            </form>
 
             {staged.length > 0 && (
               <>

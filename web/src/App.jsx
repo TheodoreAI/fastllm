@@ -161,6 +161,11 @@ export default function App() {
   // pendingImages itself.
   const [composerImageError, setComposerImageError] = useState('')
   const [streaming, setStreaming] = useState(false)
+  // The file currently open in the Editor tab (see EditorView's
+  // onOpenPathChange), shown under the composer and sent with each chat
+  // request so the model knows what "this file"/"the current file" means
+  // and can read it via the file-read tool without being told the path.
+  const [activeEditorFile, setActiveEditorFile] = useState(null)
   const [docText, setDocText] = useState('')
   const [docStatus, setDocStatus] = useState('')
   // Set only while a batch upload (folder or multi-file) is running; drives
@@ -516,7 +521,7 @@ export default function App() {
 
     try {
       await streamChat(
-        { message: text, model, skillId, conversationId, thinkLevel, images },
+        { message: text, model, skillId, conversationId, thinkLevel, images, activeFile: activeEditorFile },
         {
           onConversation: (id) => {
             setConversationId(id)
@@ -1052,6 +1057,7 @@ export default function App() {
           panel={editorPanel}
           onPanelChange={setEditorPanel}
           onGitChangeCountChange={setGitChangeCount}
+          onOpenPathChange={setActiveEditorFile}
           sidebarCollapsed={editorSidebarCollapsed}
           onSidebarCollapsedChange={setEditorSidebarCollapsed}
           terminalCollapsed={terminalCollapsed}
@@ -1080,6 +1086,7 @@ export default function App() {
           onComposerPaste={handleComposerPaste}
           onRemovePendingImage={removePendingImage}
           visionSupported={visionSupported}
+          activeEditorFile={activeEditorFile}
         />
       </div>
       </div>
