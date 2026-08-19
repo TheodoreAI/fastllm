@@ -2742,46 +2742,21 @@ body {
 }
 
 .editor-sidebar {
-  /* Width when expanded is set inline from useEditorSidebarWidth (see
-     EditorView.jsx) via the draggable divider right after this element —
-     no fixed width here, just the collapsed-state override below. */
+  /* Width is set inline from useEditorSidebarWidth (see EditorView.jsx)
+     via the draggable divider right after this element. When collapsed,
+     EditorView doesn't render this <aside> at all (see its
+     sidebarCollapsed check) rather than shrinking it to a narrow
+     strip — collapsing already has a control (the view-rail's
+     Files/Search/Git buttons in App.jsx, which toggle the same
+     sidebarCollapsed state), so a second dedicated strip just to hold
+     an expand button was pure overhead: giving the editor/terminal that
+     space back when collapsed. */
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border);
   overflow: hidden;
-}
-
-.editor-sidebar.is-collapsed {
-  width: 44px;
-  min-width: 44px;
-}
-
-.editor-sidebar-collapse-toggle {
-  flex: 0 0 auto;
-  align-self: flex-end;
-  width: 22px;
-  height: 22px;
-  margin: 6px 6px 0;
-  border-radius: 50%;
-  border: none;
-  background: transparent;
-  color: var(--text-dim);
-  font-size: 16px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.editor-sidebar.is-collapsed .editor-sidebar-collapse-toggle {
-  align-self: center;
-}
-
-.editor-sidebar-collapse-toggle:hover {
-  background: rgba(128, 128, 128, 0.18);
-  color: var(--text);
 }
 
 .editor-sidebar-divider {
