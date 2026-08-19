@@ -56,3 +56,46 @@ func TestWatchCatchesWriteInsideDirectoryCreatedDuringSession(t *testing.T) {
 		t.Fatal("no change notification for a write inside a directory created earlier in the same session")
 	}
 }
+
+// Regression test for the nested case: os.MkdirAll("a/b/c") where none of
+// a/b/c existed before creates all three in one call, but fsnotify only
+// ever reports the single directory it directly saw appear under an
+// already-watched parent — here, just "a". Without recursing into "a" to
+// also pick up "b" and "c" (already sitting inside it by the time the
+// event is handled), a write several levels down inside "c" would still
+// go unnoticed even after the fix for the single-level case above.
+func TestWatchCatchesWriteInsideNestedDirectoriesCreatedInOneMkdirAll(t *testing.T) {
+	dir := newTestRepo(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	changes, stop, err := Watch(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+
+	time.Sleep(100 * time.Millisecond)
+
+	deepDir := filepath.Join(dir, "a", "b", "c")
+	if err := os.MkdirAll(deepDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-changes:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected a notification for the mkdir itself")
+	}
+	time.Sleep(debounceWindow + 200*time.Millisecond)
+
+	if err := os.WriteFile(filepath.Join(deepDir, "new.txt"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-changes:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no change notification for a write inside nested directories created in one MkdirAll call")
+	}
+}
