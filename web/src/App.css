@@ -2716,20 +2716,30 @@ body {
 
 .sidebar,
 .messages,
-.modal {
+.modal,
+.editor-sidebar,
+.editor-codemirror .cm-scroller,
+.xterm-viewport {
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
 }
 
 .sidebar::-webkit-scrollbar,
 .messages::-webkit-scrollbar,
-.modal::-webkit-scrollbar {
+.modal::-webkit-scrollbar,
+.editor-sidebar::-webkit-scrollbar,
+.editor-codemirror .cm-scroller::-webkit-scrollbar,
+.xterm-viewport::-webkit-scrollbar {
   width: 9px;
+  height: 9px;
 }
 
 .sidebar::-webkit-scrollbar-thumb,
 .messages::-webkit-scrollbar-thumb,
-.modal::-webkit-scrollbar-thumb {
+.modal::-webkit-scrollbar-thumb,
+.editor-sidebar::-webkit-scrollbar-thumb,
+.editor-codemirror .cm-scroller::-webkit-scrollbar-thumb,
+.xterm-viewport::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.15);
   border-radius: 999px;
   border: 2px solid transparent;
@@ -2738,9 +2748,18 @@ body {
 
 .sidebar::-webkit-scrollbar-thumb:hover,
 .messages::-webkit-scrollbar-thumb:hover,
-.modal::-webkit-scrollbar-thumb:hover {
+.modal::-webkit-scrollbar-thumb:hover,
+.editor-sidebar::-webkit-scrollbar-thumb:hover,
+.editor-codemirror .cm-scroller::-webkit-scrollbar-thumb:hover,
+.xterm-viewport::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.28);
   background-clip: padding-box;
+}
+
+.sidebar::-webkit-scrollbar-corner,
+.editor-codemirror .cm-scroller::-webkit-scrollbar-corner,
+.xterm-viewport::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 /* ---------- stopped state ---------- */
