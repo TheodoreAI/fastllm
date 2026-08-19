@@ -5,6 +5,7 @@ package chat
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -86,12 +87,21 @@ var readFileTool = llm.Tool{
 
 // writeFileTool is the schema advertised to the model when file writes
 // are enabled. Never executed directly from a tool call — every write is
-// held as a PendingWrite until a human approves it via the API.
+// held as a PendingWrite until a human approves it via the API. For an
+// existing file, this call is rejected unless read_file was called on the
+// same path earlier in this turn and the file hasn't changed since — see
+// runFileTools's lastReadHash/checkWriteFreshness. This exists because a
+// local model asked to rewrite a whole file from memory (rather than a
+// fresh read) is exactly where truncation and silently-reverted-changes
+// happen: it reconstructs the file from what it recalls, which may be
+// stale, incomplete, or missing content it never actually saw. Forcing a
+// fresh read immediately before every write means the model is always
+// working from the real current content, not its own recollection of it.
 var writeFileTool = llm.Tool{
 	Type: "function",
 	Function: llm.ToolFunction{
 		Name:        "write_file",
-		Description: "Propose writing content to a file in the local project directory. This does not write immediately — a human must review and approve the change first. Path is relative to the project root.",
+		Description: "Propose writing the full content of a file in the local project directory. This does not write immediately — a human must review and approve the change first. Path is relative to the project root. For an EXISTING file, you must call read_file on this exact path earlier in this turn first — a write to a file you haven't just read will be rejected. Prefer edit_file for a small change to a large existing file; use write_file for a brand-new file or when the whole file is being replaced.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -105,6 +115,41 @@ var writeFileTool = llm.Tool{
 				},
 			},
 			"required": []string{"path", "content"},
+		},
+	},
+}
+
+// editFileTool lets the model change a small part of an existing file
+// without regenerating the whole thing — the search text must appear
+// exactly once in the file's current content (ambiguous or missing search
+// text is rejected with an explanation, not silently applied against the
+// wrong location), and, same as write_file, requires a fresh read_file on
+// this exact path earlier in this turn. Preferred over write_file for
+// editing anything but a small file, since asking the model to reproduce
+// only the changed lines (rather than the entire file back) sharply
+// reduces how much text it has to regenerate correctly.
+var editFileTool = llm.Tool{
+	Type: "function",
+	Function: llm.ToolFunction{
+		Name:        "edit_file",
+		Description: "Propose a small change to an existing file by replacing one exact block of its current content with new content — without rewriting the whole file. This does not write immediately — a human must review and approve the change first. You must call read_file on this exact path earlier in this turn first. search must match the file's CURRENT content exactly (including whitespace/indentation) and appear exactly once — if it doesn't match, or matches more than once, the call is rejected and you should re-read the file and try again with a more precise (or more unique) search block. Prefer this over write_file whenever you're changing only part of a file.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]any{
+					"type":        "string",
+					"description": "Path to the existing file, relative to the project root.",
+				},
+				"search": map[string]any{
+					"type":        "string",
+					"description": "The exact text to find in the file's current content — must match exactly once, including whitespace and indentation.",
+				},
+				"replace": map[string]any{
+					"type":        "string",
+					"description": "The text to replace it with.",
+				},
+			},
+			"required": []string{"path", "search", "replace"},
 		},
 	},
 }
@@ -437,22 +482,113 @@ type buildCheckReport struct {
 	Output string `json:"output"`
 }
 
+// truncationRatio is how much shorter (as a fraction of current line
+// count) a proposed write's content can be before it's treated as
+// probable truncation rather than an intentional shrink — e.g. 0.5 means
+// a write_file/edit_file result that's less than half the current file's
+// line count gets rejected. Deliberately conservative (a real "delete
+// most of this file" edit is rare, and the model can always explain
+// itself and retry — see the rejection message) since the failure mode
+// this guards against (a local model silently dropping the untouched
+// tail of a file it was asked to regenerate) is exactly the kind of
+// mistake that's invisible in a diff until someone notices the file is
+// now broken.
+const truncationRatio = 0.5
+
+// truncationMinLines is the current-file line count below which the
+// truncation check is skipped entirely — a genuinely small file (a
+// handful of lines) can legitimately shrink by half or more from a
+// completely ordinary edit (e.g. deleting a couple of now-redundant
+// lines), so guarding against "suspiciously shorter" only makes sense
+// once there's enough content for a large drop to be meaningful rather
+// than noise.
+const truncationMinLines = 20
+
+// countLines counts lines the way a normal text file's line count is
+// understood: a trailing "\n" ends the last line rather than starting a
+// new (empty) one, so "a\nb\n" is 2 lines, not 3.
+func countLines(s string) int {
+	if s == "" {
+		return 0
+	}
+	return strings.Count(strings.TrimSuffix(s, "\n"), "\n") + 1
+}
+
+// checkTruncation reports a rejection message (empty if fine) when
+// newContent looks like it dropped most of currentContent rather than
+// making a deliberate, described change — see truncationRatio's doc
+// comment. This is a blunt, content-agnostic heuristic (line-count ratio
+// only, no understanding of what changed) by design: it doesn't need to
+// understand the code to notice "a 400-line file just became 40 lines,"
+// which is exactly the class of failure (a local model truncating output
+// it was supposed to reproduce in full) it exists to catch.
+func checkTruncation(currentContent, newContent string) string {
+	currentLines := countLines(currentContent)
+	if currentLines < truncationMinLines {
+		return ""
+	}
+	newLines := countLines(newContent)
+	if float64(newLines) >= float64(currentLines)*truncationRatio {
+		return ""
+	}
+	return fmt.Sprintf("Error: this write looks like truncation, not an intentional edit — the current file has %d lines and the proposed content has only %d. If you really mean to remove most of this file's content, explain that explicitly and try again; otherwise re-read the file and make sure your write includes everything you didn't intend to change.", currentLines, newLines)
+}
+
+// hashContent returns a short, stable fingerprint of file content, used
+// only to detect "has this file changed since the model last read it" —
+// not a security hash, just cheap drift detection.
+func hashContent(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
+// checkWriteFreshness enforces that a write_file/edit_file call on an
+// existing file is only accepted immediately after a read_file on that
+// exact path in this same turn, and that the file hasn't changed on disk
+// since that read — see writeFileTool's doc comment for why. lastRead
+// holds the hash of what read_file actually returned to the model for
+// each path (see runFileTools); currentContent is the file's real content
+// right now, read fresh at write time. Returns a rejection message (empty
+// if the write should proceed) — new-file writes (fileExists false) are
+// exempt entirely, since there's nothing to have drifted from.
+func checkWriteFreshness(lastRead map[string]string, path, currentContent string, fileExists bool) string {
+	if !fileExists {
+		return ""
+	}
+	readHash, ok := lastRead[path]
+	if !ok {
+		return fmt.Sprintf("Error: you must call read_file on %q earlier in this turn before writing to it — this ensures your change is based on the file's real current content, not a guess or a memory of it from earlier in the conversation.", path)
+	}
+	if readHash != hashContent(currentContent) {
+		return fmt.Sprintf("Error: %q has changed since you read it (possibly from one of your own earlier writes this turn, or an external change) — call read_file on it again before writing, so your change is based on its actual current content.", path)
+	}
+	return ""
+}
+
 // runFileTools makes repeated non-streaming pre-flight requests (up to
-// maxToolRounds) with the read_file (and, if enabled, write_file and
-// run_build) tools declared, appending each round's tool-call and
-// tool-result messages to *messages so the subsequent streamed answer can
-// see the outcome. Models without tool support, or that choose not to
-// call a tool, leave messages untouched after the first round.
+// maxToolRounds) with the read_file (and, if enabled, write_file,
+// edit_file, and run_build) tools declared, appending each round's
+// tool-call and tool-result messages to *messages so the subsequent
+// streamed answer can see the outcome. Models without tool support, or
+// that choose not to call a tool, leave messages untouched after the
+// first round.
 //
-// read_file is executed immediately (read-only, low risk). write_file is
-// never executed here — it's recorded as a PendingWrite awaiting human
-// approval via the /api/writes endpoints, and the model is told exactly
-// that in its tool result, so its final answer can honestly say the
-// change is pending review rather than claiming it already happened.
-// run_build lets the model check its own proposed writes compile before
-// finishing — it runs against a throwaway copy of the project with this
-// turn's pending writes overlaid (see internal/buildcheck), never the
-// real sandbox, so it's safe to offer without a separate approval step.
+// read_file is executed immediately (read-only, low risk). write_file and
+// edit_file are never executed here — each is recorded as a PendingWrite
+// awaiting human approval via the /api/writes endpoints, and the model is
+// told exactly that in its tool result, so its final answer can honestly
+// say the change is pending review rather than claiming it already
+// happened. Both are gated by checkWriteFreshness (must have freshly
+// read_file'd the same path this turn) and checkTruncation (the proposed
+// content can't be suspiciously shorter than what's there now) — see
+// those functions' doc comments for why: local models are prone to
+// silently truncating or reconstructing-from-memory exactly the file
+// content they should be copying forward unchanged, and both checks catch
+// that mechanically rather than trusting the model not to do it. run_build
+// lets the model check its own proposed writes compile before finishing —
+// it runs against a throwaway copy of the project with this turn's
+// pending writes overlaid (see internal/buildcheck), never the real
+// sandbox, so it's safe to offer without a separate approval step.
 func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]llm.Message, thinkLevel string) ([]fileRead, []*PendingWrite, []buildCheckReport, bool) {
 	// Snapshot once so every check below (which tools to advertise, whether
 	// writes are allowed, which root a proposed write is validated/diffed
@@ -466,14 +602,20 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 	var pending []*PendingWrite
 	var buildChecks []buildCheckReport
 	// pendingByPath tracks the latest proposed content per path this turn
-	// (a later write_file call for the same path supersedes an earlier
-	// one), used to build the run_build overlay.
+	// (a later write_file/edit_file call for the same path supersedes an
+	// earlier one), used to build the run_build overlay.
 	pendingByPath := map[string]string{}
+	// lastReadHash tracks, per path, the hash of what read_file actually
+	// returned to the model this turn — see checkWriteFreshness. Persists
+	// across rounds within one call to runFileTools (i.e. for the whole
+	// turn), so "read in round 1, write in round 2" is allowed as long as
+	// nothing changed the file in between.
+	lastReadHash := map[string]string{}
 
 	for round := 0; round < maxToolRounds; round++ {
 		tools := []llm.Tool{readFileTool, listFilesTool}
 		if writesEnabled {
-			tools = append(tools, writeFileTool)
+			tools = append(tools, writeFileTool, editFileTool)
 			if hasGoModule && len(pendingByPath) > 0 {
 				tools = append(tools, runBuildTool)
 			}
@@ -520,6 +662,19 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 					if truncated {
 						result += "\n\n[truncated]"
 					}
+					// Record what the model actually saw, keyed by path, so a
+					// later write_file/edit_file this turn can be checked
+					// against it — see checkWriteFreshness. A truncated read
+					// deliberately does NOT count as fresh enough to write
+					// from: the model never saw the whole file, so a
+					// write/edit built on it risks dropping the unseen tail,
+					// exactly the truncation failure mode these checks exist
+					// to prevent.
+					if !truncated {
+						lastReadHash[args.Path] = hashContent(content)
+					} else {
+						delete(lastReadHash, args.Path)
+					}
 				}
 				reads = append(reads, fr)
 				results[call.ID] = result
@@ -540,20 +695,84 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 					result = "Error: " + err.Error()
 				} else {
 					existing, exists, _ := h.Files.ExistingContent(args.Path)
-					pw := &PendingWrite{
-						ID:              newWriteID(),
-						Path:            args.Path,
-						NewContent:      args.Content,
-						ExistingContent: existing,
-						FileExists:      exists,
-						root:            root,
+					if msg := checkWriteFreshness(lastReadHash, args.Path, existing, exists); msg != "" {
+						result = msg
+					} else if msg := checkTruncation(existing, args.Content); msg != "" {
+						result = msg
+					} else {
+						pw := &PendingWrite{
+							ID:              newWriteID(),
+							Path:            args.Path,
+							NewContent:      args.Content,
+							ExistingContent: existing,
+							FileExists:      exists,
+							root:            root,
+						}
+						h.writesMu.Lock()
+						h.writes[pw.ID] = pw
+						h.writesMu.Unlock()
+						pending = append(pending, pw)
+						pendingByPath[args.Path] = args.Content
+						// The file's on-disk content is about to change (once
+						// approved) to args.Content — update the tracked hash
+						// so a same-turn run_build/edit_file/write_file
+						// sequence on this path continues to see it as fresh
+						// without needing another read_file round-trip.
+						lastReadHash[args.Path] = hashContent(args.Content)
+						result = fmt.Sprintf("Change to %q proposed and awaiting human approval (id: %s). Do not tell the user it has been written yet — it is pending review. You can call run_build to check it compiles before finishing.", args.Path, pw.ID)
 					}
-					h.writesMu.Lock()
-					h.writes[pw.ID] = pw
-					h.writesMu.Unlock()
-					pending = append(pending, pw)
-					pendingByPath[args.Path] = args.Content
-					result = fmt.Sprintf("Change to %q proposed and awaiting human approval (id: %s). Do not tell the user it has been written yet — it is pending review. You can call run_build to check it compiles before finishing.", args.Path, pw.ID)
+				}
+				results[call.ID] = result
+
+			case "edit_file":
+				var args struct {
+					Path    string `json:"path"`
+					Search  string `json:"search"`
+					Replace string `json:"replace"`
+				}
+				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+
+				var result string
+				if !writesEnabled {
+					result = "Error: file writes are not enabled."
+				} else if _, err := h.Files.ResolveForWrite(args.Path); err != nil {
+					result = "Error: " + err.Error()
+				} else {
+					existing, exists, _ := h.Files.ExistingContent(args.Path)
+					if msg := checkWriteFreshness(lastReadHash, args.Path, existing, exists); msg != "" {
+						result = msg
+					} else if !exists {
+						result = fmt.Sprintf("Error: %q doesn't exist yet — use write_file to create a new file.", args.Path)
+					} else if n := strings.Count(existing, args.Search); n != 1 {
+						if n == 0 {
+							result = fmt.Sprintf("Error: search text not found in %q. It must match the file's current content exactly (including whitespace/indentation) — re-read the file and copy the exact text you want to replace.", args.Path)
+						} else {
+							result = fmt.Sprintf("Error: search text appears %d times in %q, but must match exactly once — make the search text longer/more specific so it uniquely identifies the block you want to change.", n, args.Path)
+						}
+					} else {
+						newContent := strings.Replace(existing, args.Search, args.Replace, 1)
+						if len(newContent) > files.MaxWriteBytes {
+							result = fmt.Sprintf("Error: resulting file would be too large (%d bytes, max %d).", len(newContent), files.MaxWriteBytes)
+						} else if msg := checkTruncation(existing, newContent); msg != "" {
+							result = msg
+						} else {
+							pw := &PendingWrite{
+								ID:              newWriteID(),
+								Path:            args.Path,
+								NewContent:      newContent,
+								ExistingContent: existing,
+								FileExists:      true,
+								root:            root,
+							}
+							h.writesMu.Lock()
+							h.writes[pw.ID] = pw
+							h.writesMu.Unlock()
+							pending = append(pending, pw)
+							pendingByPath[args.Path] = newContent
+							lastReadHash[args.Path] = hashContent(newContent)
+							result = fmt.Sprintf("Change to %q proposed and awaiting human approval (id: %s). Do not tell the user it has been written yet — it is pending review. You can call run_build to check it compiles before finishing.", args.Path, pw.ID)
+						}
+					}
 				}
 				results[call.ID] = result
 			}
