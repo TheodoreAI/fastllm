@@ -20,6 +20,7 @@ export default function ChatPanel({
   onComposerPaste,
   onRemovePendingImage,
   visionSupported,
+  activeEditorFile,
 }) {
   // Shell-style prompt recall: ArrowUp/ArrowDown step through this
   // conversation's past user messages. historyIndex counts back from the
@@ -198,6 +199,15 @@ export default function ChatPanel({
             </button>
           )}
         </div>
+        {activeEditorFile && (
+          <p className="composer-active-file" title={activeEditorFile}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="composer-active-file-icon">
+              <path d="M6 2.5h8l4 4V21a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1Z" />
+              <path d="M14 2.5V6a1 1 0 0 0 1 1h3.5" />
+            </svg>
+            {activeEditorFile.split('/').pop()} is available to the model
+          </p>
+        )}
       </form>
     </main>
   )

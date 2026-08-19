@@ -493,7 +493,7 @@ export function saveCloudProviderSettings(settings) {
 // the same catch path a deliberate stop click already uses.
 const STALL_TIMEOUT_MS = 45_000
 
-export async function streamChat({ message, model, skillId, conversationId, thinkLevel, images }, callbacks, signal) {
+export async function streamChat({ message, model, skillId, conversationId, thinkLevel, images, activeFile }, callbacks, signal) {
   const origin = await apiOrigin()
   const res = await fetch(`${origin}/api/chat`, {
     method: 'POST',
@@ -505,6 +505,7 @@ export async function streamChat({ message, model, skillId, conversationId, thin
       conversation_id: conversationId ?? 0,
       think_level: thinkLevel || '',
       images: images && images.length > 0 ? images : undefined,
+      active_file: activeFile || undefined,
     }),
     signal,
   })

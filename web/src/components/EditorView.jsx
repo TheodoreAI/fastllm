@@ -45,6 +45,7 @@ export default function EditorView({
   panel,
   onPanelChange,
   onGitChangeCountChange,
+  onOpenPathChange,
   sidebarCollapsed,
   onSidebarCollapsedChange,
   terminalCollapsed,
@@ -242,6 +243,14 @@ export default function EditorView({
   useEffect(() => {
     onGitChangeCountChange?.(gitStatus.length)
   }, [gitStatus, onGitChangeCountChange])
+
+  // The chat composer shows which file is currently open in the editor
+  // (see App.jsx's activeEditorFile) so the model knows what "this file" /
+  // "the current file" refers to, and so it's sent along with chat
+  // requests as context. Same lift-state-up pattern as gitStatus above.
+  useEffect(() => {
+    onOpenPathChange?.(openPath)
+  }, [openPath, onOpenPathChange])
 
   function refreshTree() {
     setTreeStatus('Loading…')
