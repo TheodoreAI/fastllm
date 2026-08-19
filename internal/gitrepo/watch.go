@@ -2,6 +2,7 @@ package gitrepo
 
 import (
 	"context"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -138,13 +139,28 @@ func Watch(ctx context.Context, root string) (changes <-chan struct{}, stop func
 				// until something explicitly watches it — otherwise a
 				// SECOND write landing inside that same new directory
 				// later produces no event at all, even though the mkdir
-				// itself did. Catching Create events for directories here
-				// and adding them keeps up with the tree as it grows,
-				// covering the gap noted above for "a directory created
-				// after the watch is set up."
+				// itself did. fsnotify only ever reports the single
+				// directory it directly saw appear — for a nested
+				// os.MkdirAll("a/b/c") where none of a/b/c existed before,
+				// that's just "a", with "b" and "c" already sitting inside
+				// it by the time this event is handled, so a plain w.Add on
+				// ev.Name alone would still miss writes under b/c. Walking
+				// the new directory and adding every subdirectory found
+				// inside it (there may already be several, all created in
+				// the same MkdirAll call) closes that gap in one pass;
+				// walkDir itself is silent about future creates one level
+				// further down, but those are caught the same way the next
+				// time this branch fires for them.
 				if ev.Op&fsnotify.Create != 0 {
 					if info, err := os.Stat(ev.Name); err == nil && info.IsDir() {
 						_ = w.Add(ev.Name)
+						_ = filepath.WalkDir(ev.Name, func(path string, d fs.DirEntry, err error) error {
+							if err != nil || !d.IsDir() || path == ev.Name {
+								return nil
+							}
+							_ = w.Add(path)
+							return nil
+						})
 					}
 				}
 				if debounce == nil {
