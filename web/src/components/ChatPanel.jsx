@@ -63,6 +63,27 @@ function StopIcon(props) {
   )
 }
 
+// Used on the composer's token-usage chips — an arrow into the model for
+// prompt tokens, an arrow out for completion tokens, mirroring the
+// in/out framing already used in the label text next to them.
+function ArrowDownIcon(props) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      <path d="M12 4v14" />
+      <path d="M6 12l6 6 6-6" />
+    </svg>
+  )
+}
+
+function ArrowUpIcon(props) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      <path d="M12 20V6" />
+      <path d="M6 12l6-6 6 6" />
+    </svg>
+  )
+}
+
 export default function ChatPanel({
   messages,
   messagesLoading,
@@ -100,6 +121,49 @@ export default function ChatPanel({
   }, [conversationId])
 
   const promptHistory = messages.filter((m) => m.role === 'user').map((m) => m.content)
+
+  // Token usage for the most recent completion — not every provider
+  // reports it (see llm.Usage's doc comment), so messages without it are
+  // skipped rather than showing a stale count from an earlier turn.
+  const lastUsage = [...messages].reverse().find((m) => m.usage)?.usage
+
+  // Running total across every turn in this conversation so far. Summed
+  // from each message's own usage rather than tracked as separate state —
+  // usage isn't persisted to the DB (same as reasoning/toolCalls), so this
+  // naturally covers only what's loaded into `messages` for the current
+  // session, same scope as lastUsage above.
+  const totalUsage = messages.reduce(
+    (acc, m) => (m.usage ? { promptTokens: acc.promptTokens + m.usage.prompt_tokens, completionTokens: acc.completionTokens + m.usage.completion_tokens } : acc),
+    { promptTokens: 0, completionTokens: 0 }
+  )
+  const hasTotalUsage = totalUsage.promptTokens > 0 || totalUsage.completionTokens > 0
+
+  // Rate-limit headroom, if the backend reported one (see llm.RateLimit's
+  // doc comment — only confirmed for OpenAI and Anthropic; other
+  // providers simply never set rate_limit, and this stays null for them).
+  // Tokens are the usual binding constraint, so this prefers the
+  // token-remaining percentage over the request-count one; falls back to
+  // Anthropic's separate input-token figure when the combined "tokens"
+  // pair isn't present, and picks the lower of input/output percentages
+  // since either one hitting zero blocks the next request.
+  const rl = lastUsage?.rate_limit
+  let rateLimitPct = null
+  let rateLimitTitle = ''
+  if (rl) {
+    const pct = (remaining, limit) => (limit > 0 ? Math.round((remaining / limit) * 100) : null)
+    if (rl.tokens_limit > 0) {
+      rateLimitPct = pct(rl.tokens_remaining, rl.tokens_limit)
+      rateLimitTitle = `${rl.tokens_remaining.toLocaleString()} / ${rl.tokens_limit.toLocaleString()} tokens remaining this window`
+    } else if (rl.input_tokens_limit > 0 || rl.output_tokens_limit > 0) {
+      const inPct = pct(rl.input_tokens_remaining, rl.input_tokens_limit)
+      const outPct = pct(rl.output_tokens_remaining, rl.output_tokens_limit)
+      rateLimitPct = [inPct, outPct].filter((v) => v != null).sort((a, b) => a - b)[0] ?? null
+      rateLimitTitle = `${rl.input_tokens_remaining.toLocaleString()} / ${rl.input_tokens_limit.toLocaleString()} input tokens, ${rl.output_tokens_remaining.toLocaleString()} / ${rl.output_tokens_limit.toLocaleString()} output tokens remaining this window`
+    } else if (rl.requests_limit > 0) {
+      rateLimitPct = pct(rl.requests_remaining, rl.requests_limit)
+      rateLimitTitle = `${rl.requests_remaining.toLocaleString()} / ${rl.requests_limit.toLocaleString()} requests remaining this window`
+    }
+  }
 
   function handleComposerKeyDown(e) {
     if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return
@@ -268,6 +332,36 @@ export default function ChatPanel({
             <FileIcon className="inline-icon" />
             {activeEditorFile.split('/').pop()} is available to the model
           </p>
+        )}
+        {lastUsage && (
+          <div
+            className="composer-usage"
+            title={
+              hasTotalUsage
+                ? `${lastUsage.total_tokens.toLocaleString()} tokens this turn · session total ${totalUsage.promptTokens.toLocaleString()} in / ${totalUsage.completionTokens.toLocaleString()} out`
+                : `${lastUsage.total_tokens.toLocaleString()} tokens this turn`
+            }
+          >
+            <span className="composer-usage-chip composer-usage-in">
+              <ArrowDownIcon className="inline-icon" />
+              {lastUsage.prompt_tokens.toLocaleString()} in
+            </span>
+            <span className="composer-usage-chip composer-usage-out">
+              <ArrowUpIcon className="inline-icon" />
+              {lastUsage.completion_tokens.toLocaleString()} out
+            </span>
+            {rateLimitPct != null && (
+              <span
+                className={`composer-usage-limit ${rateLimitPct <= 10 ? 'is-low' : rateLimitPct <= 50 ? 'is-medium' : ''}`}
+                title={rateLimitTitle}
+              >
+                <span className="composer-usage-limit-bar">
+                  <span className="composer-usage-limit-fill" style={{ width: `${rateLimitPct}%` }} />
+                </span>
+                {rateLimitPct}%
+              </span>
+            )}
+          </div>
         )}
       </form>
     </main>

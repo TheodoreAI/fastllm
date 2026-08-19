@@ -327,10 +327,15 @@ func anthropicError(resp *http.Response) error {
 	return fmt.Errorf("anthropic: chat completion failed: %s", resp.Status)
 }
 
-// anthropicStreamEvent covers the two event types StreamChat cares about
-// out of Anthropic's several SSE event kinds (message_start,
+// anthropicStreamEvent covers the event types StreamChat cares about out
+// of Anthropic's several SSE event kinds (message_start,
 // content_block_start/delta/stop, message_delta, message_stop, ping) —
-// unrecognized fields are simply left zero-valued and skipped.
+// unrecognized fields are simply left zero-valued and skipped. Usage
+// arrives split across two event types rather than once at the end:
+// message_start.message.usage.input_tokens is the prompt size (output_tokens
+// there is always 0 — nothing generated yet), and each message_delta
+// carries a cumulative usage.output_tokens as generation progresses, so
+// the last message_delta seen has the final output count.
 type anthropicStreamEvent struct {
 	Type  string `json:"type"`
 	Delta struct {
@@ -338,13 +343,24 @@ type anthropicStreamEvent struct {
 		Text     string `json:"text"`
 		Thinking string `json:"thinking"`
 	} `json:"delta"`
+	Message struct {
+		Usage struct {
+			InputTokens int `json:"input_tokens"`
+		} `json:"usage"`
+	} `json:"message"`
+	Usage struct {
+		OutputTokens int `json:"output_tokens"`
+	} `json:"usage"`
 }
 
 // StreamChat implements the same signature as Client.StreamChat so both
 // can sit behind Router — see that type's doc comment for the dispatch
 // logic. Reasoning text streams via Anthropic's "thinking" delta type,
-// analogous to Ollama's separate "reasoning" field.
-func (c *AnthropicClient) StreamChat(ctx context.Context, model string, messages []Message, thinkLevel string, onToken func(string), onReasoning func(string)) error {
+// analogous to Ollama's separate "reasoning" field. onUsage (if non-nil)
+// is called once at the end of the stream with the input token count from
+// message_start and the final cumulative output token count from the last
+// message_delta seen (see anthropicStreamEvent's doc comment).
+func (c *AnthropicClient) StreamChat(ctx context.Context, model string, messages []Message, thinkLevel string, onToken func(string), onReasoning func(string), onUsage func(Usage)) error {
 	body, err := json.Marshal(toAnthropicRequest(model, messages, nil, true, thinkLevel))
 	if err != nil {
 		return err
@@ -364,6 +380,9 @@ func (c *AnthropicClient) StreamChat(ctx context.Context, model string, messages
 		return anthropicError(resp)
 	}
 
+	rateLimit := parseAnthropicRateLimitHeaders(resp.Header)
+
+	var inputTokens, outputTokens int
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
@@ -376,21 +395,31 @@ func (c *AnthropicClient) StreamChat(ctx context.Context, model string, messages
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
 			continue // skip malformed/keepalive lines
 		}
-		if event.Type != "content_block_delta" {
-			continue
-		}
-		switch event.Delta.Type {
-		case "text_delta":
-			if event.Delta.Text != "" {
-				onToken(event.Delta.Text)
-			}
-		case "thinking_delta":
-			if event.Delta.Thinking != "" && onReasoning != nil {
-				onReasoning(event.Delta.Thinking)
+		switch event.Type {
+		case "message_start":
+			inputTokens = event.Message.Usage.InputTokens
+		case "message_delta":
+			outputTokens = event.Usage.OutputTokens
+		case "content_block_delta":
+			switch event.Delta.Type {
+			case "text_delta":
+				if event.Delta.Text != "" {
+					onToken(event.Delta.Text)
+				}
+			case "thinking_delta":
+				if event.Delta.Thinking != "" && onReasoning != nil {
+					onReasoning(event.Delta.Thinking)
+				}
 			}
 		}
 	}
-	return scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	if onUsage != nil && (inputTokens > 0 || outputTokens > 0) {
+		onUsage(Usage{PromptTokens: inputTokens, CompletionTokens: outputTokens, TotalTokens: inputTokens + outputTokens, RateLimit: rateLimit})
+	}
+	return nil
 }
 
 type anthropicResponse struct {

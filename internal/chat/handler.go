@@ -308,6 +308,10 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		payload, _ := json.Marshal(map[string]string{"reasoning": reasoning})
 		fmt.Fprintf(w, "event: reasoning\ndata: %s\n\n", payload)
 		flusher.Flush()
+	}, func(usage llm.Usage) {
+		payload, _ := json.Marshal(usage)
+		fmt.Fprintf(w, "event: usage\ndata: %s\n\n", payload)
+		flusher.Flush()
 	})
 	// A client-initiated stop (the Stop button) cancels ctx, which surfaces
 	// here as a context-canceled error from StreamChat — that's an

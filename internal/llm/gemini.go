@@ -325,6 +325,14 @@ type geminiStreamChunk struct {
 			} `json:"parts"`
 		} `json:"content"`
 	} `json:"candidates"`
+	// UsageMetadata is cumulative and repeated on every chunk (not just the
+	// last one) — StreamChat just keeps overwriting its local copy, so
+	// whatever was parsed from the final chunk naturally wins.
+	UsageMetadata struct {
+		PromptTokenCount     int `json:"promptTokenCount"`
+		CandidatesTokenCount int `json:"candidatesTokenCount"`
+		TotalTokenCount      int `json:"totalTokenCount"`
+	} `json:"usageMetadata"`
 }
 
 // StreamChat implements the same signature as Client.StreamChat — see
@@ -333,8 +341,10 @@ type geminiStreamChunk struct {
 // line carrying one geminiStreamChunk, so despite the very different
 // request shape the actual line-scanning loop looks like the other two
 // clients'. A part is reasoning text (not the visible answer) when its
-// "thought" flag is set.
-func (c *GeminiClient) StreamChat(ctx context.Context, model string, messages []Message, thinkLevel string, onToken func(string), onReasoning func(string)) error {
+// "thought" flag is set. onUsage (if non-nil) is called once at the end
+// with the last chunk's usageMetadata (see geminiStreamChunk's doc
+// comment for why the last one is always the complete one).
+func (c *GeminiClient) StreamChat(ctx context.Context, model string, messages []Message, thinkLevel string, onToken func(string), onReasoning func(string), onUsage func(Usage)) error {
 	body, err := json.Marshal(toGeminiRequest(model, messages, nil, thinkLevel))
 	if err != nil {
 		return err
@@ -357,6 +367,7 @@ func (c *GeminiClient) StreamChat(ctx context.Context, model string, messages []
 		return geminiError(resp)
 	}
 
+	var usage Usage
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
@@ -368,6 +379,13 @@ func (c *GeminiClient) StreamChat(ctx context.Context, model string, messages []
 		var chunk geminiStreamChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			continue // skip malformed/keepalive lines
+		}
+		if chunk.UsageMetadata.TotalTokenCount > 0 {
+			usage = Usage{
+				PromptTokens:     chunk.UsageMetadata.PromptTokenCount,
+				CompletionTokens: chunk.UsageMetadata.CandidatesTokenCount,
+				TotalTokens:      chunk.UsageMetadata.TotalTokenCount,
+			}
 		}
 		if len(chunk.Candidates) == 0 {
 			continue
@@ -385,7 +403,13 @@ func (c *GeminiClient) StreamChat(ctx context.Context, model string, messages []
 			}
 		}
 	}
-	return scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	if onUsage != nil && usage.TotalTokens > 0 {
+		onUsage(usage)
+	}
+	return nil
 }
 
 type geminiResponse struct {
