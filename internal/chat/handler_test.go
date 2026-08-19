@@ -3,6 +3,8 @@ package chat
 import (
 	"strings"
 	"testing"
+
+	"fastllm/internal/store"
 )
 
 func TestCheckTruncation(t *testing.T) {
@@ -113,4 +115,75 @@ func TestHashContentStableAndDistinct(t *testing.T) {
 	if a == c {
 		t.Errorf("hashContent collided for different input: %q == %q", a, c)
 	}
+}
+
+// Regression test for the gap where approving or rejecting a proposed
+// write left the model with no way to learn the outcome: everything about
+// a write_file/edit_file call — including the tool result telling the
+// model "proposed and awaiting approval, do not tell the user it's been
+// written yet" — lives only in the local *messages slice for that one
+// Chat call, and is never persisted. Without saveWriteOutcomeMessage, the
+// next turn's buildPrompt/store.LoadMessages replay would still only ever
+// show the model its own "proposed, awaiting approval" reply, with no
+// record of what a human later did about it — leaving the model to guess,
+// hedge, or need to be told again by hand.
+func TestSaveWriteOutcomeMessagePersistsIntoConversationHistory(t *testing.T) {
+	db, err := store.Open(":memory:")
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	defer db.Close()
+
+	convID, err := store.CreateConversation(db, defaultWorkspace, "test conversation")
+	if err != nil {
+		t.Fatalf("store.CreateConversation: %v", err)
+	}
+
+	t.Run("approved write is recorded", func(t *testing.T) {
+		pw := &PendingWrite{ID: "w1", Path: "src/main.go", conversationID: convID}
+		saveWriteOutcomeMessage(db, pw, `The human approved and wrote the proposed change to "src/main.go" (id: w1). It is now saved on disk exactly as proposed.`)
+
+		history, err := store.LoadMessages(db, defaultWorkspace, convID)
+		if err != nil {
+			t.Fatalf("store.LoadMessages: %v", err)
+		}
+		if len(history) != 1 {
+			t.Fatalf("got %d messages, want 1", len(history))
+		}
+		if history[0].Role != "system" {
+			t.Errorf("role = %q, want %q", history[0].Role, "system")
+		}
+		if !strings.Contains(history[0].Content, "approved") || !strings.Contains(history[0].Content, "src/main.go") {
+			t.Errorf("content %q doesn't describe the approval outcome", history[0].Content)
+		}
+	})
+
+	t.Run("rejected write is recorded distinctly from an approval", func(t *testing.T) {
+		pw := &PendingWrite{ID: "w2", Path: "src/other.go", conversationID: convID}
+		saveWriteOutcomeMessage(db, pw, `The human rejected the proposed change to "src/other.go" (id: w2). The file was NOT changed — it still has its original content.`)
+
+		history, err := store.LoadMessages(db, defaultWorkspace, convID)
+		if err != nil {
+			t.Fatalf("store.LoadMessages: %v", err)
+		}
+		last := history[len(history)-1]
+		if !strings.Contains(last.Content, "rejected") || !strings.Contains(last.Content, "NOT changed") {
+			t.Errorf("content %q doesn't describe the rejection outcome", last.Content)
+		}
+	})
+
+	t.Run("a write with no conversation ID is a no-op, not a panic", func(t *testing.T) {
+		pw := &PendingWrite{ID: "w3", Path: "orphan.go"}
+		saveWriteOutcomeMessage(db, pw, "should never be persisted")
+
+		history, err := store.LoadMessages(db, defaultWorkspace, convID)
+		if err != nil {
+			t.Fatalf("store.LoadMessages: %v", err)
+		}
+		for _, m := range history {
+			if strings.Contains(m.Content, "orphan.go") {
+				t.Errorf("a write with no conversationID should not have written into conversation %d", convID)
+			}
+		}
+	})
 }

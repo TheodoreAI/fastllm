@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/user"
@@ -191,6 +192,13 @@ type PendingWrite struct {
 	// exported: this is an internal consistency check, not part of the
 	// API response the frontend renders.
 	root string
+
+	// conversationID is the conversation this write was proposed in — so
+	// ApproveWrite/RejectWrite can record the outcome back into that same
+	// conversation's history (see the comment on that in ApproveWrite).
+	// Not exported for the same reason root isn't: internal bookkeeping,
+	// not part of the JSON the frontend renders.
+	conversationID int64
 }
 
 type Handler struct {
@@ -313,7 +321,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		effectiveModel = h.LLM.ChatModel()
 	}
 	if h.Files.Enabled() && llm.SupportsToolsForModel(effectiveModel) {
-		reads, writes, buildChecks, budgetExhausted := h.runFileTools(ctx, req.Model, &messages, normalizeThinkLevel(req.ThinkLevel))
+		reads, writes, buildChecks, budgetExhausted := h.runFileTools(ctx, req.Model, &messages, normalizeThinkLevel(req.ThinkLevel), convID)
 		for _, fr := range reads {
 			payload, _ := json.Marshal(fr)
 			fmt.Fprintf(w, "event: tool_call\ndata: %s\n\n", payload)
@@ -589,7 +597,7 @@ func checkWriteFreshness(lastRead map[string]string, path, currentContent string
 // it runs against a throwaway copy of the project with this turn's
 // pending writes overlaid (see internal/buildcheck), never the real
 // sandbox, so it's safe to offer without a separate approval step.
-func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]llm.Message, thinkLevel string) ([]fileRead, []*PendingWrite, []buildCheckReport, bool) {
+func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]llm.Message, thinkLevel string, conversationID int64) ([]fileRead, []*PendingWrite, []buildCheckReport, bool) {
 	// Snapshot once so every check below (which tools to advertise, whether
 	// writes are allowed, which root a proposed write is validated/diffed
 	// against) agrees with itself for this whole turn, even if a
@@ -707,6 +715,7 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 							ExistingContent: existing,
 							FileExists:      exists,
 							root:            root,
+							conversationID:  conversationID,
 						}
 						h.writesMu.Lock()
 						h.writes[pw.ID] = pw
@@ -763,6 +772,7 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 								ExistingContent: existing,
 								FileExists:      true,
 								root:            root,
+								conversationID:  conversationID,
 							}
 							h.writesMu.Lock()
 							h.writes[pw.ID] = pw
@@ -916,6 +926,18 @@ func (h *Handler) ApproveWrite(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// The tool result the model saw when it proposed this write explicitly
+	// told it "Do not tell the user it has been written yet — it is
+	// pending review" (see write_file/edit_file's tool result above), and
+	// that's the LAST thing about this write that ever enters the
+	// conversation's persisted history — approval/rejection previously
+	// updated nothing the model could see. So on the next turn the model
+	// still only knows "proposed, pending," with no way to tell it was
+	// actually approved and written — it has to be told again by the
+	// human, or it hedges/re-proposes. Recording the outcome as a system
+	// message here (replayed on the next turn via buildPrompt/LoadMessages,
+	// same as any other history) closes that gap.
+	saveWriteOutcomeMessage(h.DB, pw, fmt.Sprintf("The human approved and wrote the proposed change to %q (id: %s). It is now saved on disk exactly as proposed.", pw.Path, pw.ID))
 	writeJSON(w, map[string]any{"path": pw.Path, "written": true})
 }
 
@@ -927,7 +949,29 @@ func (h *Handler) RejectWrite(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no such pending write (already resolved or unknown id)", http.StatusNotFound)
 		return
 	}
+	// See the comment in ApproveWrite above — same gap, opposite outcome:
+	// without this, the model has no way to learn a proposal it made was
+	// turned down, and might act as though it's still pending or silently
+	// assume it went through.
+	saveWriteOutcomeMessage(h.DB, pw, fmt.Sprintf("The human rejected the proposed change to %q (id: %s). The file was NOT changed — it still has its original content.", pw.Path, pw.ID))
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// saveWriteOutcomeMessage records a pending write's resolution into its
+// originating conversation as a system message, so the model's next turn
+// (via buildPrompt/store.LoadMessages) sees what actually happened instead
+// of only ever seeing its own "proposed, awaiting approval" reply. Errors
+// are logged, not returned — the write to disk (or the rejection) already
+// succeeded by the time this runs, and losing this one follow-up note
+// shouldn't fail the whole request; the human already sees the outcome
+// directly in the PendingWriteCard regardless.
+func saveWriteOutcomeMessage(db *sql.DB, pw *PendingWrite, note string) {
+	if pw.conversationID == 0 {
+		return
+	}
+	if err := store.SaveMessage(db, defaultWorkspace, pw.conversationID, "system", note, nil); err != nil {
+		log.Printf("saveWriteOutcomeMessage: %v", err)
+	}
 }
 
 // ListModels returns the chat-capable models available on the LLM backend.
