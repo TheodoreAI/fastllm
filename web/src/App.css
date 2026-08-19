@@ -791,7 +791,6 @@ body {
 
 body {
   font-family: var(--font-ui);
-  -webkit-font-smoothing: antialiased;
 }
 
 #root {
@@ -2402,7 +2401,7 @@ body {
 .composer input {
   flex: 1;
   padding: 9px 12px;
-  border-radius: 999px;
+  border-radius: var(--radius);
   border: 1px solid var(--border-strong);
   background: var(--bg-input);
   color: var(--text);
@@ -2425,7 +2424,7 @@ body {
   width: auto;
   margin-top: 0;
   padding: 9px 18px;
-  border-radius: 999px;
+  border-radius: var(--radius);
   white-space: nowrap;
 }
 
