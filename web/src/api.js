@@ -376,6 +376,14 @@ export function unstageGitPaths(paths) {
   })
 }
 
+export function discardGitPaths(paths) {
+  return fetch('/api/editor/git/discard', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ paths }),
+  })
+}
+
 export function commitGit(message) {
   return fetch('/api/editor/git/commit', {
     method: 'POST',

@@ -542,6 +542,29 @@ func (h *Handler) EditorGitUnstage(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// EditorGitDiscard throws away unstaged edits for one or more already-
+// tracked paths, resetting each back to the index/HEAD — the one
+// destructive, no-undo git-panel action (see gitrepo.Discard's doc
+// comment). No server-side confirmation step: same convention as
+// EditorDeleteFile/EditorDeleteFolder, where the frontend's own confirm
+// modal is the approval gate, not this endpoint.
+func (h *Handler) EditorGitDiscard(w http.ResponseWriter, r *http.Request) {
+	root, ok := h.editorRoot(w)
+	if !ok {
+		return
+	}
+	var req editorGitPathsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req.Paths) == 0 {
+		http.Error(w, "paths is required", http.StatusBadRequest)
+		return
+	}
+	if err := gitrepo.Discard(r.Context(), root, req.Paths); err != nil {
+		h.writeGitError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 type editorGitCommitRequest struct {
 	Message string `json:"message"`
 }

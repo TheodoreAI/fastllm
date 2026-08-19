@@ -165,6 +165,29 @@ func Unstage(ctx context.Context, root string, paths []string) error {
 	return err
 }
 
+// Discard runs `git restore` (worktree only, no `--staged`) for the
+// given paths — throws away unstaged edits to already-tracked files,
+// resetting them back to whatever's in the index (or HEAD, if nothing's
+// staged for that path). This is the one destructive, no-undo action in
+// the git panel: unlike Stage/Unstage/Commit, there's no git command
+// that could recover the discarded edit afterward, so the caller (see
+// EditorGitDiscard's doc comment) is expected to have already gotten a
+// confirmation from the user before calling this. Does not touch
+// untracked files — `git restore` has nothing to restore an untracked
+// file *to*, since git has never seen its content; deleting an untracked
+// file entirely is a different operation (see internal/files.Delete),
+// which the frontend routes to instead for that status.
+func Discard(ctx context.Context, root string, paths []string) error {
+	if !IsRepo(ctx, root) {
+		return ErrNotARepo
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+	_, err := run(ctx, root, append([]string{"restore", "--"}, paths...)...)
+	return err
+}
+
 // Commit creates a commit from whatever is currently staged. Never
 // stages anything itself (no `-a`) — the caller (the editor's git
 // panel) is expected to have already staged what it wants committed, so

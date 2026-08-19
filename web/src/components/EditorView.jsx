@@ -16,6 +16,7 @@ import {
   fetchGitDiff,
   stageGitPaths,
   unstageGitPaths,
+  discardGitPaths,
   commitGit,
   pushGit,
   pushSetUpstreamGit,
@@ -550,6 +551,72 @@ export default function EditorView({
     }
   }
 
+  // Discards the selected unstaged entries — the one destructive,
+  // no-undo action in this panel, so it goes through the same confirm
+  // dialog as file/folder delete. Only ever applied to unstaged() entries
+  // (see the "Discard selected" button below, which is disabled unless
+  // the selection overlaps unstaged) — a staged-only path has nothing for
+  // `git restore` (no --staged) to act on anyway. Split into two groups
+  // since `git restore` only makes sense for a file git has already
+  // tracked at some point: an untracked file (status "?") has no
+  // committed/staged content to restore back to, so discarding one of
+  // those means deleting it outright instead (same as the file tree's
+  // own delete), not a git restore call.
+  async function handleDiscardSelected() {
+    const unstagedPaths = unstaged.filter((entry) => selectedPaths.has(entry.path))
+    if (unstagedPaths.length === 0) return
+    const trackedPaths = unstagedPaths.filter((entry) => entry.unstaged !== '?').map((entry) => entry.path)
+    const untrackedPaths = unstagedPaths.filter((entry) => entry.unstaged === '?').map((entry) => entry.path)
+
+    const count = trackedPaths.length + untrackedPaths.length
+    const ok = await confirmDialog({
+      heading: count === 1 ? 'Discard this change?' : `Discard ${count} changes?`,
+      description:
+        count === 1
+          ? `This reverts "${trackedPaths[0] ?? untrackedPaths[0]}" to its last committed version (or deletes it, if it's a new file). This can't be undone.`
+          : "This reverts each selected file to its last committed version (or deletes it, if it's a new file). This can't be undone.",
+      confirmLabel: 'Discard changes',
+    })
+    if (!ok) return
+
+    setGitBusy(true)
+    setGitBusyAction('discard')
+    setGitError('')
+    try {
+      if (trackedPaths.length > 0) {
+        await discardGitPaths(trackedPaths)
+      }
+      for (const path of untrackedPaths) {
+        const res = await deleteEditorFile(path)
+        if (!res.ok) throw new Error(await res.text())
+      }
+      const discardedPaths = new Set([...trackedPaths, ...untrackedPaths])
+      if (openPath && discardedPaths.has(openPath)) {
+        if (trackedPaths.includes(openPath)) {
+          // Re-open the file so the editor shows its reverted content
+          // instead of the discarded in-memory edit.
+          openFile(openPath)
+        } else {
+          setOpenPath(null)
+          setContent('')
+          setSavedContent('')
+        }
+      }
+      setSelectedPaths((prev) => {
+        const next = new Set(prev)
+        for (const path of discardedPaths) next.delete(path)
+        return next
+      })
+      refreshTree()
+      refreshGitStatus()
+    } catch (err) {
+      setGitError(err.message)
+    } finally {
+      setGitBusy(false)
+      setGitBusyAction(null)
+    }
+  }
+
   async function handleCommit(e) {
     e.preventDefault()
     if (!commitMessage.trim()) return
@@ -874,6 +941,15 @@ export default function EditorView({
               </button>
               <button type="button" onClick={handleUnstageSelected} disabled={gitBusy || selectedPaths.size === 0}>
                 {gitBusy && gitBusyAction === 'unstage' ? 'Unstaging…' : 'Unstage selected'}
+              </button>
+              <button
+                type="button"
+                className="btn-danger-outline"
+                onClick={handleDiscardSelected}
+                disabled={gitBusy || !unstaged.some((entry) => selectedPaths.has(entry.path))}
+                title="Revert selected unstaged changes to their last committed version"
+              >
+                {gitBusy && gitBusyAction === 'discard' ? 'Discarding…' : 'Discard selected'}
               </button>
             </div>
 
