@@ -801,7 +801,7 @@ type cloudProviderSettingsResponse struct {
 	AnthropicConfigured bool `json:"anthropic_configured"`
 	OpenAIConfigured    bool `json:"openai_configured"`
 	GeminiConfigured    bool `json:"gemini_configured"`
-	DeepSeekConfigured  bool `json:"deepseek_configured"`
+	NvidiaConfigured    bool `json:"nvidia_configured"`
 }
 
 func toCloudProviderSettingsResponse(s store.CloudProviderSettings) cloudProviderSettingsResponse {
@@ -809,7 +809,7 @@ func toCloudProviderSettingsResponse(s store.CloudProviderSettings) cloudProvide
 		AnthropicConfigured: s.AnthropicAPIKey != "",
 		OpenAIConfigured:    s.OpenAIAPIKey != "",
 		GeminiConfigured:    s.GeminiAPIKey != "",
-		DeepSeekConfigured:  s.DeepSeekAPIKey != "",
+		NvidiaConfigured:    s.NvidiaAPIKey != "",
 	}
 }
 
@@ -827,7 +827,7 @@ type cloudProviderSettingsRequest struct {
 	AnthropicAPIKey *string `json:"anthropic_api_key"`
 	OpenAIAPIKey    *string `json:"openai_api_key"`
 	GeminiAPIKey    *string `json:"gemini_api_key"`
-	DeepSeekAPIKey  *string `json:"deepseek_api_key"`
+	NvidiaAPIKey    *string `json:"nvidia_api_key"`
 }
 
 // UpdateCloudProviderSettings merges the given fields into the persisted
@@ -858,8 +858,8 @@ func (h *Handler) UpdateCloudProviderSettings(w http.ResponseWriter, r *http.Req
 	if req.GeminiAPIKey != nil {
 		settings.GeminiAPIKey = *req.GeminiAPIKey
 	}
-	if req.DeepSeekAPIKey != nil {
-		settings.DeepSeekAPIKey = *req.DeepSeekAPIKey
+	if req.NvidiaAPIKey != nil {
+		settings.NvidiaAPIKey = *req.NvidiaAPIKey
 	}
 
 	if err := store.SaveCloudProviderSettings(h.DB, settings); err != nil {
@@ -870,7 +870,7 @@ func (h *Handler) UpdateCloudProviderSettings(w http.ResponseWriter, r *http.Req
 		AnthropicAPIKey: settings.AnthropicAPIKey,
 		OpenAIAPIKey:    settings.OpenAIAPIKey,
 		GeminiAPIKey:    settings.GeminiAPIKey,
-		DeepSeekAPIKey:  settings.DeepSeekAPIKey,
+		NvidiaAPIKey:    settings.NvidiaAPIKey,
 	})
 	writeJSON(w, toCloudProviderSettingsResponse(settings))
 }

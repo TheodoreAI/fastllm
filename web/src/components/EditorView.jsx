@@ -789,22 +789,12 @@ export default function EditorView({
 
   return (
     <div className="editor-view">
+      {!sidebarCollapsed && (
       <aside
         ref={sidebarRef}
-        className={`editor-sidebar ${sidebarCollapsed ? 'is-collapsed' : ''}`}
-        style={sidebarCollapsed ? undefined : { width: sidebarWidth }}
+        className="editor-sidebar"
+        style={{ width: sidebarWidth }}
       >
-        <button
-          type="button"
-          className="editor-sidebar-collapse-toggle"
-          title={sidebarCollapsed ? 'Expand file panel' : 'Collapse file panel'}
-          onClick={() => setSidebarCollapsed((c) => !c)}
-        >
-          {sidebarCollapsed ? '»' : '«'}
-        </button>
-
-        {!sidebarCollapsed && (
-          <>
             <div className="editor-folder-row">
               <button type="button" onClick={handleOpenFolder} disabled={openingFolder} title={fileAccessSettings?.root}>
                 {openingFolder ? 'Opening…' : 'Open Folder…'}
@@ -1000,9 +990,8 @@ export default function EditorView({
             {gitStatus.length === 0 && <p className="editor-hint">No changes.</p>}
           </div>
         )}
-          </>
-        )}
       </aside>
+      )}
 
       {!sidebarCollapsed && (
         <div className="editor-sidebar-divider" onMouseDown={handleSidebarDragStart} />

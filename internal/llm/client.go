@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -66,7 +67,7 @@ func splitDataURI(dataURI string) (mediaType, data string, ok bool) {
 // string when there are no images (identical to this type's previous,
 // pre-image-support JSON shape — every non-image call site is
 // unaffected), or an array of {"type":"text"|"image_url",...} content
-// blocks when there are, per OpenAI's (and Ollama's, and DeepSeek's)
+// blocks when there are, per OpenAI's (and Ollama's, and NVIDIA Build's)
 // multimodal content-block convention. This only needs to exist once,
 // here, rather than in every caller that marshals a chatRequest, since
 // Go's encoding/json calls a type's own MarshalJSON automatically
@@ -124,6 +125,17 @@ type Client struct {
 	ChatModel  string
 	EmbedModel string
 	HTTPClient *http.Client
+	// SendThink controls whether StreamChat/Chat include the "think"
+	// field on outgoing requests — Ollama's own extension for picking a
+	// reasoning effort level, not part of the OpenAI chat-completions
+	// spec. Real OpenAI-wire-compatible cloud APIs (OpenAI itself, NVIDIA
+	// Build) have no defined meaning for an unrecognized "think" field
+	// and some (confirmed: NVIDIA Build, at least for some models) 400
+	// the whole request rather than silently ignoring it — so this
+	// defaults false and is only set true for the local Ollama client
+	// (see New's caller in appserver.go), not the cloud ones New in
+	// router.go's SetCloudProviders constructs.
+	SendThink bool
 }
 
 func New(baseURL, apiKey, chatModel, embedModel string) *Client {
@@ -173,20 +185,50 @@ var OpenAIModels = []string{
 	"o3",
 }
 
-// DeepSeekModels lists the models offered in the model picker when a
-// DeepSeek API key is configured. DeepSeek's hosted API
-// (api.deepseek.com) is also OpenAI-compatible, same as OpenAIModels
-// above — no separate client type needed, Router just points a third
-// Client at it. deepseek-chat/deepseek-reasoner are legacy aliases
-// DeepSeek retired on 2026-07-24; deepseek-v4-flash/-pro are the current
-// model family (non-thinking/thinking modes). Unlike Gemini's model
-// list, these haven't been confirmed against a live ListModels call
-// against a real DeepSeek key — verify against a real account before
-// relying on this list (see this session's repeated Gemini model-ID
-// corrections for why that verification step matters).
-var DeepSeekModels = []string{
-	"deepseek-v4-flash",
-	"deepseek-v4-pro",
+// NvidiaModels lists the models offered in the picker when an NVIDIA
+// Build API key is configured. This is deliberately a hand-verified
+// allowlist, not a live query against NVIDIA's own GET /v1/models: that
+// endpoint lists NVIDIA Build's entire public catalog (~102 models as of
+// the sweep below) regardless of whether the configured account is
+// actually entitled to call each one — in a real sweep against a live
+// account, ~78 of those 102 404'd with "Function ... Not found for
+// account" the moment a real chat completion was attempted, so showing
+// the live list in the picker just means most entries fail on click.
+// Only models confirmed, via an actual chat completion (not just a
+// listing or a docs page), to respond successfully are listed here.
+//
+// This list has already gone stale twice from trusting docs alone
+// instead of a live call — mistralai/mistral-large-2-instruct and
+// qwen/qwen2.5-coder-32b-instruct both went dead, and even their
+// hand-verified "current successor" replacements (mistralai/mistral-
+// large-3-675b-instruct-2512, qwen/qwen3-coder-480b-a35b-instruct) were
+// gone within about a day — NVIDIA's catalog and this account's
+// entitlements both churn faster than any docs snapshot stays accurate.
+// Do not add a model here on the strength of a docs page; only add one
+// after it returns a real, successful chat completion for an actual
+// account. If an entry here starts failing, re-run the same kind of
+// sweep (query GET /v1/models for the current catalog, then Chat each
+// entry) before editing this list by hand again.
+//
+// Last verified 2026-08-18 against a real account: every model below
+// returned a successful chat completion; no Qwen coder model was
+// entitled at all for that account (all 404'd), which is why there's no
+// coding-specialist entry here despite one existing in NVIDIA's catalog.
+// meta/llama-3.2-11b-vision-instruct is the only one of these confirmed
+// in that same sweep to accept image input — see SupportsVisionForModel
+// and nvidiaVisionModels.
+var NvidiaModels = []string{
+	"meta/llama-3.1-8b-instruct",
+	"meta/llama-3.1-70b-instruct",
+	"meta/llama-3.3-70b-instruct",
+	"meta/llama-3.2-11b-vision-instruct",
+	"mistralai/mistral-nemotron",
+	"nvidia/nemotron-3-ultra-550b-a55b",
+	"nvidia/nemotron-3-super-120b-a12b",
+	"nvidia/nemotron-3-nano-30b-a3b",
+	"nvidia/llama-3.3-nemotron-super-49b-v1",
+	"openai/gpt-oss-120b",
+	"z-ai/glm-5.2",
 }
 
 type tagsResponse struct {
@@ -261,19 +303,25 @@ var toolCapableModelPrefixes = []string{
 // "provider:"-prefixed cloud model — see Router) can be offered file
 // read/write tools at all. Cloud providers each need their own tool-call
 // wire-format translation (see e.g. GeminiClient.Chat) — implemented for
-// Gemini, OpenAI, and DeepSeek (OpenAI's and DeepSeek's hosted APIs both
-// already speak Client's tool format natively) but not yet Anthropic, so
-// an "anthropic:" model is excluded here even though Claude models are
-// generally excellent at tool use — this is a "not implemented in
-// fastllm yet" gate, not a judgment about the model. Unlike local models
-// (see SupportsTools's allowlist below), a configured cloud provider
-// needs no per-model
-// allowlist: the uncertainty SupportsTools guards against is whether a
-// given local model reliably emits real tool_calls at all, which doesn't
-// apply to hosted providers fastllm has implemented tool support for.
+// Gemini, OpenAI, and NVIDIA Build (OpenAI's and NVIDIA Build's hosted
+// APIs both already speak Client's tool format natively) but not yet
+// Anthropic, so an "anthropic:" model is excluded here even though Claude
+// models are generally excellent at tool use — this is a "not
+// implemented in fastllm yet" gate, not a judgment about the model.
+// Unlike local models (see SupportsTools's allowlist below), a
+// configured cloud provider needs no per-model allowlist: the
+// uncertainty SupportsTools guards against is whether a given local
+// model reliably emits real tool_calls at all, which doesn't apply to
+// hosted providers fastllm has implemented tool support for. NVIDIA
+// Build's own docs note tool-calling support varies per model on their
+// platform (e.g. confirmed present on the Llama 3.2 Vision models,
+// confirmed absent on DeepSeek-R1-Distill) — offering it at the whole-
+// provider level here is optimistic for NvidiaModels as a set; verify
+// each listed model actually returns real tool_calls before trusting
+// this blindly, same caveat as NvidiaModels' own doc comment.
 func SupportsToolsForModel(model string) bool {
 	if _, provider, ok := stripProviderPrefix(model); ok {
-		return provider == "gemini" || provider == "openai" || provider == "deepseek"
+		return provider == "gemini" || provider == "openai" || provider == "nvidia"
 	}
 	return SupportsTools(model)
 }
@@ -310,17 +358,39 @@ var visionCapableModelPrefixes = []string{
 	"gemma4",
 }
 
+// nvidiaVisionModels lists which of NvidiaModels are confirmed to accept
+// image input — unlike Anthropic/OpenAI/Gemini, NVIDIA Build's vision
+// support isn't uniform across every model fastllm offers for that
+// provider (most of NvidiaModels are text-only), so this needs a
+// per-model list rather than a single provider-wide bool the way
+// SupportsVisionForModel handles the other three cloud providers.
+// meta/llama-3.2-11b-vision-instruct was confirmed live (a real chat
+// completion succeeded, ~8s) in the 2026-08-18 sweep documented on
+// NvidiaModels; the previously-listed 90b-vision variant timed out in
+// that same sweep and isn't in the live catalog for this account, so
+// it's been dropped here rather than left as an unverified claim.
+var nvidiaVisionModels = map[string]bool{
+	"meta/llama-3.2-11b-vision-instruct": true,
+}
+
 // SupportsVisionForModel reports whether model (bare local name, or a
 // "provider:"-prefixed cloud model) can accept image input at all — the
 // gate the chat composer uses to decide whether pasting/attaching an
 // image is even offered for the currently selected model. Cloud: every
 // current Anthropic/OpenAI/Gemini model family fastllm offers supports
-// vision; DeepSeek's current hosted chat models (deepseek-v4-flash/-pro)
-// do not. Local: matched against visionCapableModelPrefixes, mirroring
-// SupportsToolsForModel/SupportsTools's local-model gating.
+// vision; NVIDIA Build is per-model (see nvidiaVisionModels) since most
+// models on that platform are text-only. Local: matched against
+// visionCapableModelPrefixes, mirroring SupportsToolsForModel/
+// SupportsTools's local-model gating.
 func SupportsVisionForModel(model string) bool {
-	if _, provider, ok := stripProviderPrefix(model); ok {
-		return provider == "anthropic" || provider == "openai" || provider == "gemini"
+	if bare, provider, ok := stripProviderPrefix(model); ok {
+		switch provider {
+		case "anthropic", "openai", "gemini":
+			return true
+		case "nvidia":
+			return nvidiaVisionModels[bare]
+		}
+		return false
 	}
 	for _, prefix := range visionCapableModelPrefixes {
 		if strings.HasPrefix(model, prefix) {
@@ -328,6 +398,39 @@ func SupportsVisionForModel(model string) bool {
 		}
 	}
 	return false
+}
+
+// openAIErrorBody is the standard OpenAI-compatible error envelope
+// ({"error": {"message": ..., ...}}) — used by OpenAI itself, and (per
+// this file's package doc comment) by every other OpenAI-wire-compatible
+// backend this Client talks to (Ollama, NVIDIA Build). A non-200
+// response's body is the one place a caller actually finds out *why* a
+// request was rejected (bad model ID, an unsupported/unrecognized
+// parameter, a malformed request) rather than just that it was — see
+// StreamChat/Chat below, which previously discarded the body entirely
+// and surfaced only the bare HTTP status line.
+type openAIErrorBody struct {
+	Error struct {
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+// readChatError extracts a useful message from a non-200 chat completion
+// response, preferring the provider's own structured error message (see
+// openAIErrorBody) over the bare HTTP status line, and falling back to
+// the raw response body (capped) if it doesn't parse as that shape —
+// some OpenAI-compatible backends return a plain-text or differently-
+// shaped error body instead.
+func readChatError(resp *http.Response) error {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	var eb openAIErrorBody
+	if json.Unmarshal(body, &eb) == nil && eb.Error.Message != "" {
+		return fmt.Errorf("llm: chat completion failed: %s", eb.Error.Message)
+	}
+	if trimmed := strings.TrimSpace(string(body)); trimmed != "" {
+		return fmt.Errorf("llm: chat completion failed: %s: %s", resp.Status, trimmed)
+	}
+	return fmt.Errorf("llm: chat completion failed: %s", resp.Status)
 }
 
 type chatStreamChunk struct {
@@ -350,7 +453,11 @@ func (c *Client) StreamChat(ctx context.Context, model string, messages []Messag
 	if model == "" {
 		model = c.ChatModel
 	}
-	body, err := json.Marshal(chatRequest{Model: model, Messages: messages, Stream: true, Think: thinkLevel})
+	cr := chatRequest{Model: model, Messages: messages, Stream: true}
+	if c.SendThink {
+		cr.Think = thinkLevel
+	}
+	body, err := json.Marshal(cr)
 	if err != nil {
 		return err
 	}
@@ -371,7 +478,7 @@ func (c *Client) StreamChat(ctx context.Context, model string, messages []Messag
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("llm: chat completion failed: %s", resp.Status)
+		return readChatError(resp)
 	}
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -418,7 +525,11 @@ func (c *Client) Chat(ctx context.Context, model string, messages []Message, too
 	if model == "" {
 		model = c.ChatModel
 	}
-	body, err := json.Marshal(chatRequest{Model: model, Messages: messages, Stream: false, Tools: tools, Think: thinkLevel})
+	creq := chatRequest{Model: model, Messages: messages, Stream: false, Tools: tools}
+	if c.SendThink {
+		creq.Think = thinkLevel
+	}
+	body, err := json.Marshal(creq)
 	if err != nil {
 		return Message{}, err
 	}
@@ -439,7 +550,7 @@ func (c *Client) Chat(ctx context.Context, model string, messages []Message, too
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return Message{}, fmt.Errorf("llm: chat completion failed: %s", resp.Status)
+		return Message{}, readChatError(resp)
 	}
 
 	var cr chatResponse
