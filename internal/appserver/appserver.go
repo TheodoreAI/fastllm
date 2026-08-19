@@ -128,10 +128,12 @@ func Build(cfg Config) (*Built, error) {
 		cloudSettings = store.DefaultCloudProviderSettings
 	}
 	llmRouter := llm.NewRouter(llmClient, llm.CloudProviderConfig{
-		AnthropicAPIKey: cloudSettings.AnthropicAPIKey,
-		OpenAIAPIKey:    cloudSettings.OpenAIAPIKey,
-		GeminiAPIKey:    cloudSettings.GeminiAPIKey,
-		NvidiaAPIKey:    cloudSettings.NvidiaAPIKey,
+		AnthropicAPIKey:     cloudSettings.AnthropicAPIKey,
+		OpenAIAPIKey:        cloudSettings.OpenAIAPIKey,
+		GeminiAPIKey:        cloudSettings.GeminiAPIKey,
+		NvidiaAPIKey:        cloudSettings.NvidiaAPIKey,
+		CloudflareAPIKey:    cloudSettings.CloudflareAPIKey,
+		CloudflareAccountID: cloudSettings.CloudflareAccountID,
 	})
 
 	if err := store.SeedFileAccessSettingsFromEnv(db, cfg.FilesRoot, cfg.FilesWrite); err != nil {

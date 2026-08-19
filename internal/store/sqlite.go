@@ -736,6 +736,14 @@ type CloudProviderSettings struct {
 	OpenAIAPIKey    string `json:"openai_api_key"`
 	GeminiAPIKey    string `json:"gemini_api_key"`
 	NvidiaAPIKey    string `json:"nvidia_api_key"`
+	// CloudflareAPIKey and CloudflareAccountID are both required to reach
+	// Workers AI — unlike the other providers above, Cloudflare's
+	// OpenAI-compatible endpoint is scoped under a per-account URL
+	// (/accounts/{id}/ai/v1/...) rather than identified by the key alone,
+	// so a key with no account ID (or vice versa) isn't enough to build a
+	// working client — see internal/llm.Router.SetCloudProviders.
+	CloudflareAPIKey    string `json:"cloudflare_api_key"`
+	CloudflareAccountID string `json:"cloudflare_account_id"`
 }
 
 var DefaultCloudProviderSettings = CloudProviderSettings{}

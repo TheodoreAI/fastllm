@@ -217,18 +217,62 @@ var OpenAIModels = []string{
 // meta/llama-3.2-11b-vision-instruct is the only one of these confirmed
 // in that same sweep to accept image input — see SupportsVisionForModel
 // and nvidiaVisionModels.
+//
+// Trimmed 2026-08-19 at the user's request from the full 11-model
+// verified set down to one representative per distinct family/use-case,
+// to cut down redundant near-duplicates in the picker (not a failure —
+// every dropped model still worked): llama-3.1-8b-instruct and
+// llama-3.1-70b-instruct were dropped as redundant with the newer
+// llama-3.3-70b-instruct; nemotron-3-super-120b-a12b and
+// llama-3.3-nemotron-super-49b-v1 were dropped as two more Nemotron sizes
+// in between the nano/ultra ends already kept below. If any of these were
+// wanted back, they're known-good as of the sweep above.
 var NvidiaModels = []string{
-	"meta/llama-3.1-8b-instruct",
-	"meta/llama-3.1-70b-instruct",
 	"meta/llama-3.3-70b-instruct",
 	"meta/llama-3.2-11b-vision-instruct",
 	"mistralai/mistral-nemotron",
-	"nvidia/nemotron-3-ultra-550b-a55b",
-	"nvidia/nemotron-3-super-120b-a12b",
 	"nvidia/nemotron-3-nano-30b-a3b",
-	"nvidia/llama-3.3-nemotron-super-49b-v1",
+	"nvidia/nemotron-3-ultra-550b-a55b",
 	"openai/gpt-oss-120b",
 	"z-ai/glm-5.2",
+}
+
+// CloudflareModels lists the models offered in the picker when a
+// Cloudflare Workers AI API token + account ID are configured. UNLIKE
+// NvidiaModels and OpenAIModels above, this list is NOT yet hand-verified
+// against a real account via an actual chat completion — it's seeded from
+// Cloudflare's own docs (developers.cloudflare.com/workers-ai/models/) at
+// setup time. Workers AI ships new models weekly and retires old ones
+// without notice per Cloudflare's own docs, so treat every entry here as
+// provisional until it's been confirmed with a real successful chat
+// completion, the same way NvidiaModels' doc comment describes NVIDIA
+// Build's catalog going stale twice from trusting docs alone. If an entry
+// here 404s or errors, remove it; don't add a new one without testing it
+// first.
+var CloudflareModels = []string{
+	"@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+	// llama-3.1-8b-instruct-fast and llama-3.2-3b-instruct removed
+	// 2026-08-19 at the user's request (keeping the picker to just the
+	// 70B Llama and gpt-5.6-luna below) — not a failure, just trimming
+	// unwanted options.
+	//
+	// deepseek-v4-flash-0731 removed 2026-08-19: confirmed unusable on the
+	// account's current plan tier (needs Workers Paid or prepaid AI
+	// Gateway credits, per Cloudflare's own docs). Don't re-add unless a
+	// real chat completion succeeds against an account actually entitled
+	// to call it.
+	//
+	// gpt-5.6-luna only speaks Cloudflare's Responses API, not Chat
+	// Completions — confirmed via two failed attempts against Chat
+	// Completions (2026-08-19): "@cf/openai/gpt-5.6-luna" 400'd "No such
+	// model" (code 5007), and the bare "openai/gpt-5.6-luna" form 400'd
+	// "Invalid value at input" (code 7003) — the model was found but
+	// rejected the {"messages": [...]} body shape. Routed through
+	// CloudflareResponsesClient instead (see NeedsResponsesAPI in
+	// cloudflare_responses.go and responsesOnlyModels there) using this
+	// same bare "openai/gpt-5.6-luna" ID, which matches the ID Cloudflare's
+	// own docs show for the Responses API.
+	"openai/gpt-5.6-luna",
 }
 
 type tagsResponse struct {

@@ -14,10 +14,11 @@ import (
 // "llama3.1"), unchanged from before cloud providers existed, so existing
 // settings/history referencing a bare model name keep working.
 const (
-	AnthropicPrefix = "anthropic:"
-	OpenAIPrefix    = "openai:"
-	GeminiPrefix    = "gemini:"
-	NvidiaPrefix    = "nvidia:"
+	AnthropicPrefix  = "anthropic:"
+	OpenAIPrefix     = "openai:"
+	GeminiPrefix     = "gemini:"
+	NvidiaPrefix     = "nvidia:"
+	CloudflarePrefix = "cloudflare:"
 )
 
 // CloudProviderConfig is the subset of store.CloudProviderSettings the
@@ -29,6 +30,10 @@ type CloudProviderConfig struct {
 	OpenAIAPIKey    string
 	GeminiAPIKey    string
 	NvidiaAPIKey    string
+	// CloudflareAPIKey and CloudflareAccountID must both be set for
+	// Cloudflare Workers AI to be configured — see SetCloudProviders.
+	CloudflareAPIKey    string
+	CloudflareAccountID string
 }
 
 // cloudClients bundles the four optional cloud clients so Router can
@@ -41,6 +46,14 @@ type cloudClients struct {
 	openai    *Client // OpenAI's real API is wire-compatible with Client
 	gemini    *GeminiClient
 	nvidia    *Client // NVIDIA Build's hosted API is also OpenAI-compatible — see OpenAIModels's doc comment
+	cloudflare *Client // Workers AI's /ai/v1/chat/completions endpoint is also OpenAI-compatible — see CloudflareModels's doc comment
+	// cloudflareResponses talks to Workers AI's /ai/v1/responses endpoint
+	// instead — a handful of newer models (see responsesOnlyModels in
+	// cloudflare_responses.go) reject the plain Chat Completions body
+	// entirely. Built alongside cloudflare above from the same API
+	// token/account ID; Router.StreamChat/Chat picks between the two per
+	// model via NeedsResponsesAPI.
+	cloudflareResponses *CloudflareResponsesClient
 }
 
 // Router dispatches chat requests to the local OpenAI-compatible backend
@@ -87,6 +100,11 @@ func (r *Router) SetCloudProviders(cloud CloudProviderConfig) {
 	if cloud.NvidiaAPIKey != "" {
 		next.nvidia = New("https://integrate.api.nvidia.com/v1", cloud.NvidiaAPIKey, "", "")
 	}
+	if cloud.CloudflareAPIKey != "" && cloud.CloudflareAccountID != "" {
+		cloudflareBaseURL := "https://api.cloudflare.com/client/v4/accounts/" + cloud.CloudflareAccountID + "/ai/v1"
+		next.cloudflare = New(cloudflareBaseURL, cloud.CloudflareAPIKey, "", "")
+		next.cloudflareResponses = NewCloudflareResponsesClient(cloudflareBaseURL, cloud.CloudflareAPIKey)
+	}
 	r.mu.Lock()
 	r.clouds = next
 	r.mu.Unlock()
@@ -106,6 +124,8 @@ func stripProviderPrefix(model string) (bare, provider string, ok bool) {
 		return strings.TrimPrefix(model, GeminiPrefix), "gemini", true
 	case strings.HasPrefix(model, NvidiaPrefix):
 		return strings.TrimPrefix(model, NvidiaPrefix), "nvidia", true
+	case strings.HasPrefix(model, CloudflarePrefix):
+		return strings.TrimPrefix(model, CloudflarePrefix), "cloudflare", true
 	default:
 		return "", "", false
 	}
@@ -142,6 +162,14 @@ func (r *Router) StreamChat(ctx context.Context, model string, messages []Messag
 			return fmt.Errorf("llm: NVIDIA Build isn't configured — add an API key in Settings → Cloud providers")
 		}
 		return clouds.nvidia.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning)
+	case "cloudflare":
+		if clouds.cloudflare == nil {
+			return fmt.Errorf("llm: Cloudflare Workers AI isn't configured — add an API token and account ID in Settings → Cloud providers")
+		}
+		if NeedsResponsesAPI(bare) {
+			return clouds.cloudflareResponses.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning)
+		}
+		return clouds.cloudflare.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning)
 	}
 	return fmt.Errorf("llm: unknown provider for model %q", model)
 }
@@ -184,6 +212,8 @@ func (r *Router) Chat(ctx context.Context, model string, messages []Message, too
 		return clouds.nvidia.Chat(ctx, bare, messages, tools, thinkLevel)
 	case "anthropic":
 		return Message{}, fmt.Errorf("llm: file read/write tools aren't supported for Anthropic models yet")
+	case "cloudflare":
+		return Message{}, fmt.Errorf("llm: file read/write tools aren't supported for Cloudflare Workers AI models yet")
 	}
 	return Message{}, fmt.Errorf("llm: unknown provider for model %q", model)
 }
@@ -251,6 +281,12 @@ func (r *Router) ListModels(ctx context.Context) ([]Model, error) {
 		for _, name := range NvidiaModels {
 			full := NvidiaPrefix + name
 			out = append(out, Model{Name: full, SupportsFileTools: SupportsToolsForModel(full), SupportsVision: SupportsVisionForModel(full), Provider: "nvidia"})
+		}
+	}
+	if clouds.cloudflare != nil {
+		for _, name := range CloudflareModels {
+			full := CloudflarePrefix + name
+			out = append(out, Model{Name: full, SupportsFileTools: SupportsToolsForModel(full), SupportsVision: SupportsVisionForModel(full), Provider: "cloudflare"})
 		}
 	}
 	return out, nil

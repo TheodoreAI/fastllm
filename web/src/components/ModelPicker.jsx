@@ -13,6 +13,7 @@ const PROVIDER_LABELS = {
   openai: 'OpenAI (ChatGPT)',
   gemini: 'Google (Gemini)',
   nvidia: 'NVIDIA Build',
+  cloudflare: 'Cloudflare Workers AI',
 }
 
 function groupModels(models) {
