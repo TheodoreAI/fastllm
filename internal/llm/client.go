@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -149,11 +150,119 @@ func New(baseURL, apiKey, chatModel, embedModel string) *Client {
 }
 
 type chatRequest struct {
-	Model    string    `json:"model"`
-	Messages []Message `json:"messages"`
-	Stream   bool      `json:"stream"`
-	Tools    []Tool    `json:"tools,omitempty"`
-	Think    string    `json:"think,omitempty"`
+	Model         string             `json:"model"`
+	Messages      []Message          `json:"messages"`
+	Stream        bool               `json:"stream"`
+	Tools         []Tool             `json:"tools,omitempty"`
+	Think         string             `json:"think,omitempty"`
+	StreamOptions *chatStreamOptions `json:"stream_options,omitempty"`
+}
+
+// chatStreamOptions requests the extra usage-bearing final chunk on a
+// streaming completion (see chatStreamChunk.Usage) — off by default on
+// the OpenAI-compatible wire format, so it must be asked for explicitly.
+// Only meaningful when Stream is true; omitted entirely from non-streaming
+// requests via omitempty since chatRequest's zero value leaves this nil.
+type chatStreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
+}
+
+// Usage is fastllm's provider-agnostic token count for one completion,
+// translated from whatever shape a given provider's API reports it in
+// (OpenAI-wire's "usage", Gemini's "usageMetadata", Anthropic's
+// message_start/message_delta input_tokens/output_tokens, or the
+// Responses API's response.usage). Zero-valued (all fields 0) means "no
+// usage reported for this request" — callers should treat that as
+// "unknown," not "zero tokens used."
+type Usage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+
+	// RateLimit is nil when the backend's HTTP response carried none of
+	// the rate-limit headers this parses — a local Ollama server, or any
+	// provider whose header contract isn't confirmed (see
+	// parseRateLimitHeaders), simply never sets this rather than reporting
+	// a misleading zero.
+	RateLimit *RateLimit `json:"rate_limit,omitempty"`
+}
+
+// RateLimit is fastllm's provider-agnostic view of the remaining-capacity
+// headers a cloud API attaches to every response (not the JSON body —
+// these ride on the HTTP response itself, confirmed present on OpenAI's
+// and Anthropic's APIs: x-ratelimit-remaining-{requests,tokens} and
+// anthropic-ratelimit-{requests,input-tokens,output-tokens}-remaining
+// respectively — see parseRateLimitHeaders/parseAnthropicRateLimitHeaders).
+// OpenAI-wire reports one combined "tokens" figure; Anthropic tracks
+// input/output tokens against independent limits, so both are kept here
+// rather than collapsed into one number — a provider that only reports
+// the combined figure (OpenAI-wire) sets TokensRemaining/TokensLimit and
+// leaves Input/OutputTokens* zero; Anthropic sets Input/OutputTokens* and
+// leaves the combined pair zero. Callers should check which pair is
+// populated rather than assuming both are always present.
+type RateLimit struct {
+	RequestsRemaining int `json:"requests_remaining"`
+	RequestsLimit     int `json:"requests_limit"`
+	TokensRemaining   int `json:"tokens_remaining"`
+	TokensLimit       int `json:"tokens_limit"`
+
+	InputTokensRemaining  int `json:"input_tokens_remaining,omitempty"`
+	InputTokensLimit      int `json:"input_tokens_limit,omitempty"`
+	OutputTokensRemaining int `json:"output_tokens_remaining,omitempty"`
+	OutputTokensLimit     int `json:"output_tokens_limit,omitempty"`
+}
+
+// parseRateLimitHeaders reads OpenAI-wire's x-ratelimit-* response
+// headers (confirmed present on OpenAI's own API; NVIDIA Build and
+// Cloudflare Workers AI proxy the same OpenAI-compatible wire format but
+// their own header support isn't confirmed, so this simply returns nil
+// when the headers are absent rather than guessing). Local Ollama never
+// sends these either, so a local chat naturally gets no RateLimit.
+func parseRateLimitHeaders(h http.Header) *RateLimit {
+	reqRemaining, reqOK := parseHeaderInt(h, "x-ratelimit-remaining-requests")
+	reqLimit, _ := parseHeaderInt(h, "x-ratelimit-limit-requests")
+	tokRemaining, tokOK := parseHeaderInt(h, "x-ratelimit-remaining-tokens")
+	tokLimit, _ := parseHeaderInt(h, "x-ratelimit-limit-tokens")
+	if !reqOK && !tokOK {
+		return nil
+	}
+	return &RateLimit{RequestsRemaining: reqRemaining, RequestsLimit: reqLimit, TokensRemaining: tokRemaining, TokensLimit: tokLimit}
+}
+
+func parseHeaderInt(h http.Header, key string) (int, bool) {
+	v := h.Get(key)
+	if v == "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+// parseAnthropicRateLimitHeaders reads Anthropic's anthropic-ratelimit-*
+// response headers — see RateLimit's doc comment for why input/output
+// tokens are kept separate here rather than collapsed into one figure the
+// way OpenAI-wire's parseRateLimitHeaders does.
+func parseAnthropicRateLimitHeaders(h http.Header) *RateLimit {
+	reqRemaining, reqOK := parseHeaderInt(h, "anthropic-ratelimit-requests-remaining")
+	reqLimit, _ := parseHeaderInt(h, "anthropic-ratelimit-requests-limit")
+	inRemaining, inOK := parseHeaderInt(h, "anthropic-ratelimit-input-tokens-remaining")
+	inLimit, _ := parseHeaderInt(h, "anthropic-ratelimit-input-tokens-limit")
+	outRemaining, outOK := parseHeaderInt(h, "anthropic-ratelimit-output-tokens-remaining")
+	outLimit, _ := parseHeaderInt(h, "anthropic-ratelimit-output-tokens-limit")
+	if !reqOK && !inOK && !outOK {
+		return nil
+	}
+	return &RateLimit{
+		RequestsRemaining:     reqRemaining,
+		RequestsLimit:         reqLimit,
+		InputTokensRemaining:  inRemaining,
+		InputTokensLimit:      inLimit,
+		OutputTokensRemaining: outRemaining,
+		OutputTokensLimit:     outLimit,
+	}
 }
 
 // Model describes one chat-capable model available on the backend.
@@ -547,20 +656,33 @@ type chatStreamChunk struct {
 			Reasoning string `json:"reasoning"`
 		} `json:"delta"`
 	} `json:"choices"`
+	// Usage only arrives on the final chunk of a stream, and only when the
+	// request carried stream_options.include_usage — see chatRequest.
+	// Ollama's own OpenAI-compatible endpoint has been observed to include
+	// it even without that flag being set, but real OpenAI-wire clouds
+	// (OpenAI, NVIDIA Build, Cloudflare) don't, so StreamChat always sends
+	// it explicitly rather than relying on a per-backend default.
+	Usage *struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+		TotalTokens      int `json:"total_tokens"`
+	} `json:"usage"`
 }
 
 // StreamChat sends messages to the chat completion endpoint and calls
-// onToken for every incremental piece of answer text, and onReasoning (if
+// onToken for every incremental piece of answer text, onReasoning (if
 // non-nil) for every incremental piece of a thinking-capable model's
-// reasoning trace, as they stream in. Ollama's OpenAI-compatible endpoint
-// sends reasoning as a "reasoning" delta field alongside "content", ahead
-// of and separate from the actual answer; models without thinking support
-// simply never populate it. If model is empty, c.ChatModel is used.
-func (c *Client) StreamChat(ctx context.Context, model string, messages []Message, thinkLevel string, onToken func(string), onReasoning func(string)) error {
+// reasoning trace, and onUsage (if non-nil, at most once, after streaming
+// finishes) with the completion's token counts if the backend reported
+// any. Ollama's OpenAI-compatible endpoint sends reasoning as a
+// "reasoning" delta field alongside "content", ahead of and separate from
+// the actual answer; models without thinking support simply never
+// populate it. If model is empty, c.ChatModel is used.
+func (c *Client) StreamChat(ctx context.Context, model string, messages []Message, thinkLevel string, onToken func(string), onReasoning func(string), onUsage func(Usage)) error {
 	if model == "" {
 		model = c.ChatModel
 	}
-	cr := chatRequest{Model: model, Messages: messages, Stream: true}
+	cr := chatRequest{Model: model, Messages: messages, Stream: true, StreamOptions: &chatStreamOptions{IncludeUsage: true}}
 	if c.SendThink {
 		cr.Think = thinkLevel
 	}
@@ -588,6 +710,12 @@ func (c *Client) StreamChat(ctx context.Context, model string, messages []Messag
 		return readChatError(resp)
 	}
 
+	// Rate-limit headers arrive on the response itself, available the
+	// instant it comes back — no need to wait for the body to finish
+	// streaming. See parseRateLimitHeaders's doc comment for which
+	// providers actually send these.
+	rateLimit := parseRateLimitHeaders(resp.Header)
+
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
@@ -610,6 +738,14 @@ func (c *Client) StreamChat(ctx context.Context, model string, messages []Messag
 			if chunk.Choices[0].Delta.Reasoning != "" && onReasoning != nil {
 				onReasoning(chunk.Choices[0].Delta.Reasoning)
 			}
+		}
+		if chunk.Usage != nil && onUsage != nil {
+			onUsage(Usage{
+				PromptTokens:     chunk.Usage.PromptTokens,
+				CompletionTokens: chunk.Usage.CompletionTokens,
+				TotalTokens:      chunk.Usage.TotalTokens,
+				RateLimit:        rateLimit,
+			})
 		}
 	}
 	return scanner.Err()

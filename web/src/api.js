@@ -549,6 +549,8 @@ export async function streamChat({ message, model, skillId, conversationId, thin
           callbacks.onSources?.(payload.sources)
         } else if (eventType === 'reasoning' && payload.reasoning) {
           callbacks.onReasoning?.(payload.reasoning)
+        } else if (eventType === 'usage') {
+          callbacks.onUsage?.(payload)
         } else if (eventType === 'tool_call') {
           callbacks.onToolCall?.(payload)
         } else if (eventType === 'pending_write') {
