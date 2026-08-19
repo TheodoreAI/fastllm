@@ -51,7 +51,15 @@ func (menuTheme) SetDark(dark bool) {
 	// Best-effort: these are undocumented ordinal exports with no
 	// compile-time signature guarantee, so a mismatched uxtheme.dll on
 	// some future Windows build failing here should degrade to "menu
-	// stays light," never a crash.
+	// stays light," never a crash. Confirmed via direct testing
+	// (2026-08-18) that these ordinals no longer resolve at all on a
+	// recent Windows 11 build (10.0.26200) — every ordinal export in
+	// uxtheme.dll failed to resolve while a named export in the same DLL
+	// resolved fine, meaning Microsoft has locked down ordinal-only
+	// exports on that build specifically, not just renumbered #135/#136.
+	// This whole approach may simply stop working across the Windows
+	// fleet as that change rolls out more broadly — recover() is what
+	// keeps that a silent no-op instead of a crash.
 	defer func() { _ = recover() }()
 
 	mode := uintptr(appModeAllowDark)

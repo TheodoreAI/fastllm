@@ -203,6 +203,7 @@ func Build(cfg Config) (*Built, error) {
 	mux.HandleFunc("GET /api/editor/git/diff", handler.EditorGitDiff)
 	mux.HandleFunc("POST /api/editor/git/stage", handler.EditorGitStage)
 	mux.HandleFunc("POST /api/editor/git/unstage", handler.EditorGitUnstage)
+	mux.HandleFunc("POST /api/editor/git/discard", handler.EditorGitDiscard)
 	mux.HandleFunc("POST /api/editor/git/commit", handler.EditorGitCommit)
 	mux.HandleFunc("POST /api/editor/git/push", handler.EditorGitPush)
 	mux.HandleFunc("POST /api/editor/git/push-set-upstream", handler.EditorGitPushSetUpstream)

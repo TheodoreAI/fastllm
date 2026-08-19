@@ -3048,6 +3048,19 @@ body {
   cursor: default;
 }
 
+/* Discard selected — the one destructive action among Stage/Unstage
+   selected, so it gets a red-tinted outline instead of the neutral
+   .editor-git-actions button styling both of those keep, without going
+   as loud as the solid .btn-danger used in the confirm modal itself. */
+.editor-git-actions button.btn-danger-outline {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.editor-git-actions button.btn-danger-outline:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 12%, var(--bg-panel));
+}
+
 .editor-panel-body h4 {
   margin: 6px 2px 0;
   font-size: 0.6875rem;
