@@ -338,9 +338,20 @@ func containsString(list []string, s string) bool {
 // parseFallbackToolCall) — so file read/write access is only offered to
 // models on this allowlist, matched by name prefix (e.g. "gemma4" matches
 // "gemma4:12b").
+//
+// "qwen3.5" added 2026-08-19 after verifying qwen3.5:9b directly against
+// /v1/chat/completions: a read_file request returned real
+// finish_reason:"tool_calls" with correctly-shaped arguments, and a
+// second request simulating the tool-result round-trip correctly
+// consumed the result and gave a clean final answer (no redundant re-
+// calls). yi-coder:9b was checked the same way and rejected outright by
+// Ollama ("does not support tools") — it has no tools capability at all
+// (confirmed via /api/tags: capabilities is ["completion"] only) and is
+// deliberately NOT on this list.
 var toolCapableModelPrefixes = []string{
 	"gemma4",
 	"gpt-oss",
+	"qwen3.5",
 }
 
 // SupportsToolsForModel reports whether model (bare local name, or a
@@ -364,21 +375,39 @@ var toolCapableModelPrefixes = []string{
 // each listed model actually returns real tool_calls before trusting
 // this blindly, same caveat as NvidiaModels' own doc comment.
 //
-// Cloudflare is a partial exception to the "whole provider" rule above:
-// only openai/gpt-5.6-luna is allowlisted, via NeedsResponsesAPI — its
-// Responses-API function-calling translation is implemented (see
-// CloudflareResponsesClient.Chat in cloudflare_responses.go), but the
-// other Cloudflare models (Chat-Completions-based, see CloudflareModels)
-// haven't been verified to reliably emit real tool_calls, so they stay
-// excluded until that's checked, same caution as NvidiaModels above.
+// Cloudflare is a partial exception to the "whole provider" rule above —
+// tool support is allowlisted per model, not for the whole provider, via
+// cloudflareToolCapableModels below.
 func SupportsToolsForModel(model string) bool {
 	if bare, provider, ok := stripProviderPrefix(model); ok {
 		if provider == "cloudflare" {
-			return NeedsResponsesAPI(bare)
+			return cloudflareToolCapableModels[bare]
 		}
 		return provider == "gemini" || provider == "openai" || provider == "nvidia"
 	}
 	return SupportsTools(model)
+}
+
+// cloudflareToolCapableModels lists which CloudflareModels entries are
+// confirmed, via a real tool-calling request against a live account, to
+// reliably return proper structured tool_calls rather than writing the
+// call out as plain text.
+//
+//   - "@cf/meta/llama-3.3-70b-instruct-fp8-fast": confirmed 2026-08-19 —
+//     a real read_file request returned finish_reason:"tool_calls" with
+//     correctly-shaped function.arguments on every round (4 rounds, one
+//     redundant re-read of the same file each time — a model-behavior
+//     quirk bounded by maxToolRounds, not a wiring problem — but every
+//     round used real tool_calls, never the parseFallbackToolCall path).
+//   - "openai/gpt-5.6-luna": tool-capable via the Responses API, not this
+//     Chat-Completions path — see NeedsResponsesAPI/
+//     CloudflareResponsesClient.Chat instead; not listed here.
+//
+// Every other CloudflareModels entry is unverified and stays excluded
+// until checked the same way, same caution as NvidiaModels' own doc
+// comment.
+var cloudflareToolCapableModels = map[string]bool{
+	"@cf/meta/llama-3.3-70b-instruct-fp8-fast": true,
 }
 
 // SupportsTools reports whether model is on the allowlist of models
