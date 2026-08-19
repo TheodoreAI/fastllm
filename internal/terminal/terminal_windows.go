@@ -3,12 +3,44 @@
 package terminal
 
 import (
+	"log"
 	"sync"
 	"unsafe"
 
 	"github.com/UserExistsError/conpty"
 	"golang.org/x/sys/windows"
 )
+
+// setConsoleCtrlHandler is unwrapped by golang.org/x/sys/windows, so it's
+// declared directly against kernel32.dll here — same approach
+// jobobject_windows.go uses for its own handful of raw Job Object calls.
+var (
+	modKernel32Ctrl           = windows.NewLazySystemDLL("kernel32.dll")
+	procSetConsoleCtrlHandler = modKernel32Ctrl.NewProc("SetConsoleCtrlHandler")
+)
+
+// restoreDefaultCtrlCHandling calls SetConsoleCtrlHandler(NULL, FALSE),
+// which un-installs any Ctrl+C/Ctrl+Break handler fastllm.exe's own
+// process (or the Go runtime, which installs one implicitly) may have
+// registered on its console. Without this, a raw 0x03 byte written into
+// ConPTY's input pipe is delivered as a CTRL_C_EVENT to fastllm's own
+// console process group first — where a registered handler can consume it
+// — rather than propagating down into whatever foreign child process
+// (ping, npm, python, a long-running script, etc.) is currently running
+// inside the pseudoconsole, which is the actual target the user is trying
+// to interrupt. This is the same fix VS Code's node-pty applies
+// immediately after spawning its own ConPTY host (see PtyStartProcess in
+// node-pty's src/win/conpty.cc) — confirmed 2026-08-19 against node-pty's
+// current source after a user reported Ctrl+C not stopping a child
+// process (but working fine against an idle PowerShell prompt) in
+// fastllm's own terminal, which is exactly this failure mode.
+func restoreDefaultCtrlCHandling() error {
+	ret, _, err := procSetConsoleCtrlHandler.Call(0, 0)
+	if ret == 0 {
+		return err
+	}
+	return nil
+}
 
 // conptySession adapts *conpty.ConPty to the Session interface — mainly so
 // handler.go never imports conpty directly, keeping the Windows-only
@@ -78,6 +110,14 @@ func start(cols, rows int, workDir string) (Session, error) {
 		return nil, err
 	}
 
+	// Best-effort, same reasoning as the Job Object below: if this fails,
+	// Ctrl+C still works for interrupting PowerShell's own idle prompt —
+	// it just may not reliably reach a foreign child process running
+	// inside the session, same as before this call existed.
+	if err := restoreDefaultCtrlCHandling(); err != nil {
+		log.Printf("terminal: SetConsoleCtrlHandler(NULL, FALSE) failed, Ctrl+C may not reach child processes: %v", err)
+	}
+
 	// Best-effort: a shell that isn't placed under the job still works
 	// exactly as before (relying on ConPTY pipe teardown to end it), so a
 	// failure here shouldn't fail the whole session — it only means the
@@ -96,7 +136,7 @@ func start(cols, rows int, workDir string) (Session, error) {
 
 func (s *conptySession) Read(p []byte) (int, error)  { return s.cpty.Read(p) }
 func (s *conptySession) Write(p []byte) (int, error) { return s.cpty.Write(p) }
-func (s *conptySession) Resize(cols, rows int) error  { return s.cpty.Resize(cols, rows) }
+func (s *conptySession) Resize(cols, rows int) error { return s.cpty.Resize(cols, rows) }
 
 func (s *conptySession) Close() error {
 	var err error
