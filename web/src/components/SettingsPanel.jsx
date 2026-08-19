@@ -6,6 +6,7 @@ import { browseForFolder, isWails } from '../api'
 import { useEscapeKey } from '../useEscapeKey'
 import { useSettingsExpanded } from '../useSettingsExpanded'
 import ConfirmDeleteModal from './ConfirmDeleteModal'
+import GroupedDropdown from './GroupedDropdown'
 
 // __APP_VERSION__ / __BUILD_TIME__ are baked in at build time by
 // vite.config.js from package.json + the build clock — see there for why.
@@ -304,21 +305,16 @@ export default function SettingsPanel({
 
         <label className="settings-field">
           <span>Font</span>
-          <select
-            className="model-select"
+          <GroupedDropdown
+            groups={FONT_OPTIONS.map((group) => ({
+              key: group.group,
+              label: group.group,
+              options: group.choices.map((choice) => ({ value: choice.value, label: choice.label })),
+            }))}
             value={fontFamily}
-            onChange={(e) => onFontFamilyChange(e.target.value)}
-          >
-            {FONT_OPTIONS.map((group) => (
-              <optgroup key={group.group} label={group.group}>
-                {group.choices.map((choice) => (
-                  <option key={choice.label} value={choice.value}>
-                    {choice.label}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
+            onChange={onFontFamilyChange}
+            placeholder="Select a font"
+          />
         </label>
 
         <label className="settings-field">

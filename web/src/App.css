@@ -1394,6 +1394,111 @@ body {
   opacity: 0.5;
 }
 
+.model-select option {
+  font-weight: 400;
+  color: var(--text);
+  background: var(--bg-panel);
+}
+
+/* Custom dropdown replacing the main model <select> — see ModelDropdown
+   in ModelPicker.jsx for why: a native <select> popup's internal
+   scrollbar is OS-rendered and narrows/shifts the popup once the (now
+   grouped, potentially long) model list needs to scroll, and nothing in
+   page CSS can reach inside that popup to fix it. This list is plain
+   markup instead, so it gets this app's own scrollbar and layout. */
+.model-dropdown {
+  position: relative;
+}
+
+.model-dropdown-trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: color-mix(in srgb, var(--bg-panel), var(--text) 6%);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+  font-size: 0.8125rem;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.model-dropdown-trigger:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.model-dropdown-trigger:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.model-dropdown-trigger-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-dropdown-caret {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-right: 1.5px solid var(--text-dim);
+  border-bottom: 1.5px solid var(--text-dim);
+  transform: rotate(45deg) translateY(-2px);
+}
+
+.model-dropdown-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-overlay);
+}
+
+.model-dropdown-group-label {
+  padding: 6px 8px 4px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-faint);
+}
+
+.model-dropdown-option {
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 0.8125rem;
+  color: var(--text);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-dropdown-option:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.model-dropdown-option.is-selected {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  color: var(--text);
+  font-weight: 600;
+}
+
 .model-completion-field {
   display: flex;
   flex-direction: column;

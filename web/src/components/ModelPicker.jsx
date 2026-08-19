@@ -1,3 +1,5 @@
+import GroupedDropdown from './GroupedDropdown'
+
 // Display labels only — purely presentational, so hardcoding these here
 // is fine. What's NOT hardcoded here is the "provider:" name prefix
 // itself (e.g. "anthropic:") or which models belong to which provider:
@@ -32,6 +34,27 @@ function groupModels(models) {
   return { local, cloud }
 }
 
+// Shapes {local, cloud} (see groupModels above) into GroupedDropdown's
+// generic groups format.
+function toDropdownGroups(local, cloud) {
+  const groups = []
+  if (local.length > 0) {
+    groups.push({
+      key: 'local',
+      label: 'Local models',
+      options: local.map((m) => ({ value: m.name, label: m.name })),
+    })
+  }
+  for (const group of cloud) {
+    groups.push({
+      key: group.provider,
+      label: group.label,
+      options: group.models.map((m) => ({ value: m.name, label: m.name.slice(m.name.indexOf(':') + 1) })),
+    })
+  }
+  return groups
+}
+
 export default function ModelPicker({
   models,
   model,
@@ -57,28 +80,13 @@ export default function ModelPicker({
   return (
     <section className="panel">
       <h2>Model</h2>
-      <select
-        className="model-select"
+      <GroupedDropdown
+        groups={toDropdownGroups(local, cloud)}
         value={model}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={onChange}
         disabled={models.length === 0}
-      >
-        {models.length === 0 && <option>Default</option>}
-        {local.map((m) => (
-          <option key={m.name} value={m.name}>
-            {m.name}
-          </option>
-        ))}
-        {cloud.map((group) => (
-          <optgroup key={group.provider} label={group.label}>
-            {group.models.map((m) => (
-              <option key={m.name} value={m.name}>
-                {m.name.slice(m.name.indexOf(':') + 1)}
-              </option>
-            ))}
-          </optgroup>
-        ))}
-      </select>
+        placeholder={models.length === 0 ? 'Default' : 'Select a model'}
+      />
 
       {local.length > 0 && (
         <label className="model-completion-field">
