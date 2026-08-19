@@ -821,14 +821,19 @@ type cloudProviderSettingsResponse struct {
 	OpenAIConfigured    bool `json:"openai_configured"`
 	GeminiConfigured    bool `json:"gemini_configured"`
 	NvidiaConfigured    bool `json:"nvidia_configured"`
+	// CloudflareConfigured requires both the API token and account ID to
+	// be set — a token with no account ID (or vice versa) can't build a
+	// working client, see llm.Router.SetCloudProviders.
+	CloudflareConfigured bool `json:"cloudflare_configured"`
 }
 
 func toCloudProviderSettingsResponse(s store.CloudProviderSettings) cloudProviderSettingsResponse {
 	return cloudProviderSettingsResponse{
-		AnthropicConfigured: s.AnthropicAPIKey != "",
-		OpenAIConfigured:    s.OpenAIAPIKey != "",
-		GeminiConfigured:    s.GeminiAPIKey != "",
-		NvidiaConfigured:    s.NvidiaAPIKey != "",
+		AnthropicConfigured:  s.AnthropicAPIKey != "",
+		OpenAIConfigured:     s.OpenAIAPIKey != "",
+		GeminiConfigured:     s.GeminiAPIKey != "",
+		NvidiaConfigured:     s.NvidiaAPIKey != "",
+		CloudflareConfigured: s.CloudflareAPIKey != "" && s.CloudflareAccountID != "",
 	}
 }
 
@@ -843,10 +848,12 @@ func toCloudProviderSettingsResponse(s store.CloudProviderSettings) cloudProvide
 // provider's key survives an unrelated field's edit is for "didn't send
 // it" to mean "don't touch it" rather than "clear it".
 type cloudProviderSettingsRequest struct {
-	AnthropicAPIKey *string `json:"anthropic_api_key"`
-	OpenAIAPIKey    *string `json:"openai_api_key"`
-	GeminiAPIKey    *string `json:"gemini_api_key"`
-	NvidiaAPIKey    *string `json:"nvidia_api_key"`
+	AnthropicAPIKey     *string `json:"anthropic_api_key"`
+	OpenAIAPIKey        *string `json:"openai_api_key"`
+	GeminiAPIKey        *string `json:"gemini_api_key"`
+	NvidiaAPIKey        *string `json:"nvidia_api_key"`
+	CloudflareAPIKey    *string `json:"cloudflare_api_key"`
+	CloudflareAccountID *string `json:"cloudflare_account_id"`
 }
 
 // UpdateCloudProviderSettings merges the given fields into the persisted
@@ -880,16 +887,24 @@ func (h *Handler) UpdateCloudProviderSettings(w http.ResponseWriter, r *http.Req
 	if req.NvidiaAPIKey != nil {
 		settings.NvidiaAPIKey = *req.NvidiaAPIKey
 	}
+	if req.CloudflareAPIKey != nil {
+		settings.CloudflareAPIKey = *req.CloudflareAPIKey
+	}
+	if req.CloudflareAccountID != nil {
+		settings.CloudflareAccountID = *req.CloudflareAccountID
+	}
 
 	if err := store.SaveCloudProviderSettings(h.DB, settings); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	h.LLM.SetCloudProviders(llm.CloudProviderConfig{
-		AnthropicAPIKey: settings.AnthropicAPIKey,
-		OpenAIAPIKey:    settings.OpenAIAPIKey,
-		GeminiAPIKey:    settings.GeminiAPIKey,
-		NvidiaAPIKey:    settings.NvidiaAPIKey,
+		AnthropicAPIKey:     settings.AnthropicAPIKey,
+		OpenAIAPIKey:        settings.OpenAIAPIKey,
+		GeminiAPIKey:        settings.GeminiAPIKey,
+		NvidiaAPIKey:        settings.NvidiaAPIKey,
+		CloudflareAPIKey:    settings.CloudflareAPIKey,
+		CloudflareAccountID: settings.CloudflareAccountID,
 	})
 	writeJSON(w, toCloudProviderSettingsResponse(settings))
 }

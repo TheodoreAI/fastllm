@@ -23,18 +23,71 @@ var AnthropicModels = []string{
 	"claude-haiku-4-5-20251001",
 }
 
-// AnthropicClient talks to Anthropic's native Messages API
-// (api.anthropic.com/v1/messages), which is not OpenAI-wire-compatible:
-// different request/response shape, a top-level "system" field instead of
-// a system-role message, its own SSE event framing, and an
-// x-api-key/anthropic-version header pair instead of Bearer auth.
+// cloudflareAnthropicModels lists which bare CloudflareModels entries are
+// Claude models served through Workers AI's unified catalog — these speak
+// Anthropic's native Messages wire format (POST {baseURL}/messages), not
+// the OpenAI-compatible Chat Completions format the rest of
+// CloudflareModels uses, so Router routes them to cloudflareAnthropic
+// instead of the plain cloudflare *Client. Confirmed via Cloudflare's own
+// docs (developers.cloudflare.com/ai/models/anthropic/claude-haiku-4.5/,
+// 2026-08-19): endpoint is /accounts/{id}/ai/v1/messages, auth is a plain
+// Cloudflare Bearer token (no separate Anthropic key needed), and the
+// model advertises tool support.
+var cloudflareAnthropicModels = map[string]bool{
+	"anthropic/claude-haiku-4.5": true,
+}
+
+// NeedsAnthropicAPI reports whether a bare Cloudflare model name must go
+// through the Anthropic Messages wire format rather than Chat Completions.
+func NeedsAnthropicAPI(bareModel string) bool {
+	return cloudflareAnthropicModels[bareModel]
+}
+
+// AnthropicClient talks to Anthropic's native Messages API, which is not
+// OpenAI-wire-compatible: different request/response shape, a top-level
+// "system" field instead of a system-role message, its own SSE event
+// framing, and (for Anthropic's own API) an x-api-key/anthropic-version
+// header pair instead of Bearer auth. The same wire format is also how
+// Cloudflare Workers AI's unified model catalog exposes its hosted copy of
+// Claude models (POST {baseURL}/ai/v1/messages with a Cloudflare Bearer
+// token instead of an Anthropic key) — CloudflareBearer/BaseURL below
+// exist so one implementation serves both, the same pattern ResponsesClient
+// uses for OpenAI's own API vs. Cloudflare's hosted copy of gpt-5.6-luna.
 type AnthropicClient struct {
-	APIKey     string
-	HTTPClient *http.Client
+	// BaseURL is the full Messages endpoint URL. Defaults to Anthropic's
+	// own API when empty (see messagesURL) — only set for a
+	// Cloudflare-routed instance.
+	BaseURL string
+	APIKey  string
+	// CloudflareBearer, when true, sends APIKey as a plain
+	// "Authorization: Bearer" header (Cloudflare's own auth scheme)
+	// instead of Anthropic's x-api-key/anthropic-version header pair.
+	CloudflareBearer bool
+	HTTPClient       *http.Client
 }
 
 func NewAnthropicClient(apiKey string) *AnthropicClient {
 	return &AnthropicClient{APIKey: apiKey, HTTPClient: &http.Client{Timeout: 5 * time.Minute}}
+}
+
+// NewCloudflareAnthropicClient builds an AnthropicClient pointed at
+// Cloudflare Workers AI's unified catalog endpoint for its hosted copy of
+// Claude models (e.g. "anthropic/claude-haiku-4.5"), authenticated with
+// the Cloudflare API token rather than an Anthropic key.
+func NewCloudflareAnthropicClient(baseURL, cloudflareToken string) *AnthropicClient {
+	return &AnthropicClient{
+		BaseURL:          baseURL + "/messages",
+		APIKey:           cloudflareToken,
+		CloudflareBearer: true,
+		HTTPClient:       &http.Client{Timeout: 5 * time.Minute},
+	}
+}
+
+func (c *AnthropicClient) messagesURL() string {
+	if c.BaseURL != "" {
+		return c.BaseURL
+	}
+	return "https://api.anthropic.com/v1/messages"
 }
 
 const anthropicAPIVersion = "2023-06-01"
@@ -54,6 +107,15 @@ type anthropicContentBlock struct {
 	Type   string                `json:"type"`
 	Text   string                `json:"text,omitempty"`
 	Source *anthropicImageSource `json:"source,omitempty"`
+	// tool_use fields (assistant -> API, describing a call the model wants
+	// to make) and tool_result fields (API -> assistant on the next turn,
+	// carrying that call's output) — see anthropicBlocksFor/toToolCalls for
+	// how these round-trip through fastllm's provider-agnostic ToolCall.
+	ID        string          `json:"id,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Input     json.RawMessage `json:"input,omitempty"`
+	ToolUseID string          `json:"tool_use_id,omitempty"`
+	Content   string          `json:"content,omitempty"`
 }
 
 type anthropicImageSource struct {
@@ -79,13 +141,37 @@ func collapseIfPlainText(blocks []anthropicContentBlock) any {
 }
 
 // anthropicBlocksFor converts one fastllm Message into Anthropic content
-// blocks — a leading text block (if Content is non-empty) followed by one
-// image block per attached Image, skipping any image whose data URI
-// doesn't parse (malformed input should never abort the whole request).
+// blocks. A tool-result message (Role "tool", identified by a non-empty
+// ToolCallID) becomes a single tool_result block instead of text/image
+// blocks — Anthropic expects that role as "user" carrying tool_result
+// content, not its own role. Otherwise: a leading text block (if Content
+// is non-empty), one tool_use block per ToolCalls entry (an assistant
+// message requesting calls), then one image block per attached Image,
+// skipping any image whose data URI doesn't parse (malformed input should
+// never abort the whole request).
 func anthropicBlocksFor(m Message) []anthropicContentBlock {
-	blocks := make([]anthropicContentBlock, 0, len(m.Images)+1)
+	if m.ToolCallID != "" {
+		return []anthropicContentBlock{{
+			Type:      "tool_result",
+			ToolUseID: m.ToolCallID,
+			Content:   m.Content,
+		}}
+	}
+	blocks := make([]anthropicContentBlock, 0, len(m.Images)+len(m.ToolCalls)+1)
 	if m.Content != "" {
 		blocks = append(blocks, anthropicContentBlock{Type: "text", Text: m.Content})
+	}
+	for _, call := range m.ToolCalls {
+		input := json.RawMessage(call.Function.Arguments)
+		if len(input) == 0 {
+			input = json.RawMessage("{}")
+		}
+		blocks = append(blocks, anthropicContentBlock{
+			Type:  "tool_use",
+			ID:    call.ID,
+			Name:  call.Function.Name,
+			Input: input,
+		})
 	}
 	for _, img := range m.Images {
 		mediaType, data, ok := splitDataURI(img.DataURI)
@@ -100,6 +186,16 @@ func anthropicBlocksFor(m Message) []anthropicContentBlock {
 	return blocks
 }
 
+// anthropicRoleFor returns the Anthropic role a fastllm message maps to —
+// every non-assistant role (including fastllm's "tool" role, carrying a
+// tool_result block) is "user", since Anthropic has only user/assistant.
+func anthropicRoleFor(m Message) string {
+	if m.Role == "assistant" {
+		return "assistant"
+	}
+	return "user"
+}
+
 type anthropicRequest struct {
 	Model     string             `json:"model"`
 	System    string             `json:"system,omitempty"`
@@ -107,6 +203,32 @@ type anthropicRequest struct {
 	MaxTokens int                `json:"max_tokens"`
 	Stream    bool               `json:"stream"`
 	Thinking  *anthropicThinking `json:"thinking,omitempty"`
+	Tools     []anthropicTool    `json:"tools,omitempty"`
+}
+
+// anthropicTool is fastllm's provider-agnostic Tool translated into
+// Anthropic's tool schema, which flattens the OpenAI-style
+// {"type":"function","function":{name,description,parameters}} wrapper
+// into name/description/input_schema directly on the tool object.
+type anthropicTool struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	InputSchema any    `json:"input_schema"`
+}
+
+func toAnthropicTools(tools []Tool) []anthropicTool {
+	if len(tools) == 0 {
+		return nil
+	}
+	out := make([]anthropicTool, len(tools))
+	for i, t := range tools {
+		out[i] = anthropicTool{
+			Name:        t.Function.Name,
+			Description: t.Function.Description,
+			InputSchema: t.Function.Parameters,
+		}
+	}
+	return out
 }
 
 type anthropicThinking struct {
@@ -130,7 +252,7 @@ const anthropicMaxTokens = 8192
 // below then converts any message that ended up as exactly one text
 // block back into a bare string, so a request with no images at all
 // produces byte-identical JSON to before image support existed.
-func toAnthropicRequest(model string, messages []Message, stream bool, thinkLevel string) anthropicRequest {
+func toAnthropicRequest(model string, messages []Message, tools []Tool, stream bool, thinkLevel string) anthropicRequest {
 	var system strings.Builder
 	blockLists := make([][]anthropicContentBlock, 0, len(messages))
 	converted := make([]anthropicMessage, 0, len(messages))
@@ -142,12 +264,13 @@ func toAnthropicRequest(model string, messages []Message, stream bool, thinkLeve
 			system.WriteString(m.Content)
 			continue
 		}
+		role := anthropicRoleFor(m)
 		blocks := anthropicBlocksFor(m)
-		if n := len(converted); n > 0 && converted[n-1].Role == m.Role {
+		if n := len(converted); n > 0 && converted[n-1].Role == role {
 			blockLists[n-1] = append(blockLists[n-1], blocks...)
 			continue
 		}
-		converted = append(converted, anthropicMessage{Role: m.Role})
+		converted = append(converted, anthropicMessage{Role: role})
 		blockLists = append(blockLists, blocks)
 	}
 	for i, blocks := range blockLists {
@@ -160,6 +283,7 @@ func toAnthropicRequest(model string, messages []Message, stream bool, thinkLeve
 		Messages:  converted,
 		MaxTokens: anthropicMaxTokens,
 		Stream:    stream,
+		Tools:     toAnthropicTools(tools),
 	}
 	if thinkLevel != "" {
 		// Anthropic's extended-thinking budget is a token count, not a
@@ -175,13 +299,17 @@ func toAnthropicRequest(model string, messages []Message, stream bool, thinkLeve
 }
 
 func (c *AnthropicClient) newRequest(ctx context.Context, body []byte) (*http.Request, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.anthropic.com/v1/messages", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.messagesURL(), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", c.APIKey)
-	req.Header.Set("anthropic-version", anthropicAPIVersion)
+	if c.CloudflareBearer {
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	} else {
+		req.Header.Set("x-api-key", c.APIKey)
+		req.Header.Set("anthropic-version", anthropicAPIVersion)
+	}
 	return req, nil
 }
 
@@ -217,7 +345,7 @@ type anthropicStreamEvent struct {
 // logic. Reasoning text streams via Anthropic's "thinking" delta type,
 // analogous to Ollama's separate "reasoning" field.
 func (c *AnthropicClient) StreamChat(ctx context.Context, model string, messages []Message, thinkLevel string, onToken func(string), onReasoning func(string)) error {
-	body, err := json.Marshal(toAnthropicRequest(model, messages, true, thinkLevel))
+	body, err := json.Marshal(toAnthropicRequest(model, messages, nil, true, thinkLevel))
 	if err != nil {
 		return err
 	}
@@ -267,20 +395,25 @@ func (c *AnthropicClient) StreamChat(ctx context.Context, model string, messages
 
 type anthropicResponse struct {
 	Content []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
+		Type  string          `json:"type"`
+		Text  string          `json:"text"`
+		ID    string          `json:"id"`
+		Name  string          `json:"name"`
+		Input json.RawMessage `json:"input"`
 	} `json:"content"`
 }
 
-// Chat sends a single non-streaming completion request and returns the
-// model's reply as plain text. Anthropic tool-calling isn't implemented
-// yet (see SupportsToolsForModel), so unlike Client.Chat/GeminiClient.Chat
-// this never needs to carry Tools or parse a tool call back out of the
-// response — Router.Chat never reaches this method with tools to pass
-// along, since SupportsToolsForModel already excludes "anthropic:"
-// models from the file-tool loop before it ever calls in.
-func (c *AnthropicClient) Chat(ctx context.Context, model string, messages []Message, thinkLevel string) (Message, error) {
-	body, err := json.Marshal(toAnthropicRequest(model, messages, false, thinkLevel))
+// Chat sends a single non-streaming completion request with the given
+// tools declared, and returns the model's reply — which may contain
+// ToolCalls (translated from Anthropic's tool_use content blocks) instead
+// of (or alongside) Content if the model wants to invoke a tool. Anthropic
+// tool_use IDs already match fastllm's provider-agnostic ToolCall.ID/
+// Message.ToolCallID shape directly (unlike Gemini, which has no native
+// call ID and packs metadata into one — see toGeminiToolCallID's doc
+// comment), so no ID-packing scheme is needed here: a tool_result message
+// simply carries the same ID straight back.
+func (c *AnthropicClient) Chat(ctx context.Context, model string, messages []Message, tools []Tool, thinkLevel string) (Message, error) {
+	body, err := json.Marshal(toAnthropicRequest(model, messages, tools, false, thinkLevel))
 	if err != nil {
 		return Message{}, err
 	}
@@ -304,10 +437,17 @@ func (c *AnthropicClient) Chat(ctx context.Context, model string, messages []Mes
 		return Message{}, err
 	}
 	var text strings.Builder
+	var calls []ToolCall
 	for _, block := range ar.Content {
-		if block.Type == "text" {
+		switch block.Type {
+		case "text":
 			text.WriteString(block.Text)
+		case "tool_use":
+			call := ToolCall{ID: block.ID, Type: "function"}
+			call.Function.Name = block.Name
+			call.Function.Arguments = string(block.Input)
+			calls = append(calls, call)
 		}
 	}
-	return Message{Role: "assistant", Content: text.String()}, nil
+	return Message{Role: "assistant", Content: text.String(), ToolCalls: calls}, nil
 }
