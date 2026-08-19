@@ -12,41 +12,50 @@ import (
 	"time"
 )
 
-// responsesOnlyModels lists Cloudflare Workers AI models confirmed to
-// reject the standard OpenAI Chat Completions body ({"messages": [...]})
-// and only accept the newer Responses API body ({"input": ...}) instead —
-// see CloudflareModels' doc comment for how gpt-5.6-luna was found to need
-// this. Router checks this set (via NeedsResponsesAPI) to decide whether a
-// "cloudflare:"-prefixed model should go through CloudflareResponsesClient
-// instead of the plain Chat-Completions Client every other Cloudflare
-// model uses.
-var responsesOnlyModels = map[string]bool{
-	"openai/gpt-5.6-luna": true,
+// responsesOnlyModels lists, per provider, which bare model names are
+// confirmed to reject the standard OpenAI Chat Completions body
+// ({"messages": [...]}) and only accept the newer Responses API body
+// ({"input": ...}) instead. Keyed by provider because the same underlying
+// model can appear under more than one provider with a different bare
+// name — gpt-5.6-luna is both "openai:gpt-5.6-luna" (OpenAI's own hosted
+// copy, confirmed 2026-08-19: "Function tools with reasoning_effort are
+// not supported for gpt-5.6-luna in /v1/chat/completions... use
+// /v1/responses") and "cloudflare:openai/gpt-5.6-luna" (Workers AI's
+// hosted copy of the same model, confirmed 2026-08-19 the same way — see
+// CloudflareModels' doc comment). Router checks this set (via
+// NeedsResponsesAPI) to decide whether a model should go through
+// ResponsesClient instead of the plain Chat-Completions Client.
+var responsesOnlyModels = map[string]map[string]bool{
+	"openai":     {"gpt-5.6-luna": true},
+	"cloudflare": {"openai/gpt-5.6-luna": true},
 }
 
-// NeedsResponsesAPI reports whether a bare (prefix-stripped) Cloudflare
-// model name only works through the Responses API rather than Chat
-// Completions.
-func NeedsResponsesAPI(bareModel string) bool {
-	return responsesOnlyModels[bareModel]
+// NeedsResponsesAPI reports whether a bare (prefix-stripped) model, for
+// the given provider, only works through the Responses API rather than
+// Chat Completions.
+func NeedsResponsesAPI(provider, bareModel string) bool {
+	return responsesOnlyModels[provider][bareModel]
 }
 
-// CloudflareResponsesClient talks to Cloudflare Workers AI's Responses API
-// (/ai/v1/responses), which — despite living right next to the
-// OpenAI-compatible Chat Completions endpoint the plain Client above talks
-// to for most Workers AI models — uses a different, non-chat-completions
-// wire format for a growing number of newer models (confirmed so far:
-// gpt-5.6-luna): a flat "input" string instead of a "messages" array, and
-// "output_text"/an "output" item array instead of "choices[].message" in
-// the response. See responsesOnlyModels above for which models need this.
-type CloudflareResponsesClient struct {
-	BaseURL    string // e.g. https://api.cloudflare.com/client/v4/accounts/{id}/ai/v1
+// ResponsesClient talks to an OpenAI-compatible Responses API
+// (POST {BaseURL}/responses) — a distinct, non-chat-completions wire
+// format now used by a growing number of newer models (confirmed so far:
+// gpt-5.6-luna, on both OpenAI's own API and Cloudflare Workers AI's
+// hosted copy of it — see responsesOnlyModels above): a flat "input"
+// string instead of a "messages" array, and "output_text"/an "output"
+// item array instead of "choices[].message" in the response. Despite the
+// name, this type is provider-agnostic — it's just BaseURL+APIKey, same
+// as the plain Chat-Completions Client — so one instance is built per
+// provider that has at least one Responses-only model (currently OpenAI
+// and Cloudflare).
+type ResponsesClient struct {
+	BaseURL    string // e.g. https://api.openai.com/v1 or https://api.cloudflare.com/client/v4/accounts/{id}/ai/v1
 	APIKey     string
 	HTTPClient *http.Client
 }
 
-func NewCloudflareResponsesClient(baseURL, apiKey string) *CloudflareResponsesClient {
-	return &CloudflareResponsesClient{
+func NewResponsesClient(baseURL, apiKey string) *ResponsesClient {
+	return &ResponsesClient{
 		BaseURL:    strings.TrimRight(baseURL, "/"),
 		APIKey:     apiKey,
 		HTTPClient: &http.Client{Timeout: 5 * time.Minute},
@@ -174,7 +183,7 @@ func responsesError(resp *http.Response) error {
 	return fmt.Errorf("llm: chat completion failed: %s", resp.Status)
 }
 
-func (c *CloudflareResponsesClient) newRequest(ctx context.Context, body []byte) (*http.Request, error) {
+func (c *ResponsesClient) newRequest(ctx context.Context, body []byte) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/responses", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -205,7 +214,7 @@ type responsesStreamEvent struct {
 // schema on Cloudflare's hosted models yet (only a request-side
 // "reasoning.effort" field, which this client doesn't send since fastllm
 // has no per-request UI for it here).
-func (c *CloudflareResponsesClient) StreamChat(ctx context.Context, model string, messages []Message, thinkLevel string, onToken func(string), onReasoning func(string)) error {
+func (c *ResponsesClient) StreamChat(ctx context.Context, model string, messages []Message, thinkLevel string, onToken func(string), onReasoning func(string)) error {
 	body, err := json.Marshal(responsesRequest{Model: model, Input: responsesInput(messages), Stream: true})
 	if err != nil {
 		return err
@@ -323,7 +332,7 @@ func toToolCalls(items []responsesOutputItem) []ToolCall {
 // Router.Chat) and that SupportsToolsForModel has separately allowlisted
 // for tools — not every Responses-API model is assumed tool-capable just
 // because this method accepts a tools argument.
-func (c *CloudflareResponsesClient) Chat(ctx context.Context, model string, messages []Message, tools []Tool, thinkLevel string) (Message, error) {
+func (c *ResponsesClient) Chat(ctx context.Context, model string, messages []Message, tools []Tool, thinkLevel string) (Message, error) {
 	var input any = responsesInput(messages)
 	if len(tools) > 0 {
 		input = toResponsesInput(messages)

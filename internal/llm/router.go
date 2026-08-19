@@ -47,13 +47,16 @@ type cloudClients struct {
 	gemini    *GeminiClient
 	nvidia    *Client // NVIDIA Build's hosted API is also OpenAI-compatible — see OpenAIModels's doc comment
 	cloudflare *Client // Workers AI's /ai/v1/chat/completions endpoint is also OpenAI-compatible — see CloudflareModels's doc comment
-	// cloudflareResponses talks to Workers AI's /ai/v1/responses endpoint
-	// instead — a handful of newer models (see responsesOnlyModels in
-	// cloudflare_responses.go) reject the plain Chat Completions body
-	// entirely. Built alongside cloudflare above from the same API
-	// token/account ID; Router.StreamChat/Chat picks between the two per
-	// model via NeedsResponsesAPI.
-	cloudflareResponses *CloudflareResponsesClient
+	// openaiResponses/cloudflareResponses talk to the corresponding
+	// provider's /v1/responses (or /ai/v1/responses) endpoint instead of
+	// Chat Completions — a handful of newer models on each provider (see
+	// responsesOnlyModels in responses_client.go) reject the plain Chat
+	// Completions body entirely and only work through this schema. Each
+	// is built alongside its Chat-Completions sibling above from the same
+	// API key; Router.StreamChat/Chat picks between the two per model via
+	// NeedsResponsesAPI.
+	openaiResponses     *ResponsesClient
+	cloudflareResponses *ResponsesClient
 }
 
 // Router dispatches chat requests to the local OpenAI-compatible backend
@@ -93,6 +96,7 @@ func (r *Router) SetCloudProviders(cloud CloudProviderConfig) {
 	}
 	if cloud.OpenAIAPIKey != "" {
 		next.openai = New("https://api.openai.com/v1", cloud.OpenAIAPIKey, "", "")
+		next.openaiResponses = NewResponsesClient("https://api.openai.com/v1", cloud.OpenAIAPIKey)
 	}
 	if cloud.GeminiAPIKey != "" {
 		next.gemini = NewGeminiClient(cloud.GeminiAPIKey)
@@ -103,7 +107,7 @@ func (r *Router) SetCloudProviders(cloud CloudProviderConfig) {
 	if cloud.CloudflareAPIKey != "" && cloud.CloudflareAccountID != "" {
 		cloudflareBaseURL := "https://api.cloudflare.com/client/v4/accounts/" + cloud.CloudflareAccountID + "/ai/v1"
 		next.cloudflare = New(cloudflareBaseURL, cloud.CloudflareAPIKey, "", "")
-		next.cloudflareResponses = NewCloudflareResponsesClient(cloudflareBaseURL, cloud.CloudflareAPIKey)
+		next.cloudflareResponses = NewResponsesClient(cloudflareBaseURL, cloud.CloudflareAPIKey)
 	}
 	r.mu.Lock()
 	r.clouds = next
@@ -151,6 +155,9 @@ func (r *Router) StreamChat(ctx context.Context, model string, messages []Messag
 		if clouds.openai == nil {
 			return fmt.Errorf("llm: OpenAI isn't configured — add an API key in Settings → Cloud providers")
 		}
+		if NeedsResponsesAPI("openai", bare) {
+			return clouds.openaiResponses.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning)
+		}
 		return clouds.openai.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning)
 	case "gemini":
 		if clouds.gemini == nil {
@@ -166,7 +173,7 @@ func (r *Router) StreamChat(ctx context.Context, model string, messages []Messag
 		if clouds.cloudflare == nil {
 			return fmt.Errorf("llm: Cloudflare Workers AI isn't configured — add an API token and account ID in Settings → Cloud providers")
 		}
-		if NeedsResponsesAPI(bare) {
+		if NeedsResponsesAPI("cloudflare", bare) {
 			return clouds.cloudflareResponses.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning)
 		}
 		return clouds.cloudflare.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning)
@@ -199,6 +206,9 @@ func (r *Router) Chat(ctx context.Context, model string, messages []Message, too
 		if clouds.openai == nil {
 			return Message{}, fmt.Errorf("llm: OpenAI isn't configured — add an API key in Settings → Cloud providers")
 		}
+		if NeedsResponsesAPI("openai", bare) {
+			return clouds.openaiResponses.Chat(ctx, bare, messages, tools, thinkLevel)
+		}
 		return clouds.openai.Chat(ctx, bare, messages, tools, thinkLevel)
 	case "gemini":
 		if clouds.gemini == nil {
@@ -216,7 +226,7 @@ func (r *Router) Chat(ctx context.Context, model string, messages []Message, too
 		if clouds.cloudflare == nil {
 			return Message{}, fmt.Errorf("llm: Cloudflare Workers AI isn't configured — add an API token and account ID in Settings → Cloud providers")
 		}
-		if NeedsResponsesAPI(bare) {
+		if NeedsResponsesAPI("cloudflare", bare) {
 			return clouds.cloudflareResponses.Chat(ctx, bare, messages, tools, thinkLevel)
 		}
 		return clouds.cloudflare.Chat(ctx, bare, messages, tools, thinkLevel)

@@ -279,8 +279,8 @@ var CloudflareModels = []string{
 	// model" (code 5007), and the bare "openai/gpt-5.6-luna" form 400'd
 	// "Invalid value at input" (code 7003) — the model was found but
 	// rejected the {"messages": [...]} body shape. Routed through
-	// CloudflareResponsesClient instead (see NeedsResponsesAPI in
-	// cloudflare_responses.go and responsesOnlyModels there) using this
+	// ResponsesClient instead (see NeedsResponsesAPI in
+	// responses_client.go and responsesOnlyModels there) using this
 	// same bare "openai/gpt-5.6-luna" ID, which matches the ID Cloudflare's
 	// own docs show for the Responses API.
 	"openai/gpt-5.6-luna",
@@ -387,12 +387,16 @@ var toolCapableModelPrefixes = []string{
 // this blindly, same caveat as NvidiaModels' own doc comment.
 //
 // Cloudflare is a partial exception to the "whole provider" rule above —
-// tool support is allowlisted per model, not for the whole provider, via
-// cloudflareToolCapableModels below.
+// tool support is allowlisted per model, not for the whole provider: a
+// model routed through the Responses API (NeedsResponsesAPI) gets tools
+// via ResponsesClient.Chat's translation, verified working end-to-end for
+// "cloudflare:openai/gpt-5.6-luna" (see NeedsResponsesAPI's doc comment);
+// every other Cloudflare model needs to be on cloudflareToolCapableModels
+// below, confirmed the same hand-verified way as NvidiaModels.
 func SupportsToolsForModel(model string) bool {
 	if bare, provider, ok := stripProviderPrefix(model); ok {
 		if provider == "cloudflare" {
-			return cloudflareToolCapableModels[bare]
+			return NeedsResponsesAPI("cloudflare", bare) || cloudflareToolCapableModels[bare]
 		}
 		return provider == "gemini" || provider == "openai" || provider == "nvidia"
 	}
@@ -411,8 +415,8 @@ func SupportsToolsForModel(model string) bool {
 //     quirk bounded by maxToolRounds, not a wiring problem — but every
 //     round used real tool_calls, never the parseFallbackToolCall path).
 //   - "openai/gpt-5.6-luna": tool-capable via the Responses API, not this
-//     Chat-Completions path — see NeedsResponsesAPI/
-//     CloudflareResponsesClient.Chat instead; not listed here.
+//     Chat-Completions path — see NeedsResponsesAPI/ResponsesClient.Chat
+//     instead; not listed here.
 //
 // Every other CloudflareModels entry is unverified and stays excluded
 // until checked the same way, same caution as NvidiaModels' own doc
