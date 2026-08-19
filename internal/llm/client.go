@@ -178,10 +178,21 @@ type Model struct {
 // no separate client type was needed; Router just points a second Client
 // at api.openai.com. See AnthropicModels's doc comment for why this is a
 // fixed list rather than a live query.
+//
+// "gpt-5.1-mini" and "gpt-5.1-nano" were removed 2026-08-19: a real
+// request hit "The model gpt-5.1-mini does not exist or you do not have
+// access to it", and cross-checking OpenAI's own pricing page confirmed
+// neither ID has ever existed — they were a plausible-looking guess
+// (following the mini/nano naming pattern from gpt-5.2/gpt-5.4) that
+// never matched a real release. Replaced with gpt-5.6-luna, OpenAI's
+// current cheap/fast tier ($0.20/$1.20 per 1M tokens) — already confirmed
+// reachable and working via Cloudflare Workers AI's hosted copy earlier
+// this session, and here called directly against OpenAI's own API
+// instead. gpt-5.1 and o3 were confirmed still real on the same pricing
+// page and are unchanged.
 var OpenAIModels = []string{
 	"gpt-5.1",
-	"gpt-5.1-mini",
-	"gpt-5.1-nano",
+	"gpt-5.6-luna",
 	"o3",
 }
 

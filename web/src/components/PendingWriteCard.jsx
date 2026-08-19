@@ -39,13 +39,28 @@ const STATUS_LABEL = {
   error: 'Failed',
 }
 
+function FileIcon(props) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      <path d="M6 2.5h8l4 4V21a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1Z" />
+      <path d="M14 2.5V6a1 1 0 0 0 1 1h3.5" />
+    </svg>
+  )
+}
+
 export default function PendingWriteCard({ write, onRequestApprove, onReject }) {
   const rows = diffLines(write.existing_content || '', write.new_content || '')
 
   return (
     <div className={`pending-write status-${write.status}`}>
       <div className="pending-write-header">
-        <span>✏️ {write.file_exists ? 'Edit' : 'Create'} <code>{write.path}</code></span>
+        <span className="pending-write-title">
+          <FileIcon className="inline-icon pending-write-icon" />
+          <span className={`pending-write-action ${write.file_exists ? 'is-edit' : 'is-create'}`}>
+            {write.file_exists ? 'Edit' : 'Create'}
+          </span>
+          <code>{write.path}</code>
+        </span>
         {write.status !== 'pending' && write.status !== 'applying' && (
           <span className="pending-write-status">{STATUS_LABEL[write.status]}</span>
         )}

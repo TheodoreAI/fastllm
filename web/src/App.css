@@ -2484,9 +2484,10 @@ body {
 
 .pending-write {
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius);
   background: var(--bg-panel);
   overflow: hidden;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
 }
 
 .pending-write-header {
@@ -2494,18 +2495,55 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 8px 10px;
+  padding: 9px 12px;
   font-size: 0.8125rem;
+  background: color-mix(in srgb, var(--text) 4%, var(--bg-panel));
   border-bottom: 1px solid var(--border);
+}
+
+.pending-write-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.pending-write-icon {
+  color: var(--text-faint);
+}
+
+.pending-write-action {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.pending-write-action.is-create {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+}
+
+.pending-write-action.is-edit {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
 .pending-write-header code {
   font-family: ui-monospace, 'SF Mono', Consolas, 'Cascadia Code', monospace;
-  font-size: 0.95em;
+  font-size: 0.8125rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .pending-write-status {
+  flex: 0 0 auto;
   font-size: 0.6875rem;
+  font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.4px;
   color: var(--text-faint);
@@ -2523,16 +2561,18 @@ body {
 .pending-write-diff {
   max-height: 260px;
   overflow: auto;
+  padding: 6px 0;
   font-family: ui-monospace, 'SF Mono', Consolas, 'Cascadia Code', monospace;
   font-size: 0.75rem;
-  line-height: 1.5;
+  line-height: 1.55;
 }
 
 .diff-row {
   display: flex;
-  padding: 0 8px;
+  padding: 0 12px;
   white-space: pre-wrap;
   word-break: break-word;
+  border-left: 2px solid transparent;
 }
 
 .diff-marker {
@@ -2543,7 +2583,8 @@ body {
 }
 
 .diff-add {
-  background: color-mix(in srgb, var(--success) 14%, transparent);
+  background: color-mix(in srgb, var(--success) 10%, transparent);
+  border-left-color: color-mix(in srgb, var(--success) 55%, transparent);
 }
 
 .diff-add .diff-marker {
@@ -2551,7 +2592,8 @@ body {
 }
 
 .diff-del {
-  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  border-left-color: color-mix(in srgb, var(--danger) 55%, transparent);
 }
 
 .diff-del .diff-marker {
@@ -2562,7 +2604,8 @@ body {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  padding: 8px 10px;
+  padding: 9px 12px;
+  background: color-mix(in srgb, var(--text) 4%, var(--bg-panel));
   border-top: 1px solid var(--border);
 }
 
@@ -2570,8 +2613,10 @@ body {
 .pending-write-actions .btn-secondary {
   width: auto;
   margin-top: 0;
-  padding: 6px 12px;
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
   font-size: 0.8125rem;
+  font-weight: 600;
 }
 
 .sources summary {
