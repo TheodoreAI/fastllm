@@ -2722,6 +2722,64 @@ body {
   white-space: nowrap;
 }
 
+/* Token count for the most recent completion, shown the same way
+   Claude Code/ChatGPT surface usage near their own input — a quiet,
+   persistent row rather than something that has to be hovered or
+   expanded to see. Shares composer-active-file's row when both are
+   present rather than reserving a separate line for each. Two small
+   pill chips (in/out) carry the just-finished turn's numbers at full
+   legibility; the running session total trails as plain dim text since
+   it's secondary context, not the primary read. */
+.composer-usage {
+  margin: 6px 2px 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.composer-active-file:has(+ .composer-usage) {
+  margin-bottom: 0;
+}
+
+.composer-active-file + .composer-usage {
+  margin-top: 0;
+}
+
+.composer-usage-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--border);
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.composer-usage-chip .inline-icon {
+  width: 0.85em;
+  height: 0.85em;
+}
+
+.composer-usage-in {
+  color: var(--accent);
+}
+
+.composer-usage-out {
+  color: var(--success);
+}
+
+.composer-usage-total {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  opacity: 0.75;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Persistent flag next to the composer input showing whether the
    selected model accepts pasted images — unlike the placeholder text
    (which disappears the moment the user starts typing), this stays

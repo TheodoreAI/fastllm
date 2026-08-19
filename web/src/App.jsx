@@ -517,7 +517,7 @@ export default function App() {
     setPendingImages([])
     setComposerImageError('')
     setStreaming(true)
-    setMessages((prev) => [...prev, { role: 'user', content: text, images }, { role: 'assistant', content: '', sources: [], reasoning: '', toolCalls: [], pendingWrites: [], buildChecks: [] }])
+    setMessages((prev) => [...prev, { role: 'user', content: text, images }, { role: 'assistant', content: '', sources: [], reasoning: '', toolCalls: [], pendingWrites: [], buildChecks: [], usage: null }])
 
     const controller = new AbortController()
     abortControllerRef.current = controller
@@ -554,6 +554,13 @@ export default function App() {
                 ...next[next.length - 1],
                 reasoning: (next[next.length - 1].reasoning || '') + reasoning,
               }
+              return next
+            })
+          },
+          onUsage: (usage) => {
+            setMessages((prev) => {
+              const next = [...prev]
+              next[next.length - 1] = { ...next[next.length - 1], usage }
               return next
             })
           },

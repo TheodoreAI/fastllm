@@ -149,11 +149,34 @@ func New(baseURL, apiKey, chatModel, embedModel string) *Client {
 }
 
 type chatRequest struct {
-	Model    string    `json:"model"`
-	Messages []Message `json:"messages"`
-	Stream   bool      `json:"stream"`
-	Tools    []Tool    `json:"tools,omitempty"`
-	Think    string    `json:"think,omitempty"`
+	Model         string             `json:"model"`
+	Messages      []Message          `json:"messages"`
+	Stream        bool               `json:"stream"`
+	Tools         []Tool             `json:"tools,omitempty"`
+	Think         string             `json:"think,omitempty"`
+	StreamOptions *chatStreamOptions `json:"stream_options,omitempty"`
+}
+
+// chatStreamOptions requests the extra usage-bearing final chunk on a
+// streaming completion (see chatStreamChunk.Usage) — off by default on
+// the OpenAI-compatible wire format, so it must be asked for explicitly.
+// Only meaningful when Stream is true; omitted entirely from non-streaming
+// requests via omitempty since chatRequest's zero value leaves this nil.
+type chatStreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
+}
+
+// Usage is fastllm's provider-agnostic token count for one completion,
+// translated from whatever shape a given provider's API reports it in
+// (OpenAI-wire's "usage", Gemini's "usageMetadata", Anthropic's
+// message_start/message_delta input_tokens/output_tokens, or the
+// Responses API's response.usage). Zero-valued (all fields 0) means "no
+// usage reported for this request" — callers should treat that as
+// "unknown," not "zero tokens used."
+type Usage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
 }
 
 // Model describes one chat-capable model available on the backend.
@@ -547,20 +570,33 @@ type chatStreamChunk struct {
 			Reasoning string `json:"reasoning"`
 		} `json:"delta"`
 	} `json:"choices"`
+	// Usage only arrives on the final chunk of a stream, and only when the
+	// request carried stream_options.include_usage — see chatRequest.
+	// Ollama's own OpenAI-compatible endpoint has been observed to include
+	// it even without that flag being set, but real OpenAI-wire clouds
+	// (OpenAI, NVIDIA Build, Cloudflare) don't, so StreamChat always sends
+	// it explicitly rather than relying on a per-backend default.
+	Usage *struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+		TotalTokens      int `json:"total_tokens"`
+	} `json:"usage"`
 }
 
 // StreamChat sends messages to the chat completion endpoint and calls
-// onToken for every incremental piece of answer text, and onReasoning (if
+// onToken for every incremental piece of answer text, onReasoning (if
 // non-nil) for every incremental piece of a thinking-capable model's
-// reasoning trace, as they stream in. Ollama's OpenAI-compatible endpoint
-// sends reasoning as a "reasoning" delta field alongside "content", ahead
-// of and separate from the actual answer; models without thinking support
-// simply never populate it. If model is empty, c.ChatModel is used.
-func (c *Client) StreamChat(ctx context.Context, model string, messages []Message, thinkLevel string, onToken func(string), onReasoning func(string)) error {
+// reasoning trace, and onUsage (if non-nil, at most once, after streaming
+// finishes) with the completion's token counts if the backend reported
+// any. Ollama's OpenAI-compatible endpoint sends reasoning as a
+// "reasoning" delta field alongside "content", ahead of and separate from
+// the actual answer; models without thinking support simply never
+// populate it. If model is empty, c.ChatModel is used.
+func (c *Client) StreamChat(ctx context.Context, model string, messages []Message, thinkLevel string, onToken func(string), onReasoning func(string), onUsage func(Usage)) error {
 	if model == "" {
 		model = c.ChatModel
 	}
-	cr := chatRequest{Model: model, Messages: messages, Stream: true}
+	cr := chatRequest{Model: model, Messages: messages, Stream: true, StreamOptions: &chatStreamOptions{IncludeUsage: true}}
 	if c.SendThink {
 		cr.Think = thinkLevel
 	}
@@ -610,6 +646,13 @@ func (c *Client) StreamChat(ctx context.Context, model string, messages []Messag
 			if chunk.Choices[0].Delta.Reasoning != "" && onReasoning != nil {
 				onReasoning(chunk.Choices[0].Delta.Reasoning)
 			}
+		}
+		if chunk.Usage != nil && onUsage != nil {
+			onUsage(Usage{
+				PromptTokens:     chunk.Usage.PromptTokens,
+				CompletionTokens: chunk.Usage.CompletionTokens,
+				TotalTokens:      chunk.Usage.TotalTokens,
+			})
 		}
 	}
 	return scanner.Err()

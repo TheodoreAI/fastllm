@@ -142,10 +142,10 @@ func stripProviderPrefix(model string) (bare, provider string, ok bool) {
 	}
 }
 
-func (r *Router) StreamChat(ctx context.Context, model string, messages []Message, thinkLevel string, onToken func(string), onReasoning func(string)) error {
+func (r *Router) StreamChat(ctx context.Context, model string, messages []Message, thinkLevel string, onToken func(string), onReasoning func(string), onUsage func(Usage)) error {
 	bare, provider, ok := stripProviderPrefix(model)
 	if !ok {
-		return r.Local.StreamChat(ctx, model, messages, thinkLevel, onToken, onReasoning)
+		return r.Local.StreamChat(ctx, model, messages, thinkLevel, onToken, onReasoning, onUsage)
 	}
 
 	r.mu.RLock()
@@ -157,36 +157,36 @@ func (r *Router) StreamChat(ctx context.Context, model string, messages []Messag
 		if clouds.anthropic == nil {
 			return fmt.Errorf("llm: Anthropic isn't configured — add an API key in Settings → Cloud providers")
 		}
-		return clouds.anthropic.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning)
+		return clouds.anthropic.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning, onUsage)
 	case "openai":
 		if clouds.openai == nil {
 			return fmt.Errorf("llm: OpenAI isn't configured — add an API key in Settings → Cloud providers")
 		}
 		if NeedsResponsesAPI("openai", bare) {
-			return clouds.openaiResponses.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning)
+			return clouds.openaiResponses.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning, onUsage)
 		}
-		return clouds.openai.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning)
+		return clouds.openai.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning, onUsage)
 	case "gemini":
 		if clouds.gemini == nil {
 			return fmt.Errorf("llm: Gemini isn't configured — add an API key in Settings → Cloud providers")
 		}
-		return clouds.gemini.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning)
+		return clouds.gemini.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning, onUsage)
 	case "nvidia":
 		if clouds.nvidia == nil {
 			return fmt.Errorf("llm: NVIDIA Build isn't configured — add an API key in Settings → Cloud providers")
 		}
-		return clouds.nvidia.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning)
+		return clouds.nvidia.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning, onUsage)
 	case "cloudflare":
 		if clouds.cloudflare == nil {
 			return fmt.Errorf("llm: Cloudflare Workers AI isn't configured — add an API token and account ID in Settings → Cloud providers")
 		}
 		if NeedsAnthropicAPI(bare) {
-			return clouds.cloudflareAnthropic.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning)
+			return clouds.cloudflareAnthropic.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning, onUsage)
 		}
 		if NeedsResponsesAPI("cloudflare", bare) {
-			return clouds.cloudflareResponses.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning)
+			return clouds.cloudflareResponses.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning, onUsage)
 		}
-		return clouds.cloudflare.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning)
+		return clouds.cloudflare.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning, onUsage)
 	}
 	return fmt.Errorf("llm: unknown provider for model %q", model)
 }

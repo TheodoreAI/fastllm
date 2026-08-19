@@ -63,6 +63,27 @@ function StopIcon(props) {
   )
 }
 
+// Used on the composer's token-usage chips — an arrow into the model for
+// prompt tokens, an arrow out for completion tokens, mirroring the
+// in/out framing already used in the label text next to them.
+function ArrowDownIcon(props) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      <path d="M12 4v14" />
+      <path d="M6 12l6 6 6-6" />
+    </svg>
+  )
+}
+
+function ArrowUpIcon(props) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      <path d="M12 20V6" />
+      <path d="M6 12l6-6 6 6" />
+    </svg>
+  )
+}
+
 export default function ChatPanel({
   messages,
   messagesLoading,
@@ -100,6 +121,22 @@ export default function ChatPanel({
   }, [conversationId])
 
   const promptHistory = messages.filter((m) => m.role === 'user').map((m) => m.content)
+
+  // Token usage for the most recent completion — not every provider
+  // reports it (see llm.Usage's doc comment), so messages without it are
+  // skipped rather than showing a stale count from an earlier turn.
+  const lastUsage = [...messages].reverse().find((m) => m.usage)?.usage
+
+  // Running total across every turn in this conversation so far. Summed
+  // from each message's own usage rather than tracked as separate state —
+  // usage isn't persisted to the DB (same as reasoning/toolCalls), so this
+  // naturally covers only what's loaded into `messages` for the current
+  // session, same scope as lastUsage above.
+  const totalUsage = messages.reduce(
+    (acc, m) => (m.usage ? { promptTokens: acc.promptTokens + m.usage.prompt_tokens, completionTokens: acc.completionTokens + m.usage.completion_tokens } : acc),
+    { promptTokens: 0, completionTokens: 0 }
+  )
+  const hasTotalUsage = totalUsage.promptTokens > 0 || totalUsage.completionTokens > 0
 
   function handleComposerKeyDown(e) {
     if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return
@@ -268,6 +305,23 @@ export default function ChatPanel({
             <FileIcon className="inline-icon" />
             {activeEditorFile.split('/').pop()} is available to the model
           </p>
+        )}
+        {lastUsage && (
+          <div className="composer-usage" title={`${lastUsage.total_tokens.toLocaleString()} tokens this turn`}>
+            <span className="composer-usage-chip composer-usage-in">
+              <ArrowDownIcon className="inline-icon" />
+              {lastUsage.prompt_tokens.toLocaleString()}
+            </span>
+            <span className="composer-usage-chip composer-usage-out">
+              <ArrowUpIcon className="inline-icon" />
+              {lastUsage.completion_tokens.toLocaleString()}
+            </span>
+            {hasTotalUsage && (
+              <span className="composer-usage-total">
+                session {totalUsage.promptTokens.toLocaleString()} in · {totalUsage.completionTokens.toLocaleString()} out
+              </span>
+            )}
+          </div>
         )}
       </form>
     </main>

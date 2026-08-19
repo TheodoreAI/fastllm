@@ -193,18 +193,26 @@ func (c *ResponsesClient) newRequest(ctx context.Context, body []byte) (*http.Re
 	return req, nil
 }
 
-// responsesStreamEvent covers the two SSE event shapes StreamChat cares
+// responsesStreamEvent covers the three SSE event shapes StreamChat cares
 // about: "response.output_text.delta" (Type carries the event name here
 // since Cloudflare/OpenAI's Responses API puts it in the JSON payload
-// itself, unlike Chat Completions' separate "event:" SSE line) and
-// "error". Every other event type (response.created, response.completed,
-// etc.) is ignored — none of them carry incremental text.
+// itself, unlike Chat Completions' separate "event:" SSE line), "error",
+// and "response.completed" (carries final token usage nested under
+// Response — see StreamChat). Every other event type (response.created,
+// etc.) is ignored — none of them carry incremental text or usage.
 type responsesStreamEvent struct {
 	Type  string `json:"type"`
 	Delta string `json:"delta"`
 	Error struct {
 		Message string `json:"message"`
 	} `json:"error"`
+	Response struct {
+		Usage struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+			TotalTokens  int `json:"total_tokens"`
+		} `json:"usage"`
+	} `json:"response"`
 }
 
 // StreamChat implements the same signature as Client.StreamChat so it can
@@ -213,8 +221,9 @@ type responsesStreamEvent struct {
 // but never called: no confirmed reasoning-delta event exists for this
 // schema on Cloudflare's hosted models yet (only a request-side
 // "reasoning.effort" field, which this client doesn't send since fastllm
-// has no per-request UI for it here).
-func (c *ResponsesClient) StreamChat(ctx context.Context, model string, messages []Message, thinkLevel string, onToken func(string), onReasoning func(string)) error {
+// has no per-request UI for it here). onUsage (if non-nil) is called once
+// with the response.completed event's nested usage.
+func (c *ResponsesClient) StreamChat(ctx context.Context, model string, messages []Message, thinkLevel string, onToken func(string), onReasoning func(string), onUsage func(Usage)) error {
 	body, err := json.Marshal(responsesRequest{Model: model, Input: responsesInput(messages), Stream: true})
 	if err != nil {
 		return err
@@ -253,6 +262,14 @@ func (c *ResponsesClient) StreamChat(ctx context.Context, model string, messages
 		case "response.output_text.delta":
 			if event.Delta != "" {
 				onToken(event.Delta)
+			}
+		case "response.completed":
+			if onUsage != nil && event.Response.Usage.TotalTokens > 0 {
+				onUsage(Usage{
+					PromptTokens:     event.Response.Usage.InputTokens,
+					CompletionTokens: event.Response.Usage.OutputTokens,
+					TotalTokens:      event.Response.Usage.TotalTokens,
+				})
 			}
 		case "error":
 			if event.Error.Message != "" {
