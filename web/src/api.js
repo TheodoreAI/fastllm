@@ -483,7 +483,17 @@ export function saveCloudProviderSettings(settings) {
 // into context cancellation on the server, propagating all the way to
 // the in-flight request to the LLM backend (see llm.Client.StreamChat),
 // so this genuinely stops generation rather than just hiding it.
-export async function streamChat({ message, model, skillId, conversationId, thinkLevel, images }, callbacks, signal) {
+// A model backend that hangs mid-stream (stops sending SSE bytes without
+// closing the connection — seen with some local models, e.g. gemini flash
+// lite getting stuck on a tool-call) previously left the reader's `await
+// reader.read()` pending forever: no error, no timeout, `streaming` in
+// App.jsx never resets, and the UI just sits there indefinitely. This
+// watchdog resets a timer on every received chunk and aborts the read if
+// STALL_TIMEOUT_MS passes with nothing new, surfacing a clear error through
+// the same catch path a deliberate stop click already uses.
+const STALL_TIMEOUT_MS = 45_000
+
+export async function streamChat({ message, model, skillId, conversationId, thinkLevel, images, activeFile }, callbacks, signal) {
   const origin = await apiOrigin()
   const res = await fetch(`${origin}/api/chat`, {
     method: 'POST',
@@ -495,6 +505,7 @@ export async function streamChat({ message, model, skillId, conversationId, thin
       conversation_id: conversationId ?? 0,
       think_level: thinkLevel || '',
       images: images && images.length > 0 ? images : undefined,
+      active_file: activeFile || undefined,
     }),
     signal,
   })
@@ -504,39 +515,59 @@ export async function streamChat({ message, model, skillId, conversationId, thin
   const decoder = new TextDecoder()
   let buffer = ''
 
-  for (;;) {
-    const { value, done } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
+  let stalled = false
+  let stallTimer = setTimeout(() => {
+    stalled = true
+    reader.cancel().catch(() => {})
+  }, STALL_TIMEOUT_MS)
 
-    const events = buffer.split('\n\n')
-    buffer = events.pop() ?? ''
+  try {
+    for (;;) {
+      const { value, done } = await reader.read()
+      clearTimeout(stallTimer)
+      if (done) break
+      stallTimer = setTimeout(() => {
+        stalled = true
+        reader.cancel().catch(() => {})
+      }, STALL_TIMEOUT_MS)
+      buffer += decoder.decode(value, { stream: true })
 
-    for (const event of events) {
-      const lines = event.split('\n')
-      const eventLine = lines.find((l) => l.startsWith('event:'))
-      const dataLine = lines.find((l) => l.startsWith('data:'))
-      if (!dataLine) continue
-      const eventType = eventLine ? eventLine.slice(6).trim() : 'message'
-      const payload = JSON.parse(dataLine.slice(5).trim())
+      const events = buffer.split('\n\n')
+      buffer = events.pop() ?? ''
 
-      if (eventType === 'conversation' && payload.conversation_id) {
-        callbacks.onConversation?.(payload.conversation_id)
-      } else if (eventType === 'sources' && payload.sources) {
-        callbacks.onSources?.(payload.sources)
-      } else if (eventType === 'reasoning' && payload.reasoning) {
-        callbacks.onReasoning?.(payload.reasoning)
-      } else if (eventType === 'tool_call') {
-        callbacks.onToolCall?.(payload)
-      } else if (eventType === 'pending_write') {
-        callbacks.onPendingWrite?.(payload)
-      } else if (eventType === 'build_check') {
-        callbacks.onBuildCheck?.(payload)
-      } else if (eventType === 'error') {
-        callbacks.onError?.(payload.error || 'The model backend returned an error.')
-      } else if (payload.token) {
-        callbacks.onToken?.(payload.token)
+      for (const event of events) {
+        const lines = event.split('\n')
+        const eventLine = lines.find((l) => l.startsWith('event:'))
+        const dataLine = lines.find((l) => l.startsWith('data:'))
+        if (!dataLine) continue
+        const eventType = eventLine ? eventLine.slice(6).trim() : 'message'
+        const payload = JSON.parse(dataLine.slice(5).trim())
+
+        if (eventType === 'conversation' && payload.conversation_id) {
+          callbacks.onConversation?.(payload.conversation_id)
+        } else if (eventType === 'sources' && payload.sources) {
+          callbacks.onSources?.(payload.sources)
+        } else if (eventType === 'reasoning' && payload.reasoning) {
+          callbacks.onReasoning?.(payload.reasoning)
+        } else if (eventType === 'tool_call') {
+          callbacks.onToolCall?.(payload)
+        } else if (eventType === 'pending_write') {
+          callbacks.onPendingWrite?.(payload)
+        } else if (eventType === 'build_check') {
+          callbacks.onBuildCheck?.(payload)
+        } else if (eventType === 'error') {
+          callbacks.onError?.(payload.error || 'The model backend returned an error.')
+        } else if (payload.token) {
+          callbacks.onToken?.(payload.token)
+        }
       }
     }
+  } catch (err) {
+    if (stalled) {
+      throw new Error(`The model stopped responding (no output for ${STALL_TIMEOUT_MS / 1000}s). It may be stuck — try again or switch models.`)
+    }
+    throw err
+  } finally {
+    clearTimeout(stallTimer)
   }
 }
