@@ -3217,8 +3217,18 @@ body {
   font-family: inherit;
 }
 
-.editor-commit-form button {
-  align-self: flex-end;
+/* Commit + Push now sit in one row (see editor-commit-actions below)
+   instead of Push floating alone in its own row underneath — Commit
+   keeps the filled accent treatment as the primary action, Push and Set
+   upstream are secondary/outlined so the row still reads Commit-first. */
+.editor-commit-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.editor-commit-actions button[type='submit'] {
   padding: 6px 12px;
   border-radius: var(--radius-sm);
   border: none;
@@ -3229,9 +3239,24 @@ body {
   cursor: pointer;
 }
 
-.editor-commit-form button:disabled {
+.editor-commit-actions button:not([type='submit']) {
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-panel);
+  color: var(--text);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.editor-commit-actions button:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+.editor-commit-actions .editor-push-upstream {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .editor-branch-row {
@@ -3266,24 +3291,23 @@ body {
   cursor: default;
 }
 
-.editor-push-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
 .editor-push-status {
   font-size: 0.75rem;
   color: var(--success);
 }
 
+/* 4 buttons (Stage all/Stage/Unstage/Discard) rather than the previous
+   3 (no "all" variant) — flex-wrap lets them fall to two rows of two
+   in a narrow sidebar instead of squeezing "Stage all"'s label. */
 .editor-git-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
 }
 
 .editor-git-actions button {
-  flex: 1;
+  flex: 1 1 calc(50% - 3px);
+  min-width: 70px;
   padding: 5px 6px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-strong);
