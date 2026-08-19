@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -124,6 +125,17 @@ type Client struct {
 	ChatModel  string
 	EmbedModel string
 	HTTPClient *http.Client
+	// SendThink controls whether StreamChat/Chat include the "think"
+	// field on outgoing requests — Ollama's own extension for picking a
+	// reasoning effort level, not part of the OpenAI chat-completions
+	// spec. Real OpenAI-wire-compatible cloud APIs (OpenAI itself, NVIDIA
+	// Build) have no defined meaning for an unrecognized "think" field
+	// and some (confirmed: NVIDIA Build, at least for some models) 400
+	// the whole request rather than silently ignoring it — so this
+	// defaults false and is only set true for the local Ollama client
+	// (see New's caller in appserver.go), not the cloud ones New in
+	// router.go's SetCloudProviders constructs.
+	SendThink bool
 }
 
 func New(baseURL, apiKey, chatModel, embedModel string) *Client {
@@ -179,21 +191,26 @@ var OpenAIModels = []string{
 // OpenAIModels above — no separate client type needed, Router just
 // points another Client at it. Model IDs follow an "org/model-name"
 // pattern (not NVIDIA's own, e.g. gpt-5.1-style names) — confirmed
-// against NVIDIA's own API reference docs (docs.api.nvidia.com) as of
+// against NVIDIA's own API reference docs (docs.api.nvidia.com,
+// docs.nvidia.com/nim's support-matrix and get-started pages) as of
 // 2026-08, prioritizing generally-capable flagship chat models over
 // narrow ones. Unlike Gemini's model list, these haven't been confirmed
 // against a live ListModels call against a real NVIDIA Build key —
 // verify against a real account before relying on this list (see this
 // session's repeated Gemini model-ID corrections for why that
 // verification step matters). meta/llama-3.2-90b-vision-instruct is the
-// only one of these five confirmed (via its own docs.api.nvidia.com
+// only one of these seven confirmed (via its own docs.api.nvidia.com
 // reference page) to support image input — see SupportsVisionForModel.
+// openai/gpt-oss-120b and nvidia/nemotron-3-ultra-550b-a55b are both
+// confirmed text-only but tool-calling-capable per NVIDIA's NIM docs.
 var NvidiaModels = []string{
 	"meta/llama-3.3-70b-instruct",
 	"meta/llama-3.1-405b-instruct",
 	"meta/llama-3.2-90b-vision-instruct",
 	"mistralai/mistral-large-2-instruct",
 	"qwen/qwen2.5-coder-32b-instruct",
+	"openai/gpt-oss-120b",
+	"nvidia/nemotron-3-ultra-550b-a55b",
 }
 
 type tagsResponse struct {
@@ -361,6 +378,39 @@ func SupportsVisionForModel(model string) bool {
 	return false
 }
 
+// openAIErrorBody is the standard OpenAI-compatible error envelope
+// ({"error": {"message": ..., ...}}) — used by OpenAI itself, and (per
+// this file's package doc comment) by every other OpenAI-wire-compatible
+// backend this Client talks to (Ollama, NVIDIA Build). A non-200
+// response's body is the one place a caller actually finds out *why* a
+// request was rejected (bad model ID, an unsupported/unrecognized
+// parameter, a malformed request) rather than just that it was — see
+// StreamChat/Chat below, which previously discarded the body entirely
+// and surfaced only the bare HTTP status line.
+type openAIErrorBody struct {
+	Error struct {
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+// readChatError extracts a useful message from a non-200 chat completion
+// response, preferring the provider's own structured error message (see
+// openAIErrorBody) over the bare HTTP status line, and falling back to
+// the raw response body (capped) if it doesn't parse as that shape —
+// some OpenAI-compatible backends return a plain-text or differently-
+// shaped error body instead.
+func readChatError(resp *http.Response) error {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	var eb openAIErrorBody
+	if json.Unmarshal(body, &eb) == nil && eb.Error.Message != "" {
+		return fmt.Errorf("llm: chat completion failed: %s", eb.Error.Message)
+	}
+	if trimmed := strings.TrimSpace(string(body)); trimmed != "" {
+		return fmt.Errorf("llm: chat completion failed: %s: %s", resp.Status, trimmed)
+	}
+	return fmt.Errorf("llm: chat completion failed: %s", resp.Status)
+}
+
 type chatStreamChunk struct {
 	Choices []struct {
 		Delta struct {
@@ -381,7 +431,11 @@ func (c *Client) StreamChat(ctx context.Context, model string, messages []Messag
 	if model == "" {
 		model = c.ChatModel
 	}
-	body, err := json.Marshal(chatRequest{Model: model, Messages: messages, Stream: true, Think: thinkLevel})
+	cr := chatRequest{Model: model, Messages: messages, Stream: true}
+	if c.SendThink {
+		cr.Think = thinkLevel
+	}
+	body, err := json.Marshal(cr)
 	if err != nil {
 		return err
 	}
@@ -402,7 +456,7 @@ func (c *Client) StreamChat(ctx context.Context, model string, messages []Messag
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("llm: chat completion failed: %s", resp.Status)
+		return readChatError(resp)
 	}
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -449,7 +503,11 @@ func (c *Client) Chat(ctx context.Context, model string, messages []Message, too
 	if model == "" {
 		model = c.ChatModel
 	}
-	body, err := json.Marshal(chatRequest{Model: model, Messages: messages, Stream: false, Tools: tools, Think: thinkLevel})
+	creq := chatRequest{Model: model, Messages: messages, Stream: false, Tools: tools}
+	if c.SendThink {
+		creq.Think = thinkLevel
+	}
+	body, err := json.Marshal(creq)
 	if err != nil {
 		return Message{}, err
 	}
@@ -470,7 +528,7 @@ func (c *Client) Chat(ctx context.Context, model string, messages []Message, too
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return Message{}, fmt.Errorf("llm: chat completion failed: %s", resp.Status)
+		return Message{}, readChatError(resp)
 	}
 
 	var cr chatResponse
