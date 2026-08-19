@@ -238,7 +238,19 @@ func (r *Router) ListModels(ctx context.Context) ([]Model, error) {
 		}
 	}
 	if clouds.nvidia != nil {
-		for _, name := range NvidiaModels {
+		names := NvidiaModels
+		// NVIDIA Build has repeatedly retired models out from under
+		// NvidiaModels' hardcoded list (several 410 Gone "end of life"
+		// responses in a row) faster than any static snapshot of their
+		// docs can be kept current — so prefer asking the account's own
+		// key what's actually live right now, and only fall back to the
+		// curated list if that live call fails (e.g. a transient network
+		// error), so the picker still shows something rather than going
+		// empty.
+		if live, err := clouds.nvidia.ListOpenAIModels(ctx); err == nil && len(live) > 0 {
+			names = live
+		}
+		for _, name := range names {
 			full := NvidiaPrefix + name
 			out = append(out, Model{Name: full, SupportsFileTools: SupportsToolsForModel(full), SupportsVision: SupportsVisionForModel(full), Provider: "nvidia"})
 		}

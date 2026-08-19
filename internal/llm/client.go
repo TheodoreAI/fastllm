@@ -185,32 +185,46 @@ var OpenAIModels = []string{
 	"o3",
 }
 
-// NvidiaModels lists the models offered in the model picker when an
-// NVIDIA Build API key is configured. NVIDIA Build's hosted API
-// (integrate.api.nvidia.com) is also OpenAI-compatible, same as
-// OpenAIModels above — no separate client type needed, Router just
-// points another Client at it. Model IDs follow an "org/model-name"
-// pattern (not NVIDIA's own, e.g. gpt-5.1-style names) — confirmed
-// against NVIDIA's own API reference docs (docs.api.nvidia.com,
-// docs.nvidia.com/nim's support-matrix and get-started pages) as of
-// 2026-08, prioritizing generally-capable flagship chat models over
-// narrow ones. Unlike Gemini's model list, these haven't been confirmed
-// against a live ListModels call against a real NVIDIA Build key —
-// verify against a real account before relying on this list (see this
-// session's repeated Gemini model-ID corrections for why that
-// verification step matters). meta/llama-3.2-90b-vision-instruct is the
-// only one of these seven confirmed (via its own docs.api.nvidia.com
-// reference page) to support image input — see SupportsVisionForModel.
-// openai/gpt-oss-120b and nvidia/nemotron-3-ultra-550b-a55b are both
-// confirmed text-only but tool-calling-capable per NVIDIA's NIM docs.
+// NvidiaModels is a FALLBACK ONLY: Router.ListModels asks a configured
+// NVIDIA Build account's own key what's actually live via
+// Client.ListOpenAIModels (GET /v1/models) and uses that instead
+// whenever the call succeeds — this list is what's shown only if that
+// live call fails (e.g. a transient network error), so the picker still
+// shows something rather than going empty. It stopped being trustworthy
+// as a hand-maintained source of truth after NVIDIA retired three
+// different model IDs out from under it within the same session
+// (mistralai/mistral-large-2-instruct and qwen/qwen2.5-coder-32b-
+// instruct, then even their hand-verified "current" replacements
+// mistralai/mistral-large-3-675b-instruct-2512 and qwen/qwen3-coder-
+// 480b-a35b-instruct, all gone within about a day of being added) —
+// NVIDIA's catalog churns faster than any static snapshot, whether from
+// docs or a research pass, can stay accurate. Do not add a model here on
+// the strength of a docs page alone; the live path is what matters now.
+//
+// This particular list was last verified 2026-08-18 by actually calling
+// every one of the ~102 models a real NVIDIA Build account's live
+// /v1/models reported, with a real chat completion against each — most
+// of that catalog (~78 models) 404s with "Function ... Not found for
+// account", i.e. gated behind entitlements this account doesn't have,
+// regardless of whether the model ID itself is valid. Only models
+// confirmed to actually respond are listed below. If your own account's
+// entitlements differ, the live lookup above will naturally reflect
+// that — this fallback just needs to not be actively wrong.
+// meta/llama-3.2-11b-vision-instruct is the only one of these confirmed
+// live in that same sweep to accept image input — see
+// SupportsVisionForModel and nvidiaVisionModels.
 var NvidiaModels = []string{
+	"meta/llama-3.1-8b-instruct",
+	"meta/llama-3.1-70b-instruct",
 	"meta/llama-3.3-70b-instruct",
-	"meta/llama-3.1-405b-instruct",
-	"meta/llama-3.2-90b-vision-instruct",
-	"mistralai/mistral-large-2-instruct",
-	"qwen/qwen2.5-coder-32b-instruct",
-	"openai/gpt-oss-120b",
+	"meta/llama-3.2-11b-vision-instruct",
+	"mistralai/mistral-nemotron",
 	"nvidia/nemotron-3-ultra-550b-a55b",
+	"nvidia/nemotron-3-super-120b-a12b",
+	"nvidia/nemotron-3-nano-30b-a3b",
+	"nvidia/llama-3.3-nemotron-super-49b-v1",
+	"openai/gpt-oss-120b",
+	"z-ai/glm-5.2",
 }
 
 type tagsResponse struct {
@@ -340,15 +354,19 @@ var visionCapableModelPrefixes = []string{
 	"gemma4",
 }
 
-// nvidiaVisionModels lists which of NvidiaModels are confirmed (via
-// their own docs.api.nvidia.com reference page) to accept image input —
-// unlike Anthropic/OpenAI/Gemini, NVIDIA Build's vision support isn't
-// uniform across every model fastllm offers for that provider (most of
-// NvidiaModels are text-only), so this needs a per-model list rather
-// than a single provider-wide bool the way SupportsVisionForModel
-// handles the other three cloud providers.
+// nvidiaVisionModels lists which of NvidiaModels are confirmed to accept
+// image input — unlike Anthropic/OpenAI/Gemini, NVIDIA Build's vision
+// support isn't uniform across every model fastllm offers for that
+// provider (most of NvidiaModels are text-only), so this needs a
+// per-model list rather than a single provider-wide bool the way
+// SupportsVisionForModel handles the other three cloud providers.
+// meta/llama-3.2-11b-vision-instruct was confirmed live (a real chat
+// completion succeeded, ~8s) in the 2026-08-18 sweep documented on
+// NvidiaModels; the previously-listed 90b-vision variant timed out in
+// that same sweep and isn't in the live catalog for this account, so
+// it's been dropped here rather than left as an unverified claim.
 var nvidiaVisionModels = map[string]bool{
-	"meta/llama-3.2-90b-vision-instruct": true,
+	"meta/llama-3.2-11b-vision-instruct": true,
 }
 
 // SupportsVisionForModel reports whether model (bare local name, or a
@@ -609,6 +627,53 @@ type embedResponse struct {
 	Data []struct {
 		Embedding []float32 `json:"embedding"`
 	} `json:"data"`
+}
+
+type openAIModelsResponse struct {
+	Data []struct {
+		ID string `json:"id"`
+	} `json:"data"`
+}
+
+// ListOpenAIModels queries the standard OpenAI-compatible GET /v1/models
+// listing endpoint and returns the raw model ID strings it reports as
+// currently available. Unlike ListModels above (which is Ollama's own
+// /api/tags shape), this is what NVIDIA Build's real hosted catalog
+// speaks — used by Router.ListModels to ask NVIDIA Build directly what's
+// live instead of trusting NvidiaModels' hardcoded list, since NVIDIA has
+// repeatedly retired models out from under that list (several 410 Gone
+// "reached its end of life" responses in quick succession) faster than
+// any static snapshot of their docs could be kept current.
+func (c *Client) ListOpenAIModels(ctx context.Context) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/models", nil)
+	if err != nil {
+		return nil, err
+	}
+	if c.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, readChatError(resp)
+	}
+
+	var mr openAIModelsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&mr); err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(mr.Data))
+	for _, m := range mr.Data {
+		if m.ID != "" {
+			ids = append(ids, m.ID)
+		}
+	}
+	return ids, nil
 }
 
 // Embed returns the embedding vector for a single piece of text.
