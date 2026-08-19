@@ -83,10 +83,77 @@ func responsesInput(messages []Message) string {
 	return b.String()
 }
 
+// responsesTool is the Responses API's flat tool schema — unlike Chat
+// Completions' {"type":"function","function":{name,description,
+// parameters}}, the Responses API puts name/description/parameters
+// directly on the tool object alongside "type":"function". See
+// toResponsesTools below for the translation from fastllm's Tool.
+type responsesTool struct {
+	Type        string `json:"type"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Parameters  any    `json:"parameters"`
+}
+
+func toResponsesTools(tools []Tool) []responsesTool {
+	if len(tools) == 0 {
+		return nil
+	}
+	out := make([]responsesTool, len(tools))
+	for i, t := range tools {
+		out[i] = responsesTool{Type: "function", Name: t.Function.Name, Description: t.Function.Description, Parameters: t.Function.Parameters}
+	}
+	return out
+}
+
+// responsesInputItem is one entry of the Responses API's "input" array —
+// a tagged union covering the three shapes this client needs to send: a
+// plain conversational turn (Type "message", Role+Content set), a
+// replayed model-issued tool call (Type "function_call", CallID+Name+
+// Arguments set — required so the model can see its own prior calls when
+// asked to continue after a tool result), and a tool result being fed
+// back (Type "function_call_output", CallID+Output set). Fields irrelevant
+// to a given Type are simply left zero-valued and omitted from the JSON.
+type responsesInputItem struct {
+	Type      string `json:"type"`
+	Role      string `json:"role,omitempty"`
+	Content   string `json:"content,omitempty"`
+	CallID    string `json:"call_id,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
+	Output    string `json:"output,omitempty"`
+}
+
+// toResponsesInput converts fastllm's flat Message list into the
+// Responses API's input-item array, translating the two message shapes
+// runFileTools produces that don't map to a plain role+content turn: an
+// assistant message carrying ToolCalls becomes one function_call item per
+// call (dropping any accompanying Content — in practice a tool-calling
+// turn has none, matching how Chat Completions models behave here too),
+// and a role:"tool" message (see handler.go's runFileTools) becomes a
+// function_call_output item keyed by the same call ID the model used.
+func toResponsesInput(messages []Message) []responsesInputItem {
+	items := make([]responsesInputItem, 0, len(messages))
+	for _, m := range messages {
+		switch {
+		case m.Role == "tool":
+			items = append(items, responsesInputItem{Type: "function_call_output", CallID: m.ToolCallID, Output: m.Content})
+		case len(m.ToolCalls) > 0:
+			for _, call := range m.ToolCalls {
+				items = append(items, responsesInputItem{Type: "function_call", CallID: call.ID, Name: call.Function.Name, Arguments: call.Function.Arguments})
+			}
+		default:
+			items = append(items, responsesInputItem{Type: "message", Role: m.Role, Content: m.Content})
+		}
+	}
+	return items
+}
+
 type responsesRequest struct {
 	Model  string `json:"model"`
-	Input  string `json:"input"`
-	Stream bool   `json:"stream"`
+	Input  any    `json:"input"` // string (StreamChat) or []responsesInputItem (Chat, when tools are involved)
+	Tools  []responsesTool `json:"tools,omitempty"`
+	Stream bool            `json:"stream"`
 }
 
 type responsesErrorBody struct {
@@ -187,17 +254,81 @@ func (c *CloudflareResponsesClient) StreamChat(ctx context.Context, model string
 	return scanner.Err()
 }
 
-type responsesResponse struct {
-	OutputText string `json:"output_text"`
+// responsesOutputItem covers the two "output" item types Chat cares
+// about: a plain assistant message (Type "message", Content holding its
+// own nested content-part array — see extractText below) and a
+// function_call the model wants to invoke. Every other item type
+// Cloudflare/OpenAI's Responses API can emit (reasoning, web_search_call,
+// etc.) is left unparsed and ignored, same as chatStreamChunk/
+// anthropicStreamEvent only decode the fields their own callers use.
+type responsesOutputItem struct {
+	Type      string `json:"type"`
+	CallID    string `json:"call_id"`
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+	Content   []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	} `json:"content"`
 }
 
-// Chat sends a single non-streaming request and returns the model's reply
-// as plain text. Tool calling isn't implemented for this schema (mirrors
-// AnthropicClient.Chat — see SupportsToolsForModel, which already excludes
-// every "cloudflare:" model from the file-tool loop regardless of which
-// underlying wire format it uses).
-func (c *CloudflareResponsesClient) Chat(ctx context.Context, model string, messages []Message, thinkLevel string) (Message, error) {
-	body, err := json.Marshal(responsesRequest{Model: model, Input: responsesInput(messages), Stream: false})
+type responsesResponse struct {
+	OutputText string                 `json:"output_text"`
+	Output     []responsesOutputItem  `json:"output"`
+}
+
+// extractText concatenates every text content part of a "message"-type
+// output item — mirrors how Anthropic's Content []struct{Type,Text} is
+// walked in anthropic.go's Chat, for the same reason: a message can carry
+// more than one content part, and only the text ones matter here.
+func extractText(items []responsesOutputItem) string {
+	var b strings.Builder
+	for _, item := range items {
+		if item.Type != "message" {
+			continue
+		}
+		for _, part := range item.Content {
+			if part.Type == "output_text" || part.Type == "text" {
+				b.WriteString(part.Text)
+			}
+		}
+	}
+	return b.String()
+}
+
+// toToolCalls extracts every function_call output item as a fastllm
+// ToolCall, in the same shape Client.Chat's chatResponse parsing produces
+// — so runFileTools (handler.go) can treat a Responses-API tool call
+// identically to a Chat-Completions one without knowing which schema
+// produced it.
+func toToolCalls(items []responsesOutputItem) []ToolCall {
+	var calls []ToolCall
+	for _, item := range items {
+		if item.Type != "function_call" {
+			continue
+		}
+		call := ToolCall{ID: item.CallID, Type: "function"}
+		call.Function.Name = item.Name
+		call.Function.Arguments = item.Arguments
+		calls = append(calls, call)
+	}
+	return calls
+}
+
+// Chat sends a single non-streaming request, declaring tools (translated
+// via toResponsesTools) when the caller offers any, and returns the
+// model's reply — which may carry ToolCalls instead of (or in addition
+// to) Content if the model wants to invoke one, same contract as
+// Client.Chat. Only reached for a model NeedsResponsesAPI identifies (see
+// Router.Chat) and that SupportsToolsForModel has separately allowlisted
+// for tools — not every Responses-API model is assumed tool-capable just
+// because this method accepts a tools argument.
+func (c *CloudflareResponsesClient) Chat(ctx context.Context, model string, messages []Message, tools []Tool, thinkLevel string) (Message, error) {
+	var input any = responsesInput(messages)
+	if len(tools) > 0 {
+		input = toResponsesInput(messages)
+	}
+	body, err := json.Marshal(responsesRequest{Model: model, Input: input, Tools: toResponsesTools(tools), Stream: false})
 	if err != nil {
 		return Message{}, err
 	}
@@ -220,5 +351,13 @@ func (c *CloudflareResponsesClient) Chat(ctx context.Context, model string, mess
 	if err := json.NewDecoder(resp.Body).Decode(&rr); err != nil {
 		return Message{}, err
 	}
-	return Message{Role: "assistant", Content: rr.OutputText}, nil
+
+	if calls := toToolCalls(rr.Output); len(calls) > 0 {
+		return Message{Role: "assistant", ToolCalls: calls}, nil
+	}
+	text := rr.OutputText
+	if text == "" {
+		text = extractText(rr.Output)
+	}
+	return Message{Role: "assistant", Content: text}, nil
 }

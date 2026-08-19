@@ -363,8 +363,19 @@ var toolCapableModelPrefixes = []string{
 // provider level here is optimistic for NvidiaModels as a set; verify
 // each listed model actually returns real tool_calls before trusting
 // this blindly, same caveat as NvidiaModels' own doc comment.
+//
+// Cloudflare is a partial exception to the "whole provider" rule above:
+// only openai/gpt-5.6-luna is allowlisted, via NeedsResponsesAPI — its
+// Responses-API function-calling translation is implemented (see
+// CloudflareResponsesClient.Chat in cloudflare_responses.go), but the
+// other Cloudflare models (Chat-Completions-based, see CloudflareModels)
+// haven't been verified to reliably emit real tool_calls, so they stay
+// excluded until that's checked, same caution as NvidiaModels above.
 func SupportsToolsForModel(model string) bool {
-	if _, provider, ok := stripProviderPrefix(model); ok {
+	if bare, provider, ok := stripProviderPrefix(model); ok {
+		if provider == "cloudflare" {
+			return NeedsResponsesAPI(bare)
+		}
 		return provider == "gemini" || provider == "openai" || provider == "nvidia"
 	}
 	return SupportsTools(model)

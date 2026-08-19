@@ -213,7 +213,13 @@ func (r *Router) Chat(ctx context.Context, model string, messages []Message, too
 	case "anthropic":
 		return Message{}, fmt.Errorf("llm: file read/write tools aren't supported for Anthropic models yet")
 	case "cloudflare":
-		return Message{}, fmt.Errorf("llm: file read/write tools aren't supported for Cloudflare Workers AI models yet")
+		if clouds.cloudflareResponses == nil {
+			return Message{}, fmt.Errorf("llm: Cloudflare Workers AI isn't configured — add an API token and account ID in Settings → Cloud providers")
+		}
+		if !NeedsResponsesAPI(bare) {
+			return Message{}, fmt.Errorf("llm: file read/write tools aren't supported for this Cloudflare Workers AI model yet")
+		}
+		return clouds.cloudflareResponses.Chat(ctx, bare, messages, tools, thinkLevel)
 	}
 	return Message{}, fmt.Errorf("llm: unknown provider for model %q", model)
 }
