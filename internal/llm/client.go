@@ -185,34 +185,38 @@ var OpenAIModels = []string{
 	"o3",
 }
 
-// NvidiaModels is a FALLBACK ONLY: Router.ListModels asks a configured
-// NVIDIA Build account's own key what's actually live via
-// Client.ListOpenAIModels (GET /v1/models) and uses that instead
-// whenever the call succeeds — this list is what's shown only if that
-// live call fails (e.g. a transient network error), so the picker still
-// shows something rather than going empty. It stopped being trustworthy
-// as a hand-maintained source of truth after NVIDIA retired three
-// different model IDs out from under it within the same session
-// (mistralai/mistral-large-2-instruct and qwen/qwen2.5-coder-32b-
-// instruct, then even their hand-verified "current" replacements
-// mistralai/mistral-large-3-675b-instruct-2512 and qwen/qwen3-coder-
-// 480b-a35b-instruct, all gone within about a day of being added) —
-// NVIDIA's catalog churns faster than any static snapshot, whether from
-// docs or a research pass, can stay accurate. Do not add a model here on
-// the strength of a docs page alone; the live path is what matters now.
+// NvidiaModels lists the models offered in the picker when an NVIDIA
+// Build API key is configured. This is deliberately a hand-verified
+// allowlist, not a live query against NVIDIA's own GET /v1/models: that
+// endpoint lists NVIDIA Build's entire public catalog (~102 models as of
+// the sweep below) regardless of whether the configured account is
+// actually entitled to call each one — in a real sweep against a live
+// account, ~78 of those 102 404'd with "Function ... Not found for
+// account" the moment a real chat completion was attempted, so showing
+// the live list in the picker just means most entries fail on click.
+// Only models confirmed, via an actual chat completion (not just a
+// listing or a docs page), to respond successfully are listed here.
 //
-// This particular list was last verified 2026-08-18 by actually calling
-// every one of the ~102 models a real NVIDIA Build account's live
-// /v1/models reported, with a real chat completion against each — most
-// of that catalog (~78 models) 404s with "Function ... Not found for
-// account", i.e. gated behind entitlements this account doesn't have,
-// regardless of whether the model ID itself is valid. Only models
-// confirmed to actually respond are listed below. If your own account's
-// entitlements differ, the live lookup above will naturally reflect
-// that — this fallback just needs to not be actively wrong.
+// This list has already gone stale twice from trusting docs alone
+// instead of a live call — mistralai/mistral-large-2-instruct and
+// qwen/qwen2.5-coder-32b-instruct both went dead, and even their
+// hand-verified "current successor" replacements (mistralai/mistral-
+// large-3-675b-instruct-2512, qwen/qwen3-coder-480b-a35b-instruct) were
+// gone within about a day — NVIDIA's catalog and this account's
+// entitlements both churn faster than any docs snapshot stays accurate.
+// Do not add a model here on the strength of a docs page; only add one
+// after it returns a real, successful chat completion for an actual
+// account. If an entry here starts failing, re-run the same kind of
+// sweep (query GET /v1/models for the current catalog, then Chat each
+// entry) before editing this list by hand again.
+//
+// Last verified 2026-08-18 against a real account: every model below
+// returned a successful chat completion; no Qwen coder model was
+// entitled at all for that account (all 404'd), which is why there's no
+// coding-specialist entry here despite one existing in NVIDIA's catalog.
 // meta/llama-3.2-11b-vision-instruct is the only one of these confirmed
-// live in that same sweep to accept image input — see
-// SupportsVisionForModel and nvidiaVisionModels.
+// in that same sweep to accept image input — see SupportsVisionForModel
+// and nvidiaVisionModels.
 var NvidiaModels = []string{
 	"meta/llama-3.1-8b-instruct",
 	"meta/llama-3.1-70b-instruct",
@@ -627,53 +631,6 @@ type embedResponse struct {
 	Data []struct {
 		Embedding []float32 `json:"embedding"`
 	} `json:"data"`
-}
-
-type openAIModelsResponse struct {
-	Data []struct {
-		ID string `json:"id"`
-	} `json:"data"`
-}
-
-// ListOpenAIModels queries the standard OpenAI-compatible GET /v1/models
-// listing endpoint and returns the raw model ID strings it reports as
-// currently available. Unlike ListModels above (which is Ollama's own
-// /api/tags shape), this is what NVIDIA Build's real hosted catalog
-// speaks — used by Router.ListModels to ask NVIDIA Build directly what's
-// live instead of trusting NvidiaModels' hardcoded list, since NVIDIA has
-// repeatedly retired models out from under that list (several 410 Gone
-// "reached its end of life" responses in quick succession) faster than
-// any static snapshot of their docs could be kept current.
-func (c *Client) ListOpenAIModels(ctx context.Context) ([]string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/models", nil)
-	if err != nil {
-		return nil, err
-	}
-	if c.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
-	}
-
-	resp, err := c.HTTPClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, readChatError(resp)
-	}
-
-	var mr openAIModelsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&mr); err != nil {
-		return nil, err
-	}
-	ids := make([]string, 0, len(mr.Data))
-	for _, m := range mr.Data {
-		if m.ID != "" {
-			ids = append(ids, m.ID)
-		}
-	}
-	return ids, nil
 }
 
 // Embed returns the embedding vector for a single piece of text.

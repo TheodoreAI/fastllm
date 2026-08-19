@@ -238,19 +238,17 @@ func (r *Router) ListModels(ctx context.Context) ([]Model, error) {
 		}
 	}
 	if clouds.nvidia != nil {
-		names := NvidiaModels
-		// NVIDIA Build has repeatedly retired models out from under
-		// NvidiaModels' hardcoded list (several 410 Gone "end of life"
-		// responses in a row) faster than any static snapshot of their
-		// docs can be kept current — so prefer asking the account's own
-		// key what's actually live right now, and only fall back to the
-		// curated list if that live call fails (e.g. a transient network
-		// error), so the picker still shows something rather than going
-		// empty.
-		if live, err := clouds.nvidia.ListOpenAIModels(ctx); err == nil && len(live) > 0 {
-			names = live
-		}
-		for _, name := range names {
+		// Deliberately NOT querying ListOpenAIModels here: NVIDIA Build's
+		// live /v1/models lists its entire public catalog (~102 models as
+		// of the 2026-08-18 sweep documented on NvidiaModels), regardless
+		// of whether a given account is actually entitled to call each
+		// one — most of that catalog (~78 models) 404s with "Function ...
+		// Not found for account" the moment you try to chat with it. That
+		// makes the live endpoint useless for deciding what to *show*;
+		// NvidiaModels' curated, hand-verified-working list is what the
+		// picker uses instead. See NvidiaModels's doc comment for how it
+		// was verified and how to re-verify it if entries start failing.
+		for _, name := range NvidiaModels {
 			full := NvidiaPrefix + name
 			out = append(out, Model{Name: full, SupportsFileTools: SupportsToolsForModel(full), SupportsVision: SupportsVisionForModel(full), Provider: "nvidia"})
 		}
