@@ -668,6 +668,50 @@ html {
   --shadow-overlay: 0 8px 24px rgba(30, 60, 100, 0.25);
 }
 
+:root[data-theme='windows-7-dark'] {
+  /* Windows 7 (Dark) — the "Graphite" Aero color scheme Windows 7
+     itself shipped alongside the default blue Aero look: dark grey
+     glass chrome instead of light, same muted Aero blue accent family
+     as the light windows-7 theme above so the two read as siblings
+     rather than unrelated themes. Dark-family. Every text/background
+     pair below is checked against WCAG AA's 4.5:1 body-text threshold
+     (contrast ratios computed directly, not eyeballed) — bg-bubble-user
+     in particular needed darkening well past the "obvious" muted-blue
+     guess to actually clear it against white bubble text. */
+  --bg-window: #3c3c3c;
+  --bg-titlebar: #2d2d30;
+  --bg-sidebar: #333335;
+  --bg-sidebar-tint: rgba(51, 51, 53, 0.82);
+  --bg-panel: #2b2b2b;
+  --bg-chat: #2b2b2b;
+  --bg-input: #232323;
+  --bg-bubble: #333538;
+  /* #3a6bb0 vs white bubble text: 5.37:1 — clears AA. */
+  --bg-bubble-user: #3a6bb0;
+
+  --border: rgba(180, 195, 215, 0.14);
+  --border-strong: rgba(180, 195, 215, 0.26);
+
+  --text: #e8e8e8;
+  --text-dim: #b8c0cc;
+  /* #8b96a3 vs bg-panel #2b2b2b: 4.71:1 — clears AA. */
+  --text-faint: #8b96a3;
+
+  --accent: #5b8dd6;
+  --accent-contrast: #ffffff;
+  --danger: #e05c4a;
+  --success: #4caf50;
+  --warning: #d99a3d;
+
+  /* Aero's glass panels leaned softly rounded, same as the light theme. */
+  --radius-window: 6px;
+  --radius: 6px;
+  --radius-sm: 4px;
+
+  --shadow-window: none;
+  --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
 :root[data-theme-family='light'] .message.assistant {
   border: 1px solid var(--border);
 }
