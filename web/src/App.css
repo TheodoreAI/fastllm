@@ -2652,6 +2652,7 @@ body {
 
 .composer {
   display: flex;
+  align-items: center;
   gap: 8px;
 }
 
@@ -2845,7 +2846,7 @@ body {
   object-fit: contain;
 }
 
-.composer input {
+.composer textarea {
   flex: 1;
   padding: 9px 12px;
   border-radius: var(--radius);
@@ -2854,37 +2855,62 @@ body {
   color: var(--text);
   font-family: inherit;
   font-size: 0.8438rem;
+  resize: none;
+  overflow-y: hidden;
+  line-height: 1.4;
 }
 
-.composer input::placeholder {
+.composer textarea::placeholder {
   color: var(--text-faint);
 }
 
-.composer input:focus,
+.composer textarea:focus,
 .model-select:focus,
 .sidebar textarea:focus {
   outline: none;
   border-color: var(--accent);
 }
 
-.composer .btn-primary {
-  width: auto;
-  margin-top: 0;
-  padding: 9px 18px;
-  border-radius: var(--radius);
-  white-space: nowrap;
-}
-
-.composer .btn-stop {
-  background: var(--danger);
-  display: inline-flex;
+/* Compact circular icon button, matching the restrained, tinted-wash
+   language used elsewhere (.sidebar-icon-btn, .pending-write-action)
+   instead of a solid saturated pill with a text label — closer to how a
+   native macOS chat composer's send control reads. */
+.composer-send-btn {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  display: flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
+  border-radius: 50%;
+  border: 1px solid transparent;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
 }
 
-.composer .btn-stop:hover {
-  filter: brightness(1.1);
+.composer-send-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.composer-send-btn:active:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.composer-send-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.composer-send-btn.is-stop {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+}
+
+.composer-send-btn.is-stop:hover {
+  background: color-mix(in srgb, var(--danger) 22%, transparent);
 }
 
 /* ---------- scrollbars (Linux/GTK + macOS overlay feel) ---------- */
@@ -3649,30 +3675,42 @@ body {
   color: var(--text-dim);
 }
 
+/* Tinted wash instead of a solid filled pill, matching .sidebar-icon-btn /
+   .composer-send-btn — "Saved" in particular reads as quiet, settled
+   status text rather than a still-active button once there's nothing
+   left to do. */
 .editor-save-button {
   flex: 0 0 auto;
   padding: 5px 14px;
   border-radius: var(--radius-sm);
-  border: none;
-  background: var(--accent);
-  color: white;
+  border: 1px solid transparent;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
   font-size: 0.8125rem;
   font-weight: 500;
   cursor: pointer;
-  transition: filter 0.1s ease;
+  transition: background 0.12s ease, color 0.12s ease;
 }
 
 .editor-save-button:hover:not(:disabled) {
-  filter: brightness(1.08);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 .editor-save-button:active:not(:disabled) {
-  filter: brightness(0.95);
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 .editor-save-button:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text-faint);
+  cursor: default;
+}
+
+.editor-save-button.is-saving:disabled {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  opacity: 0.75;
 }
 
 .editor-codemirror {

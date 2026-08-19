@@ -112,6 +112,17 @@ export default function ChatPanel({
   // most recent entry.
   const [historyIndex, setHistoryIndex] = useState(0)
   const draftBeforeHistoryRef = useRef('')
+  const composerTextareaRef = useRef(null)
+
+  // Auto-grow the composer with its content instead of scrolling
+  // horizontally — reset to a single row first so the textarea can also
+  // shrink back down when text is deleted, not just grow.
+  useEffect(() => {
+    const el = composerTextareaRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }, [input])
 
   // Switching conversations invalidates any in-progress history browsing —
   // it no longer refers to a draft or a position in the new thread's list.
@@ -166,10 +177,23 @@ export default function ChatPanel({
   }
 
   function handleComposerKeyDown(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      handleSubmit(e)
+      return
+    }
+
     if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return
     if (promptHistory.length === 0) return
 
+    // Now that the composer is a multi-line textarea, ArrowUp/ArrowDown
+    // should only page through prompt history when the caret is already at
+    // the very start (ArrowUp) or end (ArrowDown) of the text — otherwise
+    // they need to move the cursor between lines like normal.
+    const el = e.target
     if (e.key === 'ArrowUp') {
+      const atStart = el.selectionStart === 0 && el.selectionEnd === 0
+      if (!atStart) return
       if (historyIndex >= promptHistory.length) return // already at the oldest prompt
       e.preventDefault()
       if (historyIndex === 0) draftBeforeHistoryRef.current = input
@@ -177,6 +201,8 @@ export default function ChatPanel({
       setHistoryIndex(nextIndex)
       onInputChange(promptHistory[promptHistory.length - nextIndex])
     } else {
+      const atEnd = el.selectionStart === el.value.length && el.selectionEnd === el.value.length
+      if (!atEnd) return
       if (historyIndex === 0) return // not browsing, let the cursor/nothing happen
       e.preventDefault()
       const nextIndex = historyIndex - 1
@@ -309,21 +335,23 @@ export default function ChatPanel({
           >
             {visionSupported ? <ImageIcon className="inline-icon" /> : <ImageOffIcon className="inline-icon" />}
           </span>
-          <input
+          <textarea
+            ref={composerTextareaRef}
             value={input}
             onChange={(e) => handleComposerChange(e.target.value)}
             onKeyDown={handleComposerKeyDown}
             onPaste={onComposerPaste}
             placeholder={visionSupported ? 'Ask something… (paste an image to attach it)' : 'Ask something…'}
             disabled={streaming}
+            rows={1}
           />
           {streaming ? (
-            <button type="button" className="btn-primary btn-stop" onClick={onStop}>
-              <StopIcon className="inline-icon" /> Stop
+            <button type="button" className="composer-send-btn is-stop" onClick={onStop} title="Stop">
+              <StopIcon className="inline-icon" />
             </button>
           ) : (
-            <button type="submit" className="btn-primary" disabled={!input.trim() && (!pendingImages || pendingImages.length === 0)}>
-              Send
+            <button type="submit" className="composer-send-btn" disabled={!input.trim() && (!pendingImages || pendingImages.length === 0)} title="Send">
+              <ArrowUpIcon className="inline-icon" />
             </button>
           )}
         </div>
