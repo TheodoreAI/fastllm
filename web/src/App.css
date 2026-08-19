@@ -3558,6 +3558,9 @@ body {
 
 .settings-subsection-body {
   margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 
 .settings-label {
@@ -3581,12 +3584,18 @@ body {
   font-size: 0.8125rem;
 }
 
-:root[data-theme-family='light'] .settings-row {
-  background: var(--bg-window);
+/* .settings-subsection-body's flex gap (14px) is right for spacing
+   between distinct fields, but a run of .settings-row siblings (e.g.
+   "LLM backend"'s three rows, "About"'s version/build rows) reads as one
+   compact key-value table, not separate fields — so consecutive rows
+   pull themselves back to a tighter 6px rather than inheriting the full
+   field-level gap. */
+.settings-row + .settings-row {
+  margin-top: -8px;
 }
 
-.settings-row + .settings-row {
-  margin-top: 6px;
+:root[data-theme-family='light'] .settings-row {
+  background: var(--bg-window);
 }
 
 .settings-row-key {

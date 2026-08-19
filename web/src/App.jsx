@@ -995,7 +995,21 @@ export default function App() {
             type="button"
             title="Screenshot"
             disabled={capturingScreenshot}
-            onClick={handleScreenshot}
+            // Modals (Settings, etc.) close themselves on any mousedown
+            // outside their own DOM node — this button lives outside every
+            // modal, so a plain click would close whatever modal is open
+            // (mousedown fires, and closes it) before the click handler
+            // that captures the screenshot even runs, defeating the whole
+            // point of screenshotting a modal. Capturing here on
+            // mousedown's capture phase, with stopPropagation, keeps this
+            // button's press from ever reaching the modals' own
+            // document-level "click outside" listeners, so the modal is
+            // still open (and still painted) when captureScreenshot's
+            // native PrintWindow call runs.
+            onMouseDownCapture={(e) => {
+              e.stopPropagation()
+              handleScreenshot()
+            }}
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z" />
