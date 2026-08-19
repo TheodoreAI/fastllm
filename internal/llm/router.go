@@ -57,6 +57,12 @@ type cloudClients struct {
 	// NeedsResponsesAPI.
 	openaiResponses     *ResponsesClient
 	cloudflareResponses *ResponsesClient
+	// cloudflareAnthropic talks to Workers AI's unified catalog's
+	// /ai/v1/messages endpoint (Anthropic's native Messages wire format,
+	// not Chat Completions) for Cloudflare's hosted copy of Claude models
+	// (see cloudflareAnthropicModels). Built from the same Cloudflare
+	// token as cloudflare/cloudflareResponses above.
+	cloudflareAnthropic *AnthropicClient
 }
 
 // Router dispatches chat requests to the local OpenAI-compatible backend
@@ -108,6 +114,7 @@ func (r *Router) SetCloudProviders(cloud CloudProviderConfig) {
 		cloudflareBaseURL := "https://api.cloudflare.com/client/v4/accounts/" + cloud.CloudflareAccountID + "/ai/v1"
 		next.cloudflare = New(cloudflareBaseURL, cloud.CloudflareAPIKey, "", "")
 		next.cloudflareResponses = NewResponsesClient(cloudflareBaseURL, cloud.CloudflareAPIKey)
+		next.cloudflareAnthropic = NewCloudflareAnthropicClient(cloudflareBaseURL, cloud.CloudflareAPIKey)
 	}
 	r.mu.Lock()
 	r.clouds = next
@@ -173,6 +180,9 @@ func (r *Router) StreamChat(ctx context.Context, model string, messages []Messag
 		if clouds.cloudflare == nil {
 			return fmt.Errorf("llm: Cloudflare Workers AI isn't configured — add an API token and account ID in Settings → Cloud providers")
 		}
+		if NeedsAnthropicAPI(bare) {
+			return clouds.cloudflareAnthropic.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning)
+		}
 		if NeedsResponsesAPI("cloudflare", bare) {
 			return clouds.cloudflareResponses.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning)
 		}
@@ -187,10 +197,9 @@ func (r *Router) StreamChat(ctx context.Context, model string, messages []Messag
 // streams. OpenAI's real hosted API already speaks the same tool-call
 // wire format Client.Chat implements (see OpenAIModels's doc comment), so
 // it's routed straight there with no translation needed, same as
-// StreamChat does. Anthropic tool-calling isn't implemented yet — see
-// llm.SupportsToolsForModel, which is what keeps internal/chat.Handler
-// from ever reaching this case for an "anthropic:" model in practice;
-// the error here is a backstop, not the primary gate.
+// StreamChat does. Anthropic (both directly and via Cloudflare's hosted
+// copy — see NeedsAnthropicAPI) translates through AnthropicClient.Chat's
+// own tool_use/tool_result handling instead.
 func (r *Router) Chat(ctx context.Context, model string, messages []Message, tools []Tool, thinkLevel string) (Message, error) {
 	bare, provider, ok := stripProviderPrefix(model)
 	if !ok {
@@ -221,10 +230,16 @@ func (r *Router) Chat(ctx context.Context, model string, messages []Message, too
 		}
 		return clouds.nvidia.Chat(ctx, bare, messages, tools, thinkLevel)
 	case "anthropic":
-		return Message{}, fmt.Errorf("llm: file read/write tools aren't supported for Anthropic models yet")
+		if clouds.anthropic == nil {
+			return Message{}, fmt.Errorf("llm: Anthropic isn't configured — add an API key in Settings → Cloud providers")
+		}
+		return clouds.anthropic.Chat(ctx, bare, messages, tools, thinkLevel)
 	case "cloudflare":
 		if clouds.cloudflare == nil {
 			return Message{}, fmt.Errorf("llm: Cloudflare Workers AI isn't configured — add an API token and account ID in Settings → Cloud providers")
+		}
+		if NeedsAnthropicAPI(bare) {
+			return clouds.cloudflareAnthropic.Chat(ctx, bare, messages, tools, thinkLevel)
 		}
 		if NeedsResponsesAPI("cloudflare", bare) {
 			return clouds.cloudflareResponses.Chat(ctx, bare, messages, tools, thinkLevel)

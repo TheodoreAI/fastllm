@@ -284,6 +284,12 @@ var CloudflareModels = []string{
 	// same bare "openai/gpt-5.6-luna" ID, which matches the ID Cloudflare's
 	// own docs show for the Responses API.
 	"openai/gpt-5.6-luna",
+	// anthropic/claude-haiku-4.5 added 2026-08-19: served through Workers
+	// AI's unified model catalog, which speaks Anthropic's native Messages
+	// API (not Chat Completions) — routed through cloudflareAnthropic
+	// instead of the plain Client (see NeedsAnthropicAPI in anthropic.go
+	// and cloudflareAnthropicModels there).
+	"anthropic/claude-haiku-4.5",
 }
 
 type tagsResponse struct {
@@ -369,18 +375,15 @@ var toolCapableModelPrefixes = []string{
 // "provider:"-prefixed cloud model — see Router) can be offered file
 // read/write tools at all. Cloud providers each need their own tool-call
 // wire-format translation (see e.g. GeminiClient.Chat) — implemented for
-// Gemini, OpenAI, and NVIDIA Build (OpenAI's and NVIDIA Build's hosted
-// APIs both already speak Client's tool format natively) but not yet
-// Anthropic, so an "anthropic:" model is excluded here even though Claude
-// models are generally excellent at tool use — this is a "not
-// implemented in fastllm yet" gate, not a judgment about the model.
-// Unlike local models (see SupportsTools's allowlist below), a
-// configured cloud provider needs no per-model allowlist: the
-// uncertainty SupportsTools guards against is whether a given local
-// model reliably emits real tool_calls at all, which doesn't apply to
-// hosted providers fastllm has implemented tool support for. NVIDIA
-// Build's own docs note tool-calling support varies per model on their
-// platform (e.g. confirmed present on the Llama 3.2 Vision models,
+// Gemini, OpenAI, NVIDIA Build, and Anthropic (AnthropicClient.Chat's
+// tool_use/tool_result translation, added 2026-08-19 alongside Cloudflare's
+// "anthropic/claude-haiku-4.5"). Unlike local models (see SupportsTools's
+// allowlist below), a configured cloud provider needs no per-model
+// allowlist: the uncertainty SupportsTools guards against is whether a
+// given local model reliably emits real tool_calls at all, which doesn't
+// apply to hosted providers fastllm has implemented tool support for.
+// NVIDIA Build's own docs note tool-calling support varies per model on
+// their platform (e.g. confirmed present on the Llama 3.2 Vision models,
 // confirmed absent on DeepSeek-R1-Distill) — offering it at the whole-
 // provider level here is optimistic for NvidiaModels as a set; verify
 // each listed model actually returns real tool_calls before trusting
@@ -390,15 +393,17 @@ var toolCapableModelPrefixes = []string{
 // tool support is allowlisted per model, not for the whole provider: a
 // model routed through the Responses API (NeedsResponsesAPI) gets tools
 // via ResponsesClient.Chat's translation, verified working end-to-end for
-// "cloudflare:openai/gpt-5.6-luna" (see NeedsResponsesAPI's doc comment);
-// every other Cloudflare model needs to be on cloudflareToolCapableModels
-// below, confirmed the same hand-verified way as NvidiaModels.
+// "cloudflare:openai/gpt-5.6-luna" (see NeedsResponsesAPI's doc comment); a
+// model routed through the Anthropic Messages API (NeedsAnthropicAPI) gets
+// tools via AnthropicClient.Chat's translation; every other Cloudflare
+// model needs to be on cloudflareToolCapableModels below, confirmed the
+// same hand-verified way as NvidiaModels.
 func SupportsToolsForModel(model string) bool {
 	if bare, provider, ok := stripProviderPrefix(model); ok {
 		if provider == "cloudflare" {
-			return NeedsResponsesAPI("cloudflare", bare) || cloudflareToolCapableModels[bare]
+			return NeedsResponsesAPI("cloudflare", bare) || NeedsAnthropicAPI(bare) || cloudflareToolCapableModels[bare]
 		}
-		return provider == "gemini" || provider == "openai" || provider == "nvidia"
+		return provider == "gemini" || provider == "openai" || provider == "nvidia" || provider == "anthropic"
 	}
 	return SupportsTools(model)
 }
@@ -417,6 +422,9 @@ func SupportsToolsForModel(model string) bool {
 //   - "openai/gpt-5.6-luna": tool-capable via the Responses API, not this
 //     Chat-Completions path — see NeedsResponsesAPI/ResponsesClient.Chat
 //     instead; not listed here.
+//   - "anthropic/claude-haiku-4.5": tool-capable via the Anthropic Messages
+//     API, not this Chat-Completions path — see
+//     NeedsAnthropicAPI/AnthropicClient.Chat instead; not listed here.
 //
 // Every other CloudflareModels entry is unverified and stays excluded
 // until checked the same way, same caution as NvidiaModels' own doc
