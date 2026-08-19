@@ -194,14 +194,6 @@ export default function App() {
   const [skillPrompt, setSkillPrompt] = useState('')
   const [skillToDelete, setSkillToDelete] = useState(null)
   const [skillError, setSkillError] = useState('')
-  // Holds the pending write awaiting confirmation before it's actually
-  // written to disk — unlike Reject (which only discards a proposal),
-  // Approve touches a real file with no undo, so it gets the same
-  // confirm-modal gate as skill delete rather than executing on a single
-  // click. Conversation delete deliberately skips this gate (see
-  // handleDeleteConversation) — chats are low-stakes to lose compared to a
-  // file on disk.
-  const [writeToConfirm, setWriteToConfirm] = useState(null)
   const [conversations, setConversations] = useState([])
   const [conversationId, setConversationId] = useState(null)
   const [conversationError, setConversationError] = useState('')
@@ -891,22 +883,12 @@ export default function App() {
     )
   }
 
-  // Only an overwrite (file_exists) goes through the confirm modal — that's
-  // the one case with real prior content to lose and no undo. Creating a
-  // brand-new file has nothing to overwrite, so it stays a single click,
-  // same risk level as it always was.
+  // Approving a write applies immediately, no confirm modal — the diff is
+  // already shown in the PendingWriteCard before Approve is clicked, so
+  // the review step already happened; a second confirmation on top of
+  // that was just friction, not real protection.
   function requestApproveWrite(write) {
-    if (write.file_exists) {
-      setWriteToConfirm(write)
-    } else {
-      runApproveWrite(write.id)
-    }
-  }
-
-  async function confirmApproveWrite() {
-    const id = writeToConfirm.id
-    setWriteToConfirm(null)
-    await runApproveWrite(id)
+    runApproveWrite(write.id)
   }
 
   async function runApproveWrite(id) {
@@ -1198,16 +1180,6 @@ export default function App() {
           confirmLabel="Delete"
           onCancel={() => setSkillToDelete(null)}
           onConfirm={confirmDeleteSkill}
-        />
-      )}
-
-      {writeToConfirm != null && (
-        <ConfirmDeleteModal
-          heading="Overwrite this file?"
-          description={`This overwrites "${writeToConfirm.path}" on disk with the version shown above. This can't be undone.`}
-          confirmLabel="Overwrite"
-          onCancel={() => setWriteToConfirm(null)}
-          onConfirm={confirmApproveWrite}
         />
       )}
 

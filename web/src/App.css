@@ -2722,19 +2722,21 @@ body {
   white-space: nowrap;
 }
 
-/* Token count for the most recent completion, shown the same way
-   Claude Code/ChatGPT surface usage near their own input — a quiet,
-   persistent row rather than something that has to be hovered or
-   expanded to see. Shares composer-active-file's row when both are
-   present rather than reserving a separate line for each. Two small
-   pill chips (in/out) carry the just-finished turn's numbers at full
-   legibility; the running session total trails as plain dim text since
-   it's secondary context, not the primary read. */
+/* Token count for the most recent completion, shown the same quiet way
+   composer-active-file and the tool-call log lines are: plain text with a
+   colored icon, no badge shape — matching how the rest of this app marks
+   up small inline status (see .tool-calls li, .pending-write-action)
+   rather than introducing a separate pill-and-solid-fill vocabulary that
+   doesn't appear anywhere else in the UI. Shares composer-active-file's
+   row when both are present. The running session total lives in this
+   row's title tooltip rather than as a third inline figure. */
 .composer-usage {
   margin: 6px 2px 0;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 14px;
+  font-size: 0.75rem;
+  color: var(--text-dim);
   font-variant-numeric: tabular-nums;
 }
 
@@ -2750,47 +2752,62 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  padding: 2px 7px;
-  border-radius: 999px;
-  background: var(--border);
-  font-size: 0.7rem;
-  font-weight: 600;
-  line-height: 1.4;
 }
 
 .composer-usage-chip .inline-icon {
   width: 0.85em;
   height: 0.85em;
+  opacity: 0.85;
 }
 
-.composer-usage-in {
+.composer-usage-in .inline-icon {
   color: var(--accent);
 }
 
-.composer-usage-out {
+.composer-usage-out .inline-icon {
   color: var(--success);
 }
 
-/* Rate-limit headroom chip — neutral like the in/out chips normally, but
-   flips to the danger color once capacity is genuinely low (<=10%) so a
-   near-exhausted window is impossible to miss rather than blending in
-   with the routine per-turn numbers next to it. */
+/* Rate-limit headroom — a thin, low-contrast track (matching the
+   composer's own border weight, not a heavy pill) with a muted fill by
+   default. It only picks up real color once there's something worth
+   flagging, the same restraint .pending-write-action and .tool-calls
+   li.is-error use elsewhere: color signals a state change, not decoration. */
 .composer-usage-limit {
-  color: var(--text-dim);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.composer-usage-limit-bar {
+  width: 40px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.composer-usage-limit-fill {
+  display: block;
+  height: 100%;
+  background: var(--text-faint);
+  transition: width 0.3s ease;
+}
+
+.composer-usage-limit.is-medium .composer-usage-limit-fill {
+  background: var(--warning);
 }
 
 .composer-usage-limit.is-low {
-  color: var(--danger);
-  background: color-mix(in srgb, var(--danger) 15%, transparent);
+  opacity: 1;
 }
 
-.composer-usage-total {
-  font-size: 0.75rem;
-  color: var(--text-dim);
-  opacity: 0.75;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.composer-usage-limit.is-low .composer-usage-limit-fill {
+  background: var(--danger);
+}
+
+.composer-usage-limit.is-low .composer-usage-limit-pct {
+  color: var(--danger);
 }
 
 /* Persistent flag next to the composer input showing whether the

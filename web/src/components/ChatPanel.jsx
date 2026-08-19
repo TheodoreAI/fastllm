@@ -84,18 +84,6 @@ function ArrowUpIcon(props) {
   )
 }
 
-// Used on the composer's rate-limit-remaining chip — a half-circle dial,
-// evoking a fuel/capacity gauge for "how much headroom is left."
-function GaugeIcon(props) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
-      <path d="M4 18a8 8 0 0 1 16 0" />
-      <path d="M12 18l4-6" />
-      <circle cx="12" cy="18" r="1.2" fill="currentColor" stroke="none" />
-    </svg>
-  )
-}
-
 export default function ChatPanel({
   messages,
   messagesLoading,
@@ -346,27 +334,31 @@ export default function ChatPanel({
           </p>
         )}
         {lastUsage && (
-          <div className="composer-usage" title={`${lastUsage.total_tokens.toLocaleString()} tokens this turn`}>
+          <div
+            className="composer-usage"
+            title={
+              hasTotalUsage
+                ? `${lastUsage.total_tokens.toLocaleString()} tokens this turn · session total ${totalUsage.promptTokens.toLocaleString()} in / ${totalUsage.completionTokens.toLocaleString()} out`
+                : `${lastUsage.total_tokens.toLocaleString()} tokens this turn`
+            }
+          >
             <span className="composer-usage-chip composer-usage-in">
               <ArrowDownIcon className="inline-icon" />
-              {lastUsage.prompt_tokens.toLocaleString()}
+              {lastUsage.prompt_tokens.toLocaleString()} in
             </span>
             <span className="composer-usage-chip composer-usage-out">
               <ArrowUpIcon className="inline-icon" />
-              {lastUsage.completion_tokens.toLocaleString()}
+              {lastUsage.completion_tokens.toLocaleString()} out
             </span>
             {rateLimitPct != null && (
               <span
-                className={`composer-usage-chip composer-usage-limit ${rateLimitPct <= 10 ? 'is-low' : ''}`}
+                className={`composer-usage-limit ${rateLimitPct <= 10 ? 'is-low' : rateLimitPct <= 50 ? 'is-medium' : ''}`}
                 title={rateLimitTitle}
               >
-                <GaugeIcon className="inline-icon" />
-                {rateLimitPct}% left
-              </span>
-            )}
-            {hasTotalUsage && (
-              <span className="composer-usage-total">
-                session {totalUsage.promptTokens.toLocaleString()} in · {totalUsage.completionTokens.toLocaleString()} out
+                <span className="composer-usage-limit-bar">
+                  <span className="composer-usage-limit-fill" style={{ width: `${rateLimitPct}%` }} />
+                </span>
+                {rateLimitPct}%
               </span>
             )}
           </div>
