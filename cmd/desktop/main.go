@@ -13,6 +13,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"unsafe"
 
 	"fastllm/internal/appserver"
 	"fastllm/internal/chat"
@@ -24,6 +25,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
+	"golang.org/x/sys/windows"
 )
 
 // singleInstanceID scopes the Windows single-instance lock to this app
@@ -36,7 +38,26 @@ const singleInstanceID = "fastllm-desktop-9f1e6b2a"
 // so the two can never drift apart.
 const appTitle = "fastllm"
 
+// appUserModelID is what Windows actually uses to decide whether two
+// windows belong to "the same app" for taskbar grouping/pinning purposes
+// — NOT the exe path or window title. Without setting this explicitly,
+// Windows auto-derives an AppUserModelID from fastllm-desktop.exe's own
+// identity, which the pinned shortcut (fastllm.lnk → wscript.exe →
+// start-desktop.bat → fastllm-desktop.exe — see start-desktop.vbs) can
+// never match, since wscript.exe has its own separate identity. The
+// result: clicking the pinned icon launches the app correctly, but
+// Windows can't recognize the running window as "the pinned app," so it
+// shows a second, separate taskbar icon for it instead of activating the
+// pinned one in place. setAppUserModelID below, plus the matching
+// AppUserModelID stamped onto fastllm.lnk itself (see
+// scripts/pin-fastllm.ps1 or the README section on pinning), is what
+// makes Windows treat both as the same app and collapse them into one
+// icon.
+const appUserModelID = "fastllm.desktop"
+
 func main() {
+	setAppUserModelID(appUserModelID)
+
 	cfg, err := appserver.ConfigFromEnv()
 	if err != nil {
 		log.Fatalf("load config: %v", err)
@@ -232,4 +253,33 @@ func screenshotHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "image/png")
 	w.Write(png)
+}
+
+// setAppUserModelID calls shell32.dll!SetCurrentProcessExplicitAppUserModelID
+// — golang.org/x/sys/windows doesn't wrap this one, so it's declared
+// directly against shell32.dll, same technique
+// internal/screenshot/screenshot_windows.go and
+// internal/terminal/jobobject_windows.go already use for APIs that
+// package doesn't cover. Must run before any window is created (so right
+// at the top of main(), before wails.Run) — Windows reads this per-process
+// setting to decide taskbar grouping, and a window created before it's set
+// keeps whatever auto-derived ID it started with. See appUserModelID's
+// doc comment for why this matters for the pinned shortcut specifically.
+// Failure is logged, not fatal — worst case is the pre-existing two-icon
+// taskbar behavior, not a broken app.
+func setAppUserModelID(id string) {
+	idPtr, err := windows.UTF16PtrFromString(id)
+	if err != nil {
+		log.Printf("setAppUserModelID: %v", err)
+		return
+	}
+	modShell32 := windows.NewLazySystemDLL("shell32.dll")
+	procSetAppID := modShell32.NewProc("SetCurrentProcessExplicitAppUserModelID")
+	// Returns an HRESULT: 0 (S_OK) is success, any other value is a
+	// failure code — the inverse of the usual Win32 "0 = failure"
+	// convention most of this codebase's other syscalls follow (compare
+	// screenshot_windows.go's procs, which return 0 on failure).
+	if ret, _, callErr := procSetAppID.Call(uintptr(unsafe.Pointer(idPtr))); ret != 0 {
+		log.Printf("SetCurrentProcessExplicitAppUserModelID: HRESULT 0x%x: %v", ret, callErr)
+	}
 }
