@@ -76,7 +76,15 @@ func NewHandler(registry *Registry, gate *Gate, fileReader *files.Reader) http.H
 			// all of these, websocket.Accept's default same-origin check
 			// rejects every connection from the desktop app with "Origin
 			// ... is not authorized for Host ...".
-			OriginPatterns: []string{"wails.localhost", "wails", "localhost", "localhost:*", "127.0.0.1:*"},
+			//
+			// "wails.localhost:*" (as opposed to the bare "wails.localhost"
+			// pattern above it) specifically covers `wails dev`: once the
+			// webview is actually routed through the live Vite dev server
+			// (see cmd/desktop/main.go's Assets comment), its Origin becomes
+			// "wails://wails.localhost:<devserver-port>" — the dynamic port
+			// means the exact "wails.localhost" pattern (no port) never
+			// matches, so this needs the wildcard.
+			OriginPatterns: []string{"wails.localhost", "wails.localhost:*", "wails", "localhost", "localhost:*", "127.0.0.1:*"},
 		})
 		if err != nil {
 			log.Printf("terminal: websocket accept failed: %v", err)
