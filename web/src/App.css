@@ -1203,13 +1203,6 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
-.terminal-panel-title {
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--text-dim);
-  letter-spacing: 0.2px;
-}
-
 .terminal-tabs {
   display: flex;
   align-items: center;
@@ -1234,6 +1227,9 @@ body {
 }
 
 .terminal-tab-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   border: none;
   background: transparent;
   color: inherit;
@@ -1243,6 +1239,17 @@ body {
   cursor: pointer;
   padding: 0;
   white-space: nowrap;
+}
+
+.terminal-tab-icon {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  opacity: 0.75;
+}
+
+.terminal-tab.is-active .terminal-tab-icon {
+  opacity: 1;
 }
 
 .terminal-tab-close {
