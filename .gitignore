@@ -1,5 +1,7 @@
 fastllm.exe
 fastllm.exe~
+fastllm
+.fastllm.launched
 fastllm.db
 fastllm.log
 web/node_modules/
