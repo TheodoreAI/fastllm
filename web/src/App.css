@@ -3650,6 +3650,81 @@ body {
   font-size: 0.8125rem;
 }
 
+.editor-setup-checklist {
+  width: 100%;
+  max-width: 320px;
+  /* Flex items default to a content-based automatic minimum width that
+     ignores an explicit width/max-width — with the nowrap label below,
+     that content-min was wider than the actual editor pane whenever the
+     split with the chat pane made it narrow, so the checklist refused to
+     shrink and overflowed past the pane's edge into the file sidebar.
+     min-width: 0 lets it actually shrink; the label's own text-overflow:
+     ellipsis (below) is what keeps the content itself legible at that
+     point instead of just clipping mid-layout. */
+  min-width: 0;
+  text-align: left;
+}
+
+.editor-setup-checklist-title {
+  margin: 0 0 12px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.editor-setup-checklist ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.editor-setup-checklist li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  min-width: 0;
+}
+
+.editor-setup-checklist li.is-done {
+  opacity: 0.6;
+}
+
+.editor-setup-checklist-mark {
+  width: 16px;
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.editor-setup-checklist-label {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+}
+
+/* .btn-secondary is otherwise a full-width form button (width: 100%,
+   margin-top: 8px) — fine stacked in a settings form, but it breaks
+   badly as an inline action sitting next to a label in this flex row.
+   Higher-specificity override rather than a new visual style, so this
+   still matches every other secondary button in the app. */
+.editor-setup-checklist li .btn-secondary {
+  flex: 0 0 auto;
+  width: auto;
+  margin-top: 0;
+  white-space: nowrap;
+}
+
 .editor-tabs {
   display: flex;
   align-items: center;
@@ -4156,7 +4231,8 @@ body {
 
 .settings-field .model-select,
 .settings-field input[type='text'],
-.settings-field input[type='number'] {
+.settings-field input[type='number'],
+.settings-field input[type='password'] {
   width: 100%;
   background: color-mix(in srgb, var(--bg-panel), var(--text) 6%);
   color: var(--text);

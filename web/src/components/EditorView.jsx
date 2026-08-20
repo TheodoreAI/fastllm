@@ -43,6 +43,7 @@ export default function EditorView({
   terminalEnabled,
   visible,
   openFolderSignal,
+  onOpenSettings,
   panel,
   onPanelChange,
   onGitChangeCountChange,
@@ -184,6 +185,42 @@ export default function EditorView({
   const enabled = !!fileAccessSettings?.read_enabled
   const canWrite = !!fileAccessSettings?.write_enabled
   const dirty = content !== savedContent
+
+  // The three toggles a fresh install needs before the Editor/Terminal
+  // tab does anything useful (file access, an actual folder, and the
+  // terminal) are independent settings with no enforced order — nothing
+  // stops picking a folder before turning on file access, or opening the
+  // terminal panel before enabling it. Surfaced as a checklist in the
+  // empty-file-tree state (see editor-empty-state below) rather than a
+  // blocking first-run wizard: it's just the same "select a file"
+  // placeholder every other empty state already shows, made useful for
+  // exactly as long as setup is actually incomplete, then it goes back to
+  // being the plain placeholder — no new persisted "onboarding done" flag
+  // to invent or reset.
+  const setupSteps = [
+    { key: 'fileAccess', label: 'Allow file access', done: enabled, action: () => onOpenSettings?.('fileAccess') },
+    { key: 'folder', label: 'Open a folder', done: !!fileAccessSettings?.root, action: handleOpenFolder },
+    { key: 'terminal', label: 'Enable the terminal', done: !!terminalEnabled, action: () => onOpenSettings?.('terminal') },
+  ]
+  const setupComplete = setupSteps.every((step) => step.done)
+  const setupChecklist = (
+    <div className="editor-setup-checklist">
+      <p className="editor-setup-checklist-title">Get set up</p>
+      <ul>
+        {setupSteps.map((step) => (
+          <li key={step.key} className={step.done ? 'is-done' : ''}>
+            <span className="editor-setup-checklist-mark">{step.done ? '✓' : ''}</span>
+            <span className="editor-setup-checklist-label">{step.label}</span>
+            {!step.done && (
+              <button type="button" className="btn-secondary" onClick={step.action}>
+                {step.key === 'folder' ? 'Choose…' : 'Open Settings'}
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
 
   // Themeable, keyboard-accessible replacement for window.confirm() — same
   // ConfirmDeleteModal used for conversation/skill delete elsewhere in the
@@ -934,7 +971,7 @@ export default function EditorView({
   if (!enabled) {
     return (
       <div className="editor-view editor-view-empty">
-        <p>File access is off. Enable it in Settings → File access to use the editor.</p>
+        {setupChecklist}
       </div>
     )
   }
@@ -1270,7 +1307,7 @@ export default function EditorView({
             </>
           ) : openTabs.length === 0 ? (
             <div className="editor-empty-state">
-              <p>Select a file to open it.</p>
+              {setupComplete ? <p>Select a file to open it.</p> : setupChecklist}
             </div>
           ) : null}
         </div>
@@ -1337,7 +1374,7 @@ export default function EditorView({
               everVisible &&
               terminalTabs.map((id) => (
                 <div key={id} style={{ display: id === activeTerminalTab ? 'contents' : 'none' }}>
-                  <TerminalView theme={theme} />
+                  <TerminalView theme={theme} folderRoot={fileAccessSettings?.root} />
                 </div>
               ))
             ) : (

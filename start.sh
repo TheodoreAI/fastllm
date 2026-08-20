@@ -7,6 +7,18 @@ set -u
 APPDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$APPDIR"
 
+# .env is gitignored — a place for machine-local overrides (e.g.
+# LLM_BASE_URL/LLM_CHAT_MODEL pointed at a local llama-server instead of
+# the Ollama default) that have no business being committed, since
+# they're specific to whatever's actually running on this machine. Not
+# required; nothing changes if it's absent.
+if [ -f "$APPDIR/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    source "$APPDIR/.env"
+    set +a
+fi
+
 EXE="$APPDIR/fastllm"
 PORT=8080
 

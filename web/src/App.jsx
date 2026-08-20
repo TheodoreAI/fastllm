@@ -1052,6 +1052,7 @@ export default function App() {
           terminalEnabled={terminalSettings.enabled}
           visible
           openFolderSignal={openFolderSignal}
+          onOpenSettings={handleOpenSettings}
           panel={editorPanel}
           onPanelChange={setEditorPanel}
           onGitChangeCountChange={setGitChangeCount}
