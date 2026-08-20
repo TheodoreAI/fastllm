@@ -991,6 +991,17 @@ export default function App() {
       <nav className="view-rail">
         <button
           type="button"
+          title={editorPaneCollapsed ? 'Show editor panel' : 'Hide editor panel'}
+          onClick={toggleEditorPaneCollapsed}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <rect x="3" y="4" width="18" height="16" rx="2" />
+            <path d="M10 4v16" />
+            {!editorPaneCollapsed && <rect x="3" y="4" width="7" height="16" rx="1" fill="currentColor" stroke="none" opacity="0.35" />}
+          </svg>
+        </button>
+        <button
+          type="button"
           className={editorPanel === 'files' && !editorSidebarCollapsed ? 'is-active' : ''}
           title="Files"
           onClick={toggleFilesPanel}
@@ -1023,17 +1034,6 @@ export default function App() {
             <path d="M6 8.5v7M8 6h4a4 4 0 0 1 4 4v0" />
           </svg>
           {gitChangeCount > 0 && <span className="view-rail-badge">{gitChangeCount}</span>}
-        </button>
-        <button
-          type="button"
-          title={editorPaneCollapsed ? 'Show editor panel' : 'Hide editor panel'}
-          onClick={toggleEditorPaneCollapsed}
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <rect x="3" y="4" width="18" height="16" rx="2" />
-            <path d="M10 4v16" />
-            {!editorPaneCollapsed && <rect x="3" y="4" width="7" height="16" rx="1" fill="currentColor" stroke="none" opacity="0.35" />}
-          </svg>
         </button>
 
         <div className="view-rail-spacer" />
