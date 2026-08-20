@@ -262,7 +262,7 @@ export default function App() {
   // doc comments. Reassignable the same way the right sidebar's sections
   // are reordered (DraggableSection), just by swapping instead of splicing.
   const [paneSlots, swapPanes] = usePaneSlots(DEFAULT_SLOT_ASSIGNMENT)
-  const [paneGridSizes, setLeftWidth, setTopHeight] = usePaneGridSizes()
+  const [paneGridSizes, setLeftWidth, setTopHeight, setBottomHeight] = usePaneGridSizes()
   // DOM targets EditorView portals its sidebar/main content into — see
   // renderPanes below and EditorView's own doc comment. State (not refs)
   // because a portal target has to be there BY RENDER TIME for
@@ -540,6 +540,33 @@ export default function App() {
     function handleMove(moveEvent) {
       const delta = moveEvent.clientY - startY
       setTopHeight(Math.max(160, startHeight + delta))
+    }
+    function handleUp() {
+      window.removeEventListener('mousemove', handleMove)
+      window.removeEventListener('mouseup', handleUp)
+      document.body.style.userSelect = previousUserSelect
+    }
+    window.addEventListener('mousemove', handleMove)
+    window.addEventListener('mouseup', handleUp)
+  }
+
+  // Drags the handle above the bottom-left slot when it's alone in the
+  // left column (its sibling collapsed — see renderPanes) and anchored to
+  // the bottom, with blank space filling the rest of the column above it.
+  // Inverted from handleRowDividerDragStart: the pane sits below this
+  // handle rather than above it, so dragging up (negative clientY delta)
+  // is what grows it.
+  function handleBottomHandleDragStart(e) {
+    e.preventDefault()
+    const startY = e.clientY
+    const startHeight = paneGridSizes.bottomHeight
+
+    const previousUserSelect = document.body.style.userSelect
+    document.body.style.userSelect = 'none'
+
+    function handleMove(moveEvent) {
+      const delta = startY - moveEvent.clientY
+      setBottomHeight(Math.max(160, startHeight + delta))
     }
     function handleUp() {
       window.removeEventListener('mousemove', handleMove)
@@ -1170,22 +1197,44 @@ export default function App() {
           className="is-pane-column"
           style={{ flex, minWidth: 220, minHeight: 160 }}
           label={PANE_LABELS[key]}
+          onCollapse={key === 'terminal' ? () => setTerminalPaneCollapsed(true) : undefined}
         >
           {content}
         </DraggableSection>
       )
     }
 
+    // When both slots are visible, they split the column per topHeight
+    // (drag the divider between them). When only one is visible, it
+    // normally stretches to fill the whole column — except Terminal
+    // specifically (see App.jsx's history: "when we collapse the editor
+    // the terminal should not grow to take the space"), which keeps its
+    // own fixed height instead (see usePaneGridSizes) with a blank spacer
+    // filling the rest and a drag handle on its free edge so it can still
+    // be resized manually. Editor (or any other pane) alone still fills
+    // the column normally — the fixed-size treatment is Terminal-only.
     const leftColumnNodes = []
-    if (topVisible) {
-      leftColumnNodes.push(slotPane(topKey, bottomVisible ? `0 1 ${paneGridSizes.topHeight}px` : '1 1 0%'))
-    }
     if (topVisible && bottomVisible) {
+      leftColumnNodes.push(slotPane(topKey, `0 1 ${paneGridSizes.topHeight}px`))
       leftColumnNodes.push(
         <div key="row-divider" className="split-divider split-divider-row" onMouseDown={handleRowDividerDragStart} />
       )
-    }
-    if (bottomVisible) {
+      leftColumnNodes.push(slotPane(bottomKey, '1 1 0%'))
+    } else if (topVisible && topKey === 'terminal') {
+      leftColumnNodes.push(slotPane(topKey, `0 1 ${paneGridSizes.topHeight}px`))
+      leftColumnNodes.push(
+        <div key="row-divider" className="split-divider split-divider-row" onMouseDown={handleRowDividerDragStart} />
+      )
+      leftColumnNodes.push(<div key="row-spacer" className="pane-column-spacer" />)
+    } else if (topVisible) {
+      leftColumnNodes.push(slotPane(topKey, '1 1 0%'))
+    } else if (bottomVisible && bottomKey === 'terminal') {
+      leftColumnNodes.push(<div key="row-spacer" className="pane-column-spacer" />)
+      leftColumnNodes.push(
+        <div key="row-divider" className="split-divider split-divider-row" onMouseDown={handleBottomHandleDragStart} />
+      )
+      leftColumnNodes.push(slotPane(bottomKey, `0 1 ${paneGridSizes.bottomHeight}px`))
+    } else if (bottomVisible) {
       leftColumnNodes.push(slotPane(bottomKey, '1 1 0%'))
     }
 

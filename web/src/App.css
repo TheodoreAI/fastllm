@@ -32,7 +32,7 @@
   --warning: #f2cc60;
 
   --radius-window: 4px;
-  --radius: 4px;
+  --radius: 6px;
   --radius-sm: 3px;
 
   --shadow-window: none;
@@ -1127,6 +1127,15 @@ body {
      row horizontally rather than letting the browser's flex algorithm
      force one of them thinner than its floor. */
   overflow-x: auto;
+  /* Static margin around the pane group, not a drop target or resize
+     handle itself (those live on .split-divider) — just breathing room
+     so panes' own rounded corners (.is-pane-column) read clearly against
+     the window background instead of sitting flush against the
+     rail/sidebar/window edges. Same tone as .split-divider (the gaps
+     between panes) so the outer and inner gaps read as one consistent
+     shade of grey. */
+  padding: 6px;
+  background: color-mix(in srgb, var(--bg-window), white 10%);
 }
 
 .split-divider {
@@ -1138,6 +1147,10 @@ body {
      either side (unlike var(--border), which needs contrast against
      whatever it's over). */
   background: color-mix(in srgb, var(--bg-window), white 10%);
+  /* Matches the rounded corners on the panes it sits between (see
+     .draggable-section.is-pane-column) so the gap reads as the same kind
+     of rounded surface, not a sharp strip between rounded ones. */
+  border-radius: var(--radius);
   position: relative;
   z-index: 2;
 }
@@ -1186,7 +1199,19 @@ body {
   min-height: 0;
 }
 
+/* Fills the space a collapsed sibling pane freed up in the left column
+   (see App.jsx's renderPanes) instead of letting the remaining pane
+   stretch into it. Flat background rather than none — left transparent,
+   .app::before's ambient accent-colored gradient (normally hidden behind
+   the panes) shows through and tints the gap blue. */
+.pane-column-spacer {
+  flex: 1 1 0%;
+  min-height: 0;
+  background: var(--bg-window);
+}
+
 .terminal-pane {
+  flex: 1;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -1458,7 +1483,8 @@ body {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  border-radius: 0;
+  border-radius: var(--radius);
+  overflow: hidden;
   /* Stacks above .app::before's decorative gradient overlay (z-index: 0)
      — .draggable-section is already position:relative, so this is the
      only piece needed; mirrors what the old dedicated .body/.editor-pane
@@ -1482,6 +1508,37 @@ body {
   letter-spacing: 0.4px;
   text-transform: uppercase;
   color: var(--text-faint);
+}
+
+.draggable-section-titlebar-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.draggable-section-collapse {
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  opacity: 0.55;
+}
+
+.draggable-section-collapse svg {
+  width: 13px;
+  height: 13px;
+}
+
+.draggable-section-collapse:hover {
+  opacity: 1;
+  background: rgba(128, 128, 128, 0.18);
+  color: var(--text);
 }
 
 /* Always visible here (not hover-revealed like the sidebar's default —

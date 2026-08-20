@@ -12,7 +12,13 @@ import { useState } from 'react'
 // usePaneSlots) whose own header already has real buttons living in that
 // same corner (Chat's +/✕, Terminal's tab-add), which the overlay would
 // otherwise sit on top of and block.
-export default function DraggableSection({ sectionKey, index, onReorder, highlighted, className, style, label, children }) {
+//
+// `onCollapse`, when passed alongside `label`, renders a small ✕ button
+// in that title bar, just left of the drag handle — the only way to
+// collapse a pane whose own inner header has no close button of its own
+// (Terminal; Chat and Editor already have one — see ChatPanel's
+// chat-header-close and App.jsx's view-rail toggle).
+export default function DraggableSection({ sectionKey, index, onReorder, highlighted, className, style, label, onCollapse, children }) {
   const [dragging, setDragging] = useState(false)
   const [dragOver, setDragOver] = useState(false)
 
@@ -52,7 +58,22 @@ export default function DraggableSection({ sectionKey, index, onReorder, highlig
       {label ? (
         <div className="draggable-section-titlebar">
           <span className="draggable-section-title">{label}</span>
-          {handle}
+          <div className="draggable-section-titlebar-actions">
+            {onCollapse && (
+              <button
+                type="button"
+                className="draggable-section-collapse"
+                title={`Collapse ${label}`}
+                onClick={onCollapse}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <circle cx="12" cy="12" r="9" />
+                  <path d="M9 9l6 6M15 9l-6 6" />
+                </svg>
+              </button>
+            )}
+            {handle}
+          </div>
         </div>
       ) : (
         handle
