@@ -37,6 +37,14 @@ const STATUS_LABEL = {
   approved: 'Written to disk',
   rejected: 'Discarded',
   error: 'Failed',
+  // Set once on startup for any write still "pending" from a previous
+  // run (see internal/store.abandonOrphanedPendingWrites) — the app
+  // closed before a human resolved it, and the in-memory PendingWrite
+  // Approve/Reject would act on doesn't survive a restart, so there's no
+  // way to actually approve or reject it anymore; this is shown instead
+  // of the Approve/Reject buttons (see the write.status === 'pending'
+  // guard below, which 'abandoned' deliberately does not match).
+  abandoned: 'Never resolved — app was closed before this was approved or rejected',
 }
 
 function FileIcon(props) {

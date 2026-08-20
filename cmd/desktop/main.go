@@ -36,7 +36,26 @@ const singleInstanceID = "fastllm-desktop-9f1e6b2a"
 // so the two can never drift apart.
 const appTitle = "fastllm"
 
+// appUserModelID is what Windows actually uses to decide whether two
+// windows belong to "the same app" for taskbar grouping/pinning purposes
+// — NOT the exe path or window title. Without setting this explicitly,
+// Windows auto-derives an AppUserModelID from fastllm-desktop.exe's own
+// identity, which the pinned shortcut (fastllm.lnk → wscript.exe →
+// start-desktop.bat → fastllm-desktop.exe — see start-desktop.vbs) can
+// never match, since wscript.exe has its own separate identity. The
+// result: clicking the pinned icon launches the app correctly, but
+// Windows can't recognize the running window as "the pinned app," so it
+// shows a second, separate taskbar icon for it instead of activating the
+// pinned one in place. setAppUserModelID below, plus the matching
+// AppUserModelID stamped onto fastllm.lnk itself (see
+// scripts/pin-fastllm.ps1 or the README section on pinning), is what
+// makes Windows treat both as the same app and collapse them into one
+// icon.
+const appUserModelID = "fastllm.desktop"
+
 func main() {
+	setAppUserModelID(appUserModelID)
+
 	cfg, err := appserver.ConfigFromEnv()
 	if err != nil {
 		log.Fatalf("load config: %v", err)
@@ -233,3 +252,4 @@ func screenshotHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/png")
 	w.Write(png)
 }
+

@@ -281,38 +281,44 @@ func (r *Reader) ReadFull(requested string) (content string, truncated bool, err
 }
 
 // ExistingContent reads a file's current content for diffing against a
-// proposed write, if it exists. Returns ("", false, nil) for a
+// proposed write, if it exists. Returns ("", false, false, nil) for a
 // not-yet-existing file (a new-file write), and a real error only for
-// unexpected failures (e.g. it's a directory).
-func (r *Reader) ExistingContent(requested string) (content string, exists bool, err error) {
+// unexpected failures (e.g. it's a directory). Like Read, content over
+// MaxReadBytes is cut off and truncated is reported true — callers MUST
+// check it: existing built from a truncated read is missing its real
+// tail, so an edit_file search/replace or a write_file overwrite built
+// from it would silently drop everything past the cutoff if written to
+// disk as-is. See runFileTools in internal/chat for the caller that
+// actually enforces this.
+func (r *Reader) ExistingContent(requested string) (content string, exists bool, truncated bool, err error) {
 	path, err := r.Resolve(requested)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return "", false, nil
+			return "", false, false, nil
 		}
-		return "", false, err
+		return "", false, false, err
 	}
 	info, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return "", false, nil
+			return "", false, false, nil
 		}
-		return "", false, err
+		return "", false, false, err
 	}
 	if info.IsDir() {
-		return "", false, fmt.Errorf("%q is a directory, not a file", requested)
+		return "", false, false, fmt.Errorf("%q is a directory, not a file", requested)
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return "", false, err
+		return "", false, false, err
 	}
 	defer f.Close()
 	buf := make([]byte, MaxReadBytes+1)
 	n, err := io.ReadFull(f, buf)
 	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
-		return "", false, err
+		return "", false, false, err
 	}
-	return string(buf[:min(n, MaxReadBytes)]), true, nil
+	return string(buf[:min(n, MaxReadBytes)]), true, n > MaxReadBytes, nil
 }
 
 // Write validates and performs the actual write to disk. Only called
