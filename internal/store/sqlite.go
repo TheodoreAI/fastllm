@@ -82,11 +82,37 @@ CREATE TABLE IF NOT EXISTS settings (
 `
 
 type Message struct {
-	ID        int64    `json:"id"`
-	Role      string   `json:"role"`
-	Content   string   `json:"content"`
-	Images    []string `json:"images,omitempty"` // data URIs — see SaveMessage/LoadMessages
-	CreatedAt string   `json:"created_at"`
+	ID            int64             `json:"id"`
+	Role          string            `json:"role"`
+	Content       string            `json:"content"`
+	Images        []string          `json:"images,omitempty"`         // data URIs — see SaveMessage/LoadMessages
+	PendingWrites []PendingWriteRow `json:"pending_writes,omitempty"` // see SaveMessage/LoadMessages and SetMessagePendingWrites
+	CreatedAt     string            `json:"created_at"`
+}
+
+// PendingWriteRow is a model-proposed file write, as persisted alongside
+// the assistant message that proposed it — the frontend's PendingWriteCard
+// (see web/src/components/PendingWriteCard.jsx) renders directly from
+// this same shape whether it just arrived live over SSE or was reloaded
+// from here after a restart, so the field names/JSON tags mirror
+// internal/chat.PendingWrite's exactly (id/path/new_content/
+// existing_content/file_exists) rather than being independently named.
+type PendingWriteRow struct {
+	ID              string `json:"id"`
+	Path            string `json:"path"`
+	NewContent      string `json:"new_content"`
+	ExistingContent string `json:"existing_content"`
+	FileExists      bool   `json:"file_exists"`
+	// Status is "pending", "approved", "rejected", or "abandoned" — the
+	// last meaning the app was closed (or crashed) before a human ever
+	// resolved it, so the in-memory PendingWrite behind it is gone and it
+	// can no longer actually be approved/rejected (see internal/chat's
+	// ApproveWrite/RejectWrite, which discard all pending writes on
+	// restart). A row is only ever written here once it stops being
+	// "pending" for real, via SetMessagePendingWrites — see that function
+	// and internal/chat.saveWriteOutcomeMessage for where "abandoned" gets
+	// applied.
+	Status string `json:"status"`
 }
 
 // Conversation is a single chat thread — a named, ordered sequence of
@@ -169,6 +195,9 @@ func Open(path string) (*sql.DB, error) {
 	if err := addMessagesImagesColumn(db); err != nil {
 		return nil, fmt.Errorf("store: migrate: %w", err)
 	}
+	if err := addMessagesPendingWritesColumn(db); err != nil {
+		return nil, fmt.Errorf("store: migrate: %w", err)
+	}
 	if err := seedDefaultSkills(db); err != nil {
 		return nil, fmt.Errorf("store: seed skills: %w", err)
 	}
@@ -178,7 +207,69 @@ func Open(path string) (*sql.DB, error) {
 	if err := migrateGeneralAssistantPrompt(db); err != nil {
 		return nil, fmt.Errorf("store: migrate general assistant prompt: %w", err)
 	}
+	if err := abandonOrphanedPendingWrites(db); err != nil {
+		return nil, fmt.Errorf("store: abandon orphaned pending writes: %w", err)
+	}
 	return db, nil
+}
+
+// abandonOrphanedPendingWrites runs once on every startup (not a one-time
+// migration flag like migrateOrphanMessages — it needs to catch this every
+// time the app closes with an unresolved write, not just once ever) and
+// flips any PendingWriteRow still marked "pending" from a previous run to
+// "abandoned". internal/chat.Handler.writes — the in-memory map
+// ApproveWrite/RejectWrite actually act on — is never persisted and starts
+// empty on every process start, so a write that was still awaiting a human
+// when the app last closed can no longer be approved or rejected; leaving
+// its stored Status as "pending" forever would show a PendingWriteCard with
+// live-looking Approve/Reject buttons for a write that 404s the moment
+// either is clicked.
+func abandonOrphanedPendingWrites(db *sql.DB) error {
+	rows, err := db.Query(`SELECT id, pending_writes FROM messages WHERE pending_writes IS NOT NULL`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	type update struct {
+		id     int64
+		writes []PendingWriteRow
+	}
+	var toUpdate []update
+	for rows.Next() {
+		var id int64
+		var raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			return err
+		}
+		var writes []PendingWriteRow
+		if err := json.Unmarshal([]byte(raw), &writes); err != nil {
+			// Best-effort, same as LoadMessages: a row with malformed JSON
+			// here just gets left alone rather than failing startup.
+			continue
+		}
+		changed := false
+		for i := range writes {
+			if writes[i].Status == "pending" {
+				writes[i].Status = "abandoned"
+				changed = true
+			}
+		}
+		if changed {
+			toUpdate = append(toUpdate, update{id: id, writes: writes})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	rows.Close()
+
+	for _, u := range toUpdate {
+		if err := setMessagePendingWritesByID(db, u.id, u.writes); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // addConversationIDColumn adds the conversation_id column to a messages
@@ -198,6 +289,17 @@ func addConversationIDColumn(db *sql.DB) error {
 // as addConversationIDColumn above.
 func addMessagesImagesColumn(db *sql.DB) error {
 	_, err := db.Exec(`ALTER TABLE messages ADD COLUMN images TEXT`)
+	if err != nil && strings.Contains(err.Error(), "duplicate column name") {
+		return nil
+	}
+	return err
+}
+
+// addMessagesPendingWritesColumn adds the pending_writes column to a
+// messages table created before proposed file writes were persisted —
+// same upgrade-path pattern as addConversationIDColumn/addMessagesImagesColumn.
+func addMessagesPendingWritesColumn(db *sql.DB) error {
+	_, err := db.Exec(`ALTER TABLE messages ADD COLUMN pending_writes TEXT`)
 	if err != nil && strings.Contains(err.Error(), "duplicate column name") {
 		return nil
 	}
@@ -326,28 +428,74 @@ func migrateGeneralAssistantPrompt(db *sql.DB) error {
 // images column — nil/empty is stored as SQL NULL rather than "[]" or
 // "", so LoadMessages can tell "no images" apart from a would-be parse
 // failure with a plain NULL check instead of also handling an empty-
-// string-vs-empty-array ambiguity.
-func SaveMessage(db *sql.DB, workspaceID string, conversationID int64, role, content string, images []string) error {
+// string-vs-empty-array ambiguity. Returns the new row's id — needed by
+// SaveAssistantMessage (to attach pending writes below) and available to
+// any other caller that wants it, though most just discard it with _.
+func SaveMessage(db *sql.DB, workspaceID string, conversationID int64, role, content string, images []string) (int64, error) {
 	var imagesJSON any
 	if len(images) > 0 {
 		enc, err := json.Marshal(images)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		imagesJSON = string(enc)
 	}
-	_, err := db.Exec(
+	res, err := db.Exec(
 		`INSERT INTO messages (workspace_id, conversation_id, role, content, images) VALUES (?, ?, ?, ?, ?)`,
 		workspaceID, conversationID, role, content, imagesJSON)
 	if err != nil {
+		return 0, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	return id, touchConversation(db, conversationID)
+}
+
+// SaveAssistantMessage is SaveMessage plus attaching the PendingWrites the
+// model proposed while producing this reply, encoded into the same row's
+// pending_writes column as SaveMessage's images are — nil/empty stored as
+// SQL NULL, same reasoning. Returns the new row's id so
+// SetMessagePendingWrites can later patch each write's Status in place
+// once a human resolves it (approved/rejected), or the app can mark it
+// abandoned on the next startup if it never was — see PendingWriteRow's
+// Status doc comment.
+func SaveAssistantMessage(db *sql.DB, workspaceID string, conversationID int64, content string, writes []PendingWriteRow) (int64, error) {
+	id, err := SaveMessage(db, workspaceID, conversationID, "assistant", content, nil)
+	if err != nil {
+		return 0, err
+	}
+	if len(writes) == 0 {
+		return id, nil
+	}
+	if err := setMessagePendingWritesByID(db, id, writes); err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+// SetMessagePendingWrites overwrites messageID's stored pending_writes —
+// used when a human resolves a write (ApproveWrite/RejectWrite) to patch
+// that one write's Status from "pending" to "approved"/"rejected" in
+// place, without touching the rest of the row (role, content, the other
+// writes proposed alongside it, if any).
+func SetMessagePendingWrites(db *sql.DB, messageID int64, writes []PendingWriteRow) error {
+	return setMessagePendingWritesByID(db, messageID, writes)
+}
+
+func setMessagePendingWritesByID(db *sql.DB, messageID int64, writes []PendingWriteRow) error {
+	enc, err := json.Marshal(writes)
+	if err != nil {
 		return err
 	}
-	return touchConversation(db, conversationID)
+	_, err = db.Exec(`UPDATE messages SET pending_writes = ? WHERE id = ?`, string(enc), messageID)
+	return err
 }
 
 func LoadMessages(db *sql.DB, workspaceID string, conversationID int64) ([]Message, error) {
 	rows, err := db.Query(
-		`SELECT id, role, content, images, created_at FROM messages
+		`SELECT id, role, content, images, pending_writes, created_at FROM messages
 		 WHERE workspace_id = ? AND conversation_id = ? ORDER BY id ASC`,
 		workspaceID, conversationID)
 	if err != nil {
@@ -358,8 +506,8 @@ func LoadMessages(db *sql.DB, workspaceID string, conversationID int64) ([]Messa
 	out := []Message{}
 	for rows.Next() {
 		var m Message
-		var imagesJSON sql.NullString
-		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &imagesJSON, &m.CreatedAt); err != nil {
+		var imagesJSON, pendingWritesJSON sql.NullString
+		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &imagesJSON, &pendingWritesJSON, &m.CreatedAt); err != nil {
 			return nil, err
 		}
 		if imagesJSON.Valid {
@@ -367,6 +515,10 @@ func LoadMessages(db *sql.DB, workspaceID string, conversationID int64) ([]Messa
 			// loses its images rather than failing the whole conversation
 			// load.
 			_ = json.Unmarshal([]byte(imagesJSON.String), &m.Images)
+		}
+		if pendingWritesJSON.Valid {
+			// Same best-effort handling as images above.
+			_ = json.Unmarshal([]byte(pendingWritesJSON.String), &m.PendingWrites)
 		}
 		out = append(out, m)
 	}

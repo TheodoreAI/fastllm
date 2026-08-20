@@ -266,12 +266,15 @@ func TestExistingContentForNewFile(t *testing.T) {
 	root := setupRoot(t)
 	r := New(root, true)
 
-	content, exists, err := r.ExistingContent("does-not-exist-yet.txt")
+	content, exists, truncated, err := r.ExistingContent("does-not-exist-yet.txt")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if exists {
 		t.Error("expected exists=false for a not-yet-existing file")
+	}
+	if truncated {
+		t.Error("expected truncated=false for a not-yet-existing file")
 	}
 	if content != "" {
 		t.Errorf("expected empty content, got %q", content)
@@ -282,15 +285,51 @@ func TestExistingContentForExistingFile(t *testing.T) {
 	root := setupRoot(t)
 	r := New(root, true)
 
-	content, exists, err := r.ExistingContent("hello.txt")
+	content, exists, truncated, err := r.ExistingContent("hello.txt")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !exists {
 		t.Error("expected exists=true")
 	}
+	if truncated {
+		t.Error("expected truncated=false for a small file")
+	}
 	if content != "hello world" {
 		t.Errorf("got %q", content)
+	}
+}
+
+// Regression test: ExistingContent used to truncate a large file at
+// MaxReadBytes exactly like Read does, but with no way for the caller to
+// know it happened — unlike Read, its signature had no truncated return
+// at all. write_file/edit_file in internal/chat.runFileTools build the
+// PendingWrite's NewContent from this value, so a silent truncation here
+// meant approving an edit to a file over MaxReadBytes would write a
+// content-truncated copy straight to disk, discarding everything past
+// the cutoff with no warning anywhere in the chain.
+func TestExistingContentReportsTruncationForLargeFiles(t *testing.T) {
+	root := t.TempDir()
+	big := make([]byte, MaxReadBytes+5000)
+	for i := range big {
+		big[i] = 'a'
+	}
+	if err := os.WriteFile(filepath.Join(root, "big.txt"), big, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := New(root, true)
+	content, exists, truncated, err := r.ExistingContent("big.txt")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !exists {
+		t.Fatal("expected exists=true")
+	}
+	if !truncated {
+		t.Fatal("expected truncated=true for a file over MaxReadBytes")
+	}
+	if len(content) != MaxReadBytes {
+		t.Fatalf("got content length %d, want %d", len(content), MaxReadBytes)
 	}
 }
 

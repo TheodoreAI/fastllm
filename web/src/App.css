@@ -3800,6 +3800,73 @@ body {
   height: 100%;
 }
 
+/* @uiw/react-codemirror's basicSetup ships CodeMirror's stock gutter/fold
+   styling (a plain background, thin serif fold arrows) which never matched
+   the app's own theme tokens — this rebuilds both against the same
+   variables the rest of the editor chrome uses, and swaps the default fold
+   glyphs for simple CSS-drawn chevrons instead of CodeMirror's built-in
+   triangle icons. */
+.editor-codemirror .cm-gutters {
+  background: var(--bg-chat);
+  border-right: 1px solid var(--border-strong);
+  color: var(--text-faint);
+}
+
+.editor-codemirror .cm-lineNumbers .cm-gutterElement {
+  padding: 0 8px 0 4px;
+}
+
+.editor-codemirror .cm-activeLineGutter {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text-dim);
+}
+
+.editor-codemirror .cm-foldGutter .cm-gutterElement {
+  padding: 0 4px;
+  cursor: pointer;
+}
+
+.editor-codemirror .cm-foldGutter .cm-gutterElement:hover {
+  color: var(--text);
+}
+
+.editor-codemirror .cm-foldPlaceholder {
+  padding: 0 4px;
+  margin: 0 4px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--text-dim);
+}
+
+/* Replaces CodeMirror's default fold-gutter glyphs (▾/▸ drawn from its own
+   built-in SVGs) with plain CSS chevrons sized and colored to match the
+   rest of the UI's iconography instead of looking like a separate widget. */
+.editor-codemirror .cm-foldGutter .cm-gutterElement > span[title] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  font-size: 0;
+}
+
+.editor-codemirror .cm-foldGutter .cm-gutterElement > span[title]::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
+  margin-top: -3px;
+}
+
+.editor-codemirror .cm-foldGutter .cm-gutterElement > span[title="Unfold line"]::before {
+  transform: rotate(-45deg);
+  margin-top: 0;
+  margin-left: -2px;
+}
+
 /* AI ghost-text completion (see aiCompletion.js) — a dimmed, non-selectable
    inline suggestion after the cursor, matching the visual convention
    Copilot/Cursor/etc. use so it reads as "not yet part of your code"

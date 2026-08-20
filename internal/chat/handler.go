@@ -199,6 +199,21 @@ type PendingWrite struct {
 	// Not exported for the same reason root isn't: internal bookkeeping,
 	// not part of the JSON the frontend renders.
 	conversationID int64
+
+	// messageID is the assistant message row this write was persisted
+	// alongside (see SaveAssistantMessage) — set once that save completes,
+	// just after this PendingWrite is created, since the row doesn't exist
+	// yet at construction time. ApproveWrite/RejectWrite use it to patch
+	// this write's Status in place via store.SetMessagePendingWrites, so a
+	// reloaded conversation shows the resolved outcome instead of forever
+	// showing "pending" for a write nothing can act on anymore (the
+	// in-memory PendingWrite itself doesn't survive a restart either way —
+	// see the Handler.writes doc comment). Zero until that save happens;
+	// never set at all for a write whose turn's assistant message ended up
+	// empty (see the full.Len() > 0 guard around SaveAssistantMessage) —
+	// SetMessagePendingWrites below is skipped in that case for the same
+	// reason: there is no row to patch.
+	messageID int64
 }
 
 type Handler struct {
@@ -292,7 +307,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := store.SaveMessage(h.DB, defaultWorkspace, convID, "user", req.Message, req.Images); err != nil {
+	if _, err := store.SaveMessage(h.DB, defaultWorkspace, convID, "user", req.Message, req.Images); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -320,8 +335,17 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	if effectiveModel == "" {
 		effectiveModel = h.LLM.ChatModel()
 	}
+	// Hoisted out of the block below so it's still in scope where the
+	// assistant message is saved further down — every write proposed this
+	// turn gets persisted alongside that message (see SaveAssistantMessage)
+	// so a PendingWriteCard survives a reload instead of only ever living
+	// in this one response's SSE stream and the browser's in-memory state.
+	var writes []*PendingWrite
 	if h.Files.Enabled() && llm.SupportsToolsForModel(effectiveModel) {
-		reads, writes, buildChecks, budgetExhausted := h.runFileTools(ctx, req.Model, &messages, normalizeThinkLevel(req.ThinkLevel), convID)
+		var reads []fileRead
+		var buildChecks []buildCheckReport
+		var budgetExhausted bool
+		reads, writes, buildChecks, budgetExhausted = h.runFileTools(ctx, req.Model, &messages, normalizeThinkLevel(req.ThinkLevel), convID)
 		for _, fr := range reads {
 			payload, _ := json.Marshal(fr)
 			fmt.Fprintf(w, "event: tool_call\ndata: %s\n\n", payload)
@@ -380,7 +404,24 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if full.Len() > 0 {
-		_ = store.SaveMessage(h.DB, defaultWorkspace, convID, "assistant", full.String(), nil)
+		writeRows := make([]store.PendingWriteRow, len(writes))
+		for i, pw := range writes {
+			writeRows[i] = store.PendingWriteRow{
+				ID:              pw.ID,
+				Path:            pw.Path,
+				NewContent:      pw.NewContent,
+				ExistingContent: pw.ExistingContent,
+				FileExists:      pw.FileExists,
+				Status:          "pending",
+			}
+		}
+		if msgID, err := store.SaveAssistantMessage(h.DB, defaultWorkspace, convID, full.String(), writeRows); err == nil {
+			// ApproveWrite/RejectWrite need this to patch the right row's
+			// Status later — see PendingWrite.messageID's doc comment.
+			for _, pw := range writes {
+				pw.messageID = msgID
+			}
+		}
 	}
 	fmt.Fprintf(w, "event: done\ndata: {}\n\n")
 	flusher.Flush()
@@ -702,8 +743,18 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 				} else if _, err := h.Files.ResolveForWrite(args.Path); err != nil {
 					result = "Error: " + err.Error()
 				} else {
-					existing, exists, _ := h.Files.ExistingContent(args.Path)
-					if msg := checkWriteFreshness(lastReadHash, args.Path, existing, exists); msg != "" {
+					existing, exists, existingTruncated, _ := h.Files.ExistingContent(args.Path)
+					if existingTruncated {
+						// existing is missing everything past MaxReadBytes —
+						// writing args.Content (the model's full reconstruction
+						// of a file it can only ever see truncated) would
+						// silently discard the real tail on disk once approved.
+						// Neither checkWriteFreshness nor checkTruncation below
+						// can catch this on their own (see their doc comments),
+						// so it's rejected here explicitly rather than relying
+						// on that interaction.
+						result = fmt.Sprintf("Error: %q is too large (over %d bytes) to safely overwrite via write_file — the chat tools can only see and reproduce the first %d bytes, so writing the full file back risks silently dropping everything past that point. Use edit_file for a targeted change instead, or edit it directly.", args.Path, files.MaxReadBytes, files.MaxReadBytes)
+					} else if msg := checkWriteFreshness(lastReadHash, args.Path, existing, exists); msg != "" {
 						result = msg
 					} else if msg := checkTruncation(existing, args.Content); msg != "" {
 						result = msg
@@ -747,8 +798,18 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 				} else if _, err := h.Files.ResolveForWrite(args.Path); err != nil {
 					result = "Error: " + err.Error()
 				} else {
-					existing, exists, _ := h.Files.ExistingContent(args.Path)
-					if msg := checkWriteFreshness(lastReadHash, args.Path, existing, exists); msg != "" {
+					existing, exists, existingTruncated, _ := h.Files.ExistingContent(args.Path)
+					if existingTruncated {
+						// Same reasoning as write_file's identical check above:
+						// existing is missing everything past MaxReadBytes, and
+						// the replace below would become the file's ENTIRE new
+						// content on disk once approved — silently dropping
+						// that unseen tail. edit_file's smaller footprint
+						// (a search/replace, not the whole file) doesn't help
+						// here since the result still overwrites the file
+						// wholesale via Files.Write.
+						result = fmt.Sprintf("Error: %q is too large (over %d bytes) to safely edit via edit_file — the chat tools can only see the first %d bytes, so any edit would silently drop everything past that point when written. Edit this file directly instead.", args.Path, files.MaxReadBytes, files.MaxReadBytes)
+					} else if msg := checkWriteFreshness(lastReadHash, args.Path, existing, exists); msg != "" {
 						result = msg
 					} else if !exists {
 						result = fmt.Sprintf("Error: %q doesn't exist yet — use write_file to create a new file.", args.Path)
@@ -938,6 +999,7 @@ func (h *Handler) ApproveWrite(w http.ResponseWriter, r *http.Request) {
 	// message here (replayed on the next turn via buildPrompt/LoadMessages,
 	// same as any other history) closes that gap.
 	saveWriteOutcomeMessage(h.DB, pw, fmt.Sprintf("The human approved and wrote the proposed change to %q (id: %s). It is now saved on disk exactly as proposed.", pw.Path, pw.ID))
+	updateStoredWriteStatus(h.DB, pw, "approved")
 	writeJSON(w, map[string]any{"path": pw.Path, "written": true})
 }
 
@@ -954,7 +1016,50 @@ func (h *Handler) RejectWrite(w http.ResponseWriter, r *http.Request) {
 	// turned down, and might act as though it's still pending or silently
 	// assume it went through.
 	saveWriteOutcomeMessage(h.DB, pw, fmt.Sprintf("The human rejected the proposed change to %q (id: %s). The file was NOT changed — it still has its original content.", pw.Path, pw.ID))
+	updateStoredWriteStatus(h.DB, pw, "rejected")
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// updateStoredWriteStatus patches this one write's persisted Status (see
+// store.PendingWriteRow) from "pending" to "approved"/"rejected" so a
+// reloaded conversation's PendingWriteCard shows the resolved outcome
+// instead of forever showing "pending" for a write nothing can act on
+// anymore. No-op if this write's assistant message was never actually
+// persisted (see PendingWrite.messageID's doc comment) or if the DB
+// round-trip fails — logged, not returned, for the same reason
+// saveWriteOutcomeMessage's failures are: the write to disk (or the
+// rejection) already succeeded, and the human already sees the outcome
+// directly in the PendingWriteCard for this session regardless of whether
+// it persists cleanly.
+func updateStoredWriteStatus(db *sql.DB, pw *PendingWrite, status string) {
+	if pw.messageID == 0 {
+		return
+	}
+	msgs, err := store.LoadMessages(db, defaultWorkspace, pw.conversationID)
+	if err != nil {
+		log.Printf("updateStoredWriteStatus: load: %v", err)
+		return
+	}
+	for _, m := range msgs {
+		if m.ID != pw.messageID {
+			continue
+		}
+		found := false
+		for i := range m.PendingWrites {
+			if m.PendingWrites[i].ID == pw.ID {
+				m.PendingWrites[i].Status = status
+				found = true
+				break
+			}
+		}
+		if !found {
+			return
+		}
+		if err := store.SetMessagePendingWrites(db, m.ID, m.PendingWrites); err != nil {
+			log.Printf("updateStoredWriteStatus: save: %v", err)
+		}
+		return
+	}
 }
 
 // saveWriteOutcomeMessage records a pending write's resolution into its
@@ -969,7 +1074,7 @@ func saveWriteOutcomeMessage(db *sql.DB, pw *PendingWrite, note string) {
 	if pw.conversationID == 0 {
 		return
 	}
-	if err := store.SaveMessage(db, defaultWorkspace, pw.conversationID, "system", note, nil); err != nil {
+	if _, err := store.SaveMessage(db, defaultWorkspace, pw.conversationID, "system", note, nil); err != nil {
 		log.Printf("saveWriteOutcomeMessage: %v", err)
 	}
 }

@@ -361,7 +361,13 @@ export default function App() {
       // stomp on the newer selection with stale data.
       setConversationId((current) => {
         if (String(current) === String(id)) {
-          setMessages(msgs)
+          // The backend's pending_writes column (see store.Message) is
+          // the same shape a live SSE pending_write event carries, minus
+          // the camelCase key ChatPanel/PendingWriteCard read — mapped
+          // here rather than renaming it anywhere else, so a reloaded
+          // conversation's diff cards render from the exact same prop
+          // shape a fresh one built during this session would.
+          setMessages(msgs.map((m) => ({ ...m, pendingWrites: m.pending_writes ?? [] })))
           setMessagesLoading(false)
         }
         return current
