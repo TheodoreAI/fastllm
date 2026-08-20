@@ -10,12 +10,14 @@ cd "$APPDIR"
 DESKTOPDIR="$APPDIR/cmd/desktop"
 BINDIR="$DESKTOPDIR/build/bin"
 
-# Wails packages a .app bundle on macOS but a bare binary on Linux;
-# resolve which one applies (or would apply, pre-build) each time it's
-# needed rather than caching it once, since a build can create the bundle.
+# Wails packages a .app bundle on macOS (named after wails.json's "name",
+# i.e. fastllm.app — not "outputfilename", which only names the binary
+# inside the bundle) but a bare binary on Linux. Resolve which one
+# applies (or would apply, pre-build) each time it's needed rather than
+# caching it once, since a build can create the bundle.
 resolve_exe() {
-    if [ -d "$BINDIR/fastllm-desktop.app" ]; then
-        echo "$BINDIR/fastllm-desktop.app"
+    if [ -d "$BINDIR/fastllm.app" ]; then
+        echo "$BINDIR/fastllm.app"
     else
         echo "$BINDIR/fastllm-desktop"
     fi
