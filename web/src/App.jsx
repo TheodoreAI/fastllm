@@ -346,19 +346,14 @@ export default function App() {
     setEditorSidebarCollapsed(false)
   }
 
-  // Collapses the whole editor pane (not just its own internal Files/
-  // Search/Git sidebar — see toggleFilesPanel above for that) so chat can
-  // take the full width, mirroring handleCloseChat's collapse of the
-  // chat pane the other way. Unlike chat, there's no "+ New chat"-style
-  // action elsewhere that implicitly re-expands the editor pane, so this
-  // toggle (a view-rail button — see its render below) is the only way
-  // back in; guards against collapsing into a state with nothing visible
-  // by re-expanding chat first if it was already collapsed.
+  // Collapses the file editor/sidebar (not just the Files/Search/Git
+  // sub-panel — see toggleFilesPanel above for that, and not the terminal,
+  // which EditorView keeps independently visible via its own paneCollapsed
+  // handling — the two are deliberately decoupled). This toggle (a
+  // view-rail button — see its render below) is the only way back in,
+  // same as handleCloseChat's X button is the only way back into chat.
   function toggleEditorPaneCollapsed() {
-    setEditorPaneCollapsed((collapsed) => {
-      if (!collapsed && chatCollapsed) setChatCollapsed(false)
-      return !collapsed
-    })
+    setEditorPaneCollapsed((collapsed) => !collapsed)
   }
 
   useEffect(() => {
@@ -1091,24 +1086,25 @@ export default function App() {
 
       <div className="main-row">
       <div className="split-container" ref={splitContainerRef}>
-      {/* Kept mounted (just hidden) rather than unmounted when collapsed —
-          unmounting would kill every open tab's unsaved buffer and every
-          live terminal session. `visible` gates EditorView's own
-          first-terminal-mount logic, same as it would for any other
-          hidden-but-mounted state. */}
+      {/* editorPaneCollapsed hides the file editor/sidebar (see EditorView's
+          paneCollapsed prop) but not the terminal — the two are decoupled,
+          so this column stays rendered and full width even when the editor
+          itself is collapsed, rather than the whole column disappearing
+          the way it used to. `visible` (terminal's first-mount gate) can
+          stay permanently true now that this is never display:none — it
+          only ever mattered for skipping the terminal's first mount before
+          the Editor tab had been opened at all. */}
       <div
         className="editor-pane"
-        style={{
-          display: editorPaneCollapsed ? 'none' : 'flex',
-          flex: chatCollapsed ? '1 1 auto' : `0 0 ${splitWidth * 100}%`,
-        }}
+        style={{ flex: chatCollapsed ? '1 1 auto' : `0 0 ${splitWidth * 100}%` }}
       >
         <EditorView
           fileAccessSettings={fileAccessSettings}
           onFileAccessSettingsChange={setFileAccessSettings}
           theme={theme}
           terminalEnabled={terminalSettings.enabled}
-          visible={!editorPaneCollapsed}
+          visible
+          paneCollapsed={editorPaneCollapsed}
           openFolderSignal={openFolderSignal}
           onOpenSettings={handleOpenSettings}
           panel={editorPanel}

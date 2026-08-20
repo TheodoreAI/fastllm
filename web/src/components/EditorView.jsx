@@ -43,6 +43,7 @@ export default function EditorView({
   theme,
   terminalEnabled,
   visible,
+  paneCollapsed,
   openFolderSignal,
   onOpenSettings,
   panel,
@@ -968,7 +969,7 @@ export default function EditorView({
 
   return (
     <div className="editor-view">
-      {!sidebarCollapsed && (
+      {!paneCollapsed && !sidebarCollapsed && (
       <aside
         ref={sidebarRef}
         className="editor-sidebar"
@@ -1060,46 +1061,58 @@ export default function EditorView({
       </aside>
       )}
 
-      {!sidebarCollapsed && (
+      {!paneCollapsed && !sidebarCollapsed && (
         <div className="editor-sidebar-divider" onMouseDown={handleSidebarDragStart} />
       )}
 
       <main className="editor-main" ref={mainColumnRef}>
-        <EditorPane
-          openTabs={openTabs}
-          activeTabPath={activeTabPath}
-          diffPath={diffPath}
-          onSelectTab={(path) => {
-            setDiffPath(null)
-            setActiveTabPath(path)
-          }}
-          onCloseTab={closeTab}
-          openPath={openPath}
-          fileStatus={fileStatus}
-          canWrite={canWrite}
-          dirty={dirty}
-          saving={saving}
-          onSave={handleSave}
-          theme={theme}
-          languageExtensionsFor={languageExtensionsFor}
-          onEditorKeyDown={handleEditorKeyDown}
-          onTabContentChange={(path, value) =>
-            setOpenTabs((prev) => prev.map((x) => (x.path === path ? { ...x, content: value } : x)))
-          }
-          codeMirrorViewsByPath={codeMirrorViewsByPath}
-          diffLines={diffLines}
-          onCloseDiff={() => setDiffPath(null)}
-          setupComplete={setupComplete}
-          setupChecklist={setupChecklist}
-        />
+        {!paneCollapsed && (
+          <EditorPane
+            openTabs={openTabs}
+            activeTabPath={activeTabPath}
+            diffPath={diffPath}
+            onSelectTab={(path) => {
+              setDiffPath(null)
+              setActiveTabPath(path)
+            }}
+            onCloseTab={closeTab}
+            openPath={openPath}
+            fileStatus={fileStatus}
+            canWrite={canWrite}
+            dirty={dirty}
+            saving={saving}
+            onSave={handleSave}
+            theme={theme}
+            languageExtensionsFor={languageExtensionsFor}
+            onEditorKeyDown={handleEditorKeyDown}
+            onTabContentChange={(path, value) =>
+              setOpenTabs((prev) => prev.map((x) => (x.path === path ? { ...x, content: value } : x)))
+            }
+            codeMirrorViewsByPath={codeMirrorViewsByPath}
+            diffLines={diffLines}
+            onCloseDiff={() => setDiffPath(null)}
+            setupComplete={setupComplete}
+            setupChecklist={setupChecklist}
+          />
+        )}
 
-        {!terminalCollapsed && (
+        {!paneCollapsed && !terminalCollapsed && (
           <div className="terminal-panel-divider" onMouseDown={handleTerminalDragStart} />
         )}
 
+        {/* Terminal stays visible and usable independent of the file
+            editor/sidebar above — collapsing the editor pane (paneCollapsed,
+            see App.jsx's editorPaneCollapsed) must not also take the
+            terminal down with it, since the two are unrelated tools that
+            happen to share this column. When the editor content is
+            collapsed, the terminal fills the whole column height instead
+            of sitting at its usual fixed terminalPanelHeight, since there's
+            nothing above it competing for space anymore. */}
         <div
           className={`terminal-panel ${terminalCollapsed ? 'is-collapsed' : ''}`}
-          style={{ flex: terminalCollapsed ? '0 0 auto' : `0 0 ${terminalPanelHeight}px` }}
+          style={{
+            flex: terminalCollapsed ? '0 0 auto' : paneCollapsed ? '1 1 auto' : `0 0 ${terminalPanelHeight}px`,
+          }}
         >
           <div className="terminal-panel-header">
             {terminalEnabled && !terminalCollapsed ? (
