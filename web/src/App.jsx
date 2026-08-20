@@ -1130,6 +1130,7 @@ export default function App() {
             conversationId={conversationId}
             conversationTitle={conversations.find((c) => String(c.id) === String(conversationId))?.title}
             onCloseChat={handleCloseChat}
+            onNewChat={startNewChat}
             bottomRef={bottomRef}
             input={input}
             onInputChange={setInput}

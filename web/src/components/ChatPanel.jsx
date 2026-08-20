@@ -34,6 +34,14 @@ function XCircleIcon(props) {
   )
 }
 
+function PlusIcon(props) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      <path d="M12 5v14M5 12h14" />
+    </svg>
+  )
+}
+
 function ImageIcon(props) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
@@ -90,6 +98,7 @@ export default function ChatPanel({
   conversationId,
   conversationTitle,
   onCloseChat,
+  onNewChat,
   bottomRef,
   input,
   onInputChange,
@@ -237,6 +246,9 @@ export default function ChatPanel({
         <span className="chat-header-title" title={conversationTitle}>
           {conversationId != null ? conversationTitle : 'New chat'}
         </span>
+        <button type="button" className="chat-header-new" title="New chat" onClick={onNewChat}>
+          <PlusIcon className="inline-icon" />
+        </button>
         <button type="button" className="chat-header-close" title="Close this chat" onClick={onCloseChat}>
           <XCircleIcon className="inline-icon" />
         </button>

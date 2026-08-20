@@ -2138,6 +2138,7 @@ body {
   color: var(--text-dim);
 }
 
+.chat-header-new,
 .chat-header-close {
   flex: 0 0 auto;
   display: flex;
@@ -2153,11 +2154,13 @@ body {
   cursor: pointer;
 }
 
+.chat-header-new:hover,
 .chat-header-close:hover {
   background: color-mix(in srgb, var(--text) 10%, transparent);
   color: var(--text);
 }
 
+.chat-header-new .inline-icon,
 .chat-header-close .inline-icon {
   width: 16px;
   height: 16px;
