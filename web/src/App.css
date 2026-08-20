@@ -3487,13 +3487,31 @@ body {
 .editor-branch-select {
   flex: 1;
   min-width: 0;
-  padding: 6px 8px;
+  /* Extra right padding clears the custom chevron drawn below — same
+     treatment as .model-select (the Model picker dropdown), just kept on
+     its own rule instead of sharing that class: this select keeps its
+     own compact size and monospace font, a better fit for a narrow
+     Git-panel row with potentially long branch names. */
+  padding: 6px 24px 6px 8px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-strong);
-  background: var(--bg-input);
+  background-color: var(--bg-input);
   color: var(--text);
   font-size: 0.75rem;
   font-family: ui-monospace, 'SF Mono', Consolas, 'Cascadia Code', monospace;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-dim) 50%),
+    linear-gradient(135deg, var(--text-dim) 50%, transparent 50%);
+  background-position: calc(100% - 14px) center, calc(100% - 9px) center;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+
+.editor-branch-select option {
+  font-weight: 400;
+  color: var(--text);
+  background: var(--bg-panel);
 }
 
 .editor-branch-row button {
