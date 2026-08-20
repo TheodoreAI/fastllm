@@ -88,6 +88,8 @@ export default function ChatPanel({
   messages,
   messagesLoading,
   conversationId,
+  conversationTitle,
+  onCloseChat,
   bottomRef,
   input,
   onInputChange,
@@ -226,6 +228,19 @@ export default function ChatPanel({
 
   return (
     <main className="chat">
+      {conversationId != null && (
+        // Not a delete — clicking this just deselects the conversation
+        // (same as "+ New chat" in the sidebar, see App.jsx's
+        // startNewChat), so it stays in the sidebar list untouched. Only
+        // shown once a conversation is actually open; there's nothing to
+        // close from the blank "new chat" state.
+        <div className="chat-header">
+          <span className="chat-header-title" title={conversationTitle}>{conversationTitle}</span>
+          <button type="button" className="chat-header-close" title="Close this chat" onClick={onCloseChat}>
+            <XCircleIcon className="inline-icon" />
+          </button>
+        </div>
+      )}
       <div className="messages">
         {messagesLoading && <div className="messages-loading">Loading…</div>}
         {!messagesLoading && messages.map((m, i) => {

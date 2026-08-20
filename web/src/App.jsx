@@ -197,6 +197,11 @@ export default function App() {
   const [conversations, setConversations] = useState([])
   const [conversationId, setConversationId] = useState(null)
   const [conversationError, setConversationError] = useState('')
+  // Collapsed to a slim strip only as a side effect of closing the
+  // active chat (see handleCloseChat below), freeing up width for the
+  // editor pane — expanded again by opening a conversation or starting
+  // a new one.
+  const [chatCollapsed, setChatCollapsed] = useState(false)
   const [settings, setSettings] = useState(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   // Set (to a sub-section id like 'llmBackend') to force that Settings
@@ -355,6 +360,7 @@ export default function App() {
     setMessages([])
     setMessagesLoading(true)
     setInput('')
+    setChatCollapsed(false)
     fetchMessages(id).then((msgs) => {
       // Guard against out-of-order responses: if the user switched to a
       // different conversation again before this fetch resolved, don't
@@ -380,6 +386,22 @@ export default function App() {
     setMessages([])
     setMessagesLoading(false)
     setInput('')
+    // Re-expand if it was collapsed — clicking "+ New chat" (this
+    // function's other caller) clearly means the user wants to see the
+    // chat pane again, same as opening an existing conversation (see
+    // openConversation).
+    setChatCollapsed(false)
+  }
+
+  // Wraps startNewChat with also collapsing the chat pane itself down to
+  // a slim strip — used only by ChatPanel's header X, freeing up width
+  // for the editor pane once there's no active conversation to show.
+  // Deliberately calls setChatCollapsed(true) after startNewChat's own
+  // setChatCollapsed(false), so this specific path ends up collapsed
+  // (last write wins) while every other caller of startNewChat expands.
+  function handleCloseChat() {
+    startNewChat()
+    setChatCollapsed(true)
   }
 
   function stopStreaming() {
@@ -1043,7 +1065,7 @@ export default function App() {
       <div className="split-container" ref={splitContainerRef}>
       <div
         className="editor-pane"
-        style={{ flex: `0 0 ${splitWidth * 100}%` }}
+        style={{ flex: chatCollapsed ? '1 1 auto' : `0 0 ${splitWidth * 100}%` }}
       >
         <EditorView
           fileAccessSettings={fileAccessSettings}
@@ -1064,30 +1086,36 @@ export default function App() {
         />
       </div>
 
-      <div className="split-divider" onMouseDown={handleSplitDragStart} />
+      {!chatCollapsed && (
+        <>
+          <div className="split-divider" onMouseDown={handleSplitDragStart} />
 
-      <div className="body">
-        <ChatPanel
-          messages={messages}
-          messagesLoading={messagesLoading}
-          conversationId={conversationId}
-          bottomRef={bottomRef}
-          input={input}
-          onInputChange={setInput}
-          streaming={streaming}
-          onSendMessage={sendMessage}
-          onStop={stopStreaming}
-          userDisplayName={settings?.username}
-          onRequestApproveWrite={requestApproveWrite}
-          onRejectWrite={handleRejectWrite}
-          pendingImages={pendingImages}
-          composerImageError={composerImageError}
-          onComposerPaste={handleComposerPaste}
-          onRemovePendingImage={removePendingImage}
-          visionSupported={visionSupported}
-          activeEditorFile={activeEditorFile}
-        />
-      </div>
+          <div className="body">
+            <ChatPanel
+              messages={messages}
+              messagesLoading={messagesLoading}
+              conversationId={conversationId}
+              conversationTitle={conversations.find((c) => String(c.id) === String(conversationId))?.title}
+              onCloseChat={handleCloseChat}
+              bottomRef={bottomRef}
+              input={input}
+              onInputChange={setInput}
+              streaming={streaming}
+              onSendMessage={sendMessage}
+              onStop={stopStreaming}
+              userDisplayName={settings?.username}
+              onRequestApproveWrite={requestApproveWrite}
+              onRejectWrite={handleRejectWrite}
+              pendingImages={pendingImages}
+              composerImageError={composerImageError}
+              onComposerPaste={handleComposerPaste}
+              onRemovePendingImage={removePendingImage}
+              visionSupported={visionSupported}
+              activeEditorFile={activeEditorFile}
+            />
+          </div>
+        </>
+      )}
       </div>
 
       <aside className={`sidebar ${sidebarCollapsed ? 'is-collapsed' : ''}`}>
