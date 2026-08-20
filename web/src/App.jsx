@@ -247,7 +247,14 @@ export default function App() {
   const [editorPaneCollapsed, setEditorPaneCollapsed] = useEditorPaneCollapsed()
   const [terminalPaneCollapsed, setTerminalPaneCollapsed] = useTerminalPaneCollapsed()
   const [tweakBarOpen, setTweakBarOpen] = useState(false)
-  const [openFolderSignal, setOpenFolderSignal] = useState(0)
+  // Bump counter telling EditorView to open the native folder picker —
+  // null (not 0) means "never requested yet", so EditorView's effect can
+  // tell "app just started" apart from "the counter really did change"
+  // by comparing against null instead of relying on a ref that has to
+  // remember whether this is the first render (fragile under React
+  // StrictMode's dev-only double-invoke and under Vite HMR, both of which
+  // can re-run an effect without a fresh ref).
+  const [openFolderSignal, setOpenFolderSignal] = useState(null)
   const [editorPanel, setEditorPanel] = useEditorPanel()
   const [gitChangeCount, setGitChangeCount] = useState(0)
   // Which pane sits in which of the Editor/Terminal/Chat grid's three fixed
@@ -256,6 +263,13 @@ export default function App() {
   // are reordered (DraggableSection), just by swapping instead of splicing.
   const [paneSlots, swapPanes] = usePaneSlots(DEFAULT_SLOT_ASSIGNMENT)
   const [paneGridSizes, setLeftWidth, setTopHeight] = usePaneGridSizes()
+  // DOM targets EditorView portals its sidebar/main content into — see
+  // renderPanes below and EditorView's own doc comment. State (not refs)
+  // because a portal target has to be there BY RENDER TIME for
+  // createPortal to use it; a ref wouldn't trigger EditorView's own
+  // re-render once the node actually mounts.
+  const [editorSidebarContainer, setEditorSidebarContainer] = useState(null)
+  const [editorMainContainer, setEditorMainContainer] = useState(null)
   // Each terminal tab is an independently mounted <TerminalView>, its own
   // xterm instance and WebSocket/PTY session server-side (see
   // internal/terminal/registry.go). Lives here rather than inside
@@ -350,7 +364,7 @@ export default function App() {
         // isWails() gating — there's no folder-open concept in the
         // browser build this would otherwise shadow.
         e.preventDefault()
-        setOpenFolderSignal((n) => n + 1)
+        setOpenFolderSignal((n) => (n ?? 0) + 1)
       } else if (key === 'q' && !e.shiftKey && isWails()) {
         // Matches TopBar's File → Exit, same reasoning as Ctrl+O above.
         e.preventDefault()
@@ -1060,23 +1074,15 @@ export default function App() {
   // side of a divider removes that divider and lets its sibling fill the
   // freed space.
   function renderPanes() {
-    const paneContent = {
-      editor: (
-        <EditorView
-          fileAccessSettings={fileAccessSettings}
-          onFileAccessSettingsChange={setFileAccessSettings}
-          theme={theme}
-          terminalEnabled={terminalSettings.enabled}
-          openFolderSignal={openFolderSignal}
-          onOpenSettings={handleOpenSettings}
-          panel={editorPanel}
-          onPanelChange={setEditorPanel}
-          onGitChangeCountChange={setGitChangeCount}
-          onOpenPathChange={setActiveEditorFile}
-          sidebarCollapsed={editorSidebarCollapsed}
-          onSidebarCollapsedChange={setEditorSidebarCollapsed}
-        />
-      ),
+    // Editor isn't in here — unlike Terminal/Chat, it doesn't render its
+    // content inline into whichever slot it's assigned. Its sidebar and
+    // main-content portal into DOM targets this function hands out below
+    // (editorMainContainer always; editorSidebarContainer either inside
+    // Editor's own slot or spanning the shared left column — see the
+    // editorSharesLeftColumn branch), so the always-mounted <EditorView/>
+    // near the bottom of this component's return can keep running
+    // regardless of where those targets currently point.
+    const nonEditorContent = {
       terminal: (
         <TerminalPane
           theme={theme}
@@ -1125,7 +1131,36 @@ export default function App() {
     const rightVisible = !collapsedByKey[rightKey]
     const leftVisible = topVisible || bottomVisible
 
-    function slotPane(key, { flex }) {
+    // Editor's file sidebar spans the whole left column — next to both
+    // its own tabs AND Terminal (or whatever's sharing the column with
+    // it) — only when it actually HAS a visible column-mate there,
+    // mirroring a conventional IDE's file explorer. Editor alone in a
+    // slot (its mate collapsed, or Editor dragged into the full-height
+    // right slot) just renders sidebar+main together inline, same as
+    // before.
+    const editorSharesLeftColumn = (topKey === 'editor' && bottomVisible) || (bottomKey === 'editor' && topVisible)
+
+    const editorMainPortal = <div className="portal-target" ref={setEditorMainContainer} />
+
+    function slotPane(key, flex) {
+      let content = nonEditorContent[key]
+      if (key === 'editor') {
+        // Sharing the column: just the main-content portal — the sidebar
+        // portal lives outside this DraggableSection entirely (see the
+        // editorSharesLeftColumn branch below). Alone in its own slot:
+        // sidebar+main need a row wrapper here, since DraggableSection's
+        // own content area is a column (title bar stacked over content) —
+        // .editor-view used to be that row; now it's inlined, since
+        // there's nothing left to put the sidebar's OTHER placement in.
+        content = editorSharesLeftColumn ? (
+          editorMainPortal
+        ) : (
+          <div className="editor-inline-row">
+            <div className="editor-sidebar-portal" ref={setEditorSidebarContainer} />
+            {editorMainPortal}
+          </div>
+        )
+      }
       return (
         <DraggableSection
           key={key}
@@ -1136,14 +1171,14 @@ export default function App() {
           style={{ flex, minWidth: 220, minHeight: 160 }}
           label={PANE_LABELS[key]}
         >
-          {paneContent[key]}
+          {content}
         </DraggableSection>
       )
     }
 
     const leftColumnNodes = []
     if (topVisible) {
-      leftColumnNodes.push(slotPane(topKey, { flex: bottomVisible ? `0 1 ${paneGridSizes.topHeight}px` : '1 1 0%' }))
+      leftColumnNodes.push(slotPane(topKey, bottomVisible ? `0 1 ${paneGridSizes.topHeight}px` : '1 1 0%'))
     }
     if (topVisible && bottomVisible) {
       leftColumnNodes.push(
@@ -1151,26 +1186,40 @@ export default function App() {
       )
     }
     if (bottomVisible) {
-      leftColumnNodes.push(slotPane(bottomKey, { flex: '1 1 0%' }))
+      leftColumnNodes.push(slotPane(bottomKey, '1 1 0%'))
     }
 
     const rows = []
     if (leftVisible) {
-      rows.push(
+      const stack = (
         <div
-          key="left-column"
+          key={editorSharesLeftColumn ? undefined : 'left-column'}
           className="pane-column"
-          style={{ flex: rightVisible ? `0 1 ${paneGridSizes.leftWidth}px` : '1 1 0%', minWidth: 220 }}
+          style={{ flex: editorSharesLeftColumn || !rightVisible ? '1 1 0%' : `0 1 ${paneGridSizes.leftWidth}px`, minWidth: 220 }}
         >
           {leftColumnNodes}
         </div>
+      )
+      rows.push(
+        editorSharesLeftColumn ? (
+          <div
+            key="left-column"
+            className="editor-sidebar-row"
+            style={{ flex: rightVisible ? `0 1 ${paneGridSizes.leftWidth}px` : '1 1 0%', minWidth: 220 }}
+          >
+            <div className="editor-sidebar-portal" ref={setEditorSidebarContainer} />
+            {stack}
+          </div>
+        ) : (
+          stack
+        )
       )
     }
     if (leftVisible && rightVisible) {
       rows.push(<div key="column-divider" className="split-divider" onMouseDown={handleColumnDividerDragStart} />)
     }
     if (rightVisible) {
-      rows.push(slotPane(rightKey, { flex: '1 1 0%' }))
+      rows.push(slotPane(rightKey, '1 1 0%'))
     }
 
     return <div className="split-container">{rows}</div>
@@ -1180,7 +1229,7 @@ export default function App() {
     <div className="app">
       {isWails() && (
         <TopBar
-          onOpenFolder={() => setOpenFolderSignal((n) => n + 1)}
+          onOpenFolder={() => setOpenFolderSignal((n) => (n ?? 0) + 1)}
           onQuit={() => setQuitConfirmOpen(true)}
           onAbout={() => handleOpenSettings('about')}
         />
@@ -1443,6 +1492,25 @@ export default function App() {
           onClose={() => setSettingsOpen(false)}
         />
       )}
+
+      {/* Always mounted, regardless of where renderPanes() currently points
+          its portal targets — see EditorView's own doc comment on why. */}
+      <EditorView
+        fileAccessSettings={fileAccessSettings}
+        onFileAccessSettingsChange={setFileAccessSettings}
+        theme={theme}
+        terminalEnabled={terminalSettings.enabled}
+        openFolderSignal={openFolderSignal}
+        onOpenSettings={handleOpenSettings}
+        panel={editorPanel}
+        onPanelChange={setEditorPanel}
+        onGitChangeCountChange={setGitChangeCount}
+        onOpenPathChange={setActiveEditorFile}
+        sidebarCollapsed={editorSidebarCollapsed}
+        onSidebarCollapsedChange={setEditorSidebarCollapsed}
+        sidebarContainer={editorSidebarContainer}
+        mainContainer={editorMainContainer}
+      />
 
       <TweakBar open={tweakBarOpen} onToggle={() => setTweakBarOpen(true)} />
 

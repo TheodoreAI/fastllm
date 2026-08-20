@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { linter, lintGutter, forceLinting } from '@codemirror/lint'
 import {
   fetchEditorTree,
@@ -39,6 +40,21 @@ import ConfirmDeleteModal from './ConfirmDeleteModal'
 // panel under the file tabs) — it's now its own top-level pane in App.jsx,
 // reorderable alongside Editor and Chat (see usePaneSlots), so none of its
 // state/handlers live here anymore.
+//
+// Mounted exactly once, unconditionally, regardless of where Editor sits
+// in App.jsx's pane grid — its own DOM output is entirely two portals
+// (see the return below) rather than a normal inline render, so this
+// component's state (open tabs, git status, the SSE git-watch
+// subscription) survives Editor being dragged between slots or collapsed
+// instead of remounting and losing it. `sidebarContainer` and
+// `mainContainer` are DOM nodes App.jsx hands down (they can be the same
+// node, when Editor is off alone in a slot with no column-mate, or two
+// different nodes — the sidebar spanning the full height of a shared left
+// column next to Terminal, mirroring a conventional IDE's file explorer —
+// see App.jsx's renderPanes for which). Both are null for one initial
+// render (App.jsx hasn't measured a DOM node to portal into yet), so nothing
+// is portaled that render — not a bug, just a one-frame gap before content
+// appears.
 export default function EditorView({
   fileAccessSettings,
   onFileAccessSettingsChange,
@@ -52,6 +68,8 @@ export default function EditorView({
   onOpenPathChange,
   sidebarCollapsed,
   onSidebarCollapsedChange,
+  sidebarContainer,
+  mainContainer,
 }) {
   const [tree, setTree] = useState([])
   const [treeStatus, setTreeStatus] = useState('')
@@ -134,20 +152,22 @@ export default function EditorView({
   const canWrite = !!fileAccessSettings?.write_enabled
   const dirty = content !== savedContent
 
-  // The three toggles a fresh install needs before the Editor/Terminal
-  // tab does anything useful (file access, an actual folder, and the
-  // terminal) are independent settings with no enforced order — nothing
-  // stops picking a folder before turning on file access, or opening the
-  // terminal panel before enabling it. Surfaced as a checklist in the
-  // empty-file-tree state (see editor-empty-state below) rather than a
-  // blocking first-run wizard: it's just the same "select a file"
-  // placeholder every other empty state already shows, made useful for
-  // exactly as long as setup is actually incomplete, then it goes back to
-  // being the plain placeholder — no new persisted "onboarding done" flag
-  // to invent or reset.
+  // The three toggles a fresh install needs before the Editor/Terminal tab
+  // does anything useful — ordered to match their real dependency, not
+  // just listed alphabetically-by-feature: Settings' own "Allow reading
+  // files" checkbox is disabled until a root is set (see SettingsPanel's
+  // fileAccessRootEmpty), so picking a folder always has to come before
+  // file access can actually be turned on. Terminal has no such
+  // dependency on the other two, so it stays last. Surfaced as a
+  // checklist in the empty-file-tree state (see editor-empty-state below)
+  // rather than a blocking first-run wizard: it's just the same "select a
+  // file" placeholder every other empty state already shows, made useful
+  // for exactly as long as setup is actually incomplete, then it goes
+  // back to being the plain placeholder — no new persisted "onboarding
+  // done" flag to invent or reset.
   const setupSteps = [
-    { key: 'fileAccess', label: 'Allow file access', done: enabled, action: () => onOpenSettings?.('fileAccess') },
     { key: 'folder', label: 'Open a folder', done: !!fileAccessSettings?.root, action: handleOpenFolder },
+    { key: 'fileAccess', label: 'Allow file access', done: enabled, action: () => onOpenSettings?.('fileAccess') },
     { key: 'terminal', label: 'Enable the terminal', done: !!terminalEnabled, action: () => onOpenSettings?.('terminal') },
   ]
   const setupComplete = setupSteps.every((step) => step.done)
@@ -387,14 +407,15 @@ export default function EditorView({
   // File → Open Folder… menu item), and a counter re-fires this effect on
   // every click even if the user picks the same signal value twice in a
   // row (a boolean toggled true/false wouldn't change on every other
-  // click). Skips the mount-time run (undefined/0) so opening the app
-  // doesn't immediately pop the folder dialog.
-  const isFirstOpenFolderSignal = useRef(true)
+  // click). App.jsx initializes it to null specifically so "never
+  // requested" is a real, distinguishable value here — comparing against
+  // null (rather than a ref that has to remember "was this the first
+  // render") stays correct across React StrictMode's dev-only double
+  // mount/unmount and Vite HMR, neither of which should re-arm a ref-based
+  // guard but both of which have, in practice, popped this dialog on
+  // launch when the guard was a ref.
   useEffect(() => {
-    if (isFirstOpenFolderSignal.current) {
-      isFirstOpenFolderSignal.current = false
-      return
-    }
+    if (openFolderSignal == null) return
     handleOpenFolder()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openFolderSignal])
@@ -878,17 +899,8 @@ export default function EditorView({
     window.addEventListener('mouseup', handleUp)
   }
 
-  if (!enabled) {
-    return (
-      <div className="editor-view editor-view-empty">
-        {setupChecklist}
-      </div>
-    )
-  }
-
-  return (
-    <div className="editor-view">
-      {!sidebarCollapsed && (
+  const sidebar = !sidebarCollapsed && (
+    <>
       <aside
         ref={sidebarRef}
         className="editor-sidebar"
@@ -978,42 +990,52 @@ export default function EditorView({
           />
         )}
       </aside>
-      )}
 
-      {!sidebarCollapsed && (
-        <div className="editor-sidebar-divider" onMouseDown={handleSidebarDragStart} />
-      )}
+      <div className="editor-sidebar-divider" onMouseDown={handleSidebarDragStart} />
+    </>
+  )
 
-      <main className="editor-main">
-        <EditorPane
-          openTabs={openTabs}
-          activeTabPath={activeTabPath}
-          diffPath={diffPath}
-          onSelectTab={(path) => {
-            setDiffPath(null)
-            setActiveTabPath(path)
-          }}
-          onCloseTab={closeTab}
-          openPath={openPath}
-          fileStatus={fileStatus}
-          canWrite={canWrite}
-          dirty={dirty}
-          saving={saving}
-          onSave={handleSave}
-          theme={theme}
-          languageExtensionsFor={languageExtensionsFor}
-          onEditorKeyDown={handleEditorKeyDown}
-          onTabContentChange={(path, value) =>
-            setOpenTabs((prev) => prev.map((x) => (x.path === path ? { ...x, content: value } : x)))
-          }
-          codeMirrorViewsByPath={codeMirrorViewsByPath}
-          diffLines={diffLines}
-          onCloseDiff={() => setDiffPath(null)}
-          setupComplete={setupComplete}
-          setupChecklist={setupChecklist}
-        />
-      </main>
+  const main = !enabled ? (
+    <div className="editor-view-empty editor-main">{setupChecklist}</div>
+  ) : (
+    <main className="editor-main">
+      <EditorPane
+        openTabs={openTabs}
+        activeTabPath={activeTabPath}
+        diffPath={diffPath}
+        onSelectTab={(path) => {
+          setDiffPath(null)
+          setActiveTabPath(path)
+        }}
+        onCloseTab={closeTab}
+        openPath={openPath}
+        fileStatus={fileStatus}
+        canWrite={canWrite}
+        dirty={dirty}
+        saving={saving}
+        onSave={handleSave}
+        theme={theme}
+        languageExtensionsFor={languageExtensionsFor}
+        onEditorKeyDown={handleEditorKeyDown}
+        onTabContentChange={(path, value) =>
+          setOpenTabs((prev) => prev.map((x) => (x.path === path ? { ...x, content: value } : x)))
+        }
+        codeMirrorViewsByPath={codeMirrorViewsByPath}
+        diffLines={diffLines}
+        onCloseDiff={() => setDiffPath(null)}
+        setupComplete={setupComplete}
+        setupChecklist={setupChecklist}
+      />
+    </main>
+  )
 
+  return (
+    <>
+      {/* No sidebar at all while file access is off — there's nothing to
+          browse yet, and the checklist that explains why takes over the
+          main portal instead (see `main` above). */}
+      {enabled && sidebarContainer && createPortal(sidebar, sidebarContainer)}
+      {mainContainer && createPortal(main, mainContainer)}
       {pendingConfirm && (
         <ConfirmDeleteModal
           heading={pendingConfirm.heading}
@@ -1023,6 +1045,6 @@ export default function EditorView({
           onConfirm={() => resolvePendingConfirm(true)}
         />
       )}
-    </div>
+    </>
   )
 }

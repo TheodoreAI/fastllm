@@ -3088,12 +3088,48 @@ body {
 
 /* ---------- editor view ---------- */
 
-.editor-view {
+/* Portal target for EditorView's sidebar+divider pair (see App.jsx's
+   renderPanes) — a plain flex row hosting <aside>+divider, sized by
+   whatever parent slot it's placed into: either Editor's own
+   DraggableSection (when it has no visible column-mate), or a dedicated
+   full-height strip next to Terminal, mirroring a conventional IDE's file
+   explorer running the full height of the editor+terminal area. */
+.editor-sidebar-portal {
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* Portal target for EditorView's <main> content alone (see the sidebar
+   portal above it) — display:contents so it never becomes a box of its
+   own; .editor-main's own flex:1 sizes directly against whichever real
+   flex parent it lands in (Editor's own DraggableSection either way). */
+.portal-target {
+  display: contents;
+}
+
+/* Wraps the sidebar portal + the top/bottom stack (.pane-column) when
+   Editor shares the left column with a visible mate — see App.jsx's
+   editorSharesLeftColumn. Plain flex row: the sidebar portal takes its
+   own natural width (from <aside>'s inline width style), the stack fills
+   what's left. */
+.editor-sidebar-row {
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* Same idea, one level down: when Editor has no visible column-mate (it's
+   alone in its own slot, or dragged to the full-height right slot), its
+   sidebar+main portals need a row wrapper right inside that slot instead —
+   DraggableSection's own content area is a column (title bar stacked over
+   content), so this is what used to be .editor-view's row layout, now
+   inlined since there's no longer a single container both portals share. */
+.editor-inline-row {
   flex: 1;
   display: flex;
   min-height: 0;
   min-width: 0;
-  background: var(--bg-chat);
 }
 
 .editor-view-empty {
@@ -3919,6 +3955,10 @@ body {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  /* Used to come from .editor-view's shared row background — now that
+     the sidebar and main content portal into two independently-placed
+     DOM targets (see App.jsx's renderPanes), each needs its own. */
+  background: var(--bg-chat);
 }
 
 .editor-main-content {
