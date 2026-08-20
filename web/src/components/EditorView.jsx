@@ -1,6 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import CodeMirror from '@uiw/react-codemirror'
-import { githubLight, githubDark } from '@uiw/codemirror-theme-github'
 import { linter, lintGutter, forceLinting } from '@codemirror/lint'
 import {
   fetchEditorTree,
@@ -33,6 +31,9 @@ import { aiCompletionExtension } from '../aiCompletion'
 import { useEditorSidebarWidth } from '../useEditorSidebarWidth'
 import { useTerminalPanelHeight } from '../useTerminalPanelHeight'
 import FileTree from './FileTree'
+import GitPanel from './GitPanel'
+import SearchPanel from './SearchPanel'
+import EditorPane from './EditorPane'
 import TerminalView from './TerminalView'
 import ConfirmDeleteModal from './ConfirmDeleteModal'
 
@@ -1013,224 +1014,48 @@ export default function EditorView({
         )}
 
         {panel === 'search' && (
-          <div className="editor-panel-body">
-            <form onSubmit={runSearch} className="editor-search-form">
-              <input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search all files…"
-              />
-              <button type="submit" disabled={searching || !query.trim()}>
-                {searching ? 'Searching…' : 'Go'}
-              </button>
-            </form>
-            <ul className="editor-search-results">
-              {searchResults.map((m, i) => (
-                <li key={i}>
-                  <button type="button" onClick={() => openFile(m.path)}>
-                    <span className="editor-search-path">{m.path}:{m.line}</span>
-                    <span className="editor-search-text">{m.text.trim()}</span>
-                  </button>
-                </li>
-              ))}
-              {searchResults.length === 0 && query && !searching && (
-                <li className="editor-hint">No matches.</li>
-              )}
-            </ul>
-          </div>
+          <SearchPanel
+            query={query}
+            onQueryChange={setQuery}
+            onSubmit={runSearch}
+            searching={searching}
+            searchResults={searchResults}
+            onOpenFile={openFile}
+          />
         )}
 
-        {panel === 'git' && branches.length === 0 ? (
-          <div className="editor-panel-body">
-            <p className="editor-hint">This folder isn't a git repository, so version control isn't available here.</p>
-          </div>
-        ) : panel === 'git' && (
-          <div className="editor-panel-body git-stepper">
-            {branchError && <p className="editor-error">{branchError}</p>}
-            {gitError && <p className="editor-error">{gitError}</p>}
-
-            <div className="git-step">
-              <div className="git-step-rail">
-                <div className="git-step-dot on">1</div>
-                <div className="git-step-rail-line" />
-              </div>
-              <div className="git-step-body">
-                <div className="git-step-title">Branch</div>
-                <div className="git-branch-row">
-                  <svg className="git-branch-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="6" y1="3" x2="6" y2="15" /><circle cx="18" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 9a9 9 0 0 1-9 9" /></svg>
-                  <select
-                    className="git-branch-select"
-                    value={branches.find((b) => b.current)?.name ?? ''}
-                    onChange={(e) => handleSwitchBranch(e.target.value)}
-                    disabled={branchBusy || branches.length === 0}
-                  >
-                    {branches.map((b) => (
-                      <option key={b.name} value={b.name}>
-                        {b.name}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    className="git-icon-btn"
-                    title="New branch"
-                    onClick={() => setNewBranchOpen((v) => !v)}
-                    disabled={branchBusy}
-                  >
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
-                  </button>
-                </div>
-                {newBranchOpen && (
-                  <form onSubmit={handleCreateBranch} className="editor-search-form">
-                    <input
-                      value={newBranchName}
-                      onChange={(e) => setNewBranchName(e.target.value)}
-                      placeholder="New branch name"
-                      autoFocus
-                    />
-                    <button type="submit" disabled={branchBusy || !newBranchName.trim()}>
-                      {creatingBranch ? 'Creating…' : 'Create'}
-                    </button>
-                  </form>
-                )}
-              </div>
-            </div>
-
-            <div className="git-step">
-              <div className="git-step-rail">
-                <div className={`git-step-dot ${gitStatus.length > 0 ? 'on' : 'off'}`}>2</div>
-                <div className="git-step-rail-line" />
-              </div>
-              <div className="git-step-body">
-                <div className="git-step-title">Stage changes</div>
-
-                {staged.length > 0 && (
-                  <div className="git-card">
-                    <div className="git-card-head">
-                      <span className="title">STAGED · {staged.length}</span>
-                      <button type="button" onClick={handleUnstageAll} disabled={gitBusy}>
-                        {gitBusy && gitBusyAction === 'unstage' ? 'Unstaging…' : 'Unstage all'}
-                      </button>
-                    </div>
-                    <ul className="git-file-list">
-                      {staged.map((entry) => {
-                        const slash = entry.path.lastIndexOf('/')
-                        return (
-                          <li key={entry.path} className="git-file-row">
-                            <input
-                              type="checkbox"
-                              checked
-                              disabled={gitBusy}
-                              onChange={() => handleToggleStage(entry.path, true)}
-                              title="Unstage"
-                            />
-                            <button type="button" className="git-file-path" onClick={() => viewDiff({ ...entry, staged: true })}>
-                              {slash >= 0 && <span className="dir">{entry.path.slice(0, slash + 1)}</span>}
-                              <span className="name">{slash >= 0 ? entry.path.slice(slash + 1) : entry.path}</span>
-                            </button>
-                            <span className={`git-badge git-badge-${entry.staged.toLowerCase()}`}>{entry.staged}</span>
-                          </li>
-                        )
-                      })}
-                    </ul>
-                  </div>
-                )}
-
-                {unstaged.length > 0 && (
-                  <div className="git-card">
-                    <div className="git-card-head">
-                      <span className="title">CHANGES · {unstaged.length}</span>
-                      <button type="button" onClick={handleStageAll} disabled={gitBusy}>
-                        {gitBusy && gitBusyAction === 'stage' ? 'Staging…' : 'Stage all'}
-                      </button>
-                    </div>
-                    <ul className="git-file-list">
-                      {unstaged.map((entry) => {
-                        const slash = entry.path.lastIndexOf('/')
-                        const code = entry.unstaged === '?' ? 'U' : entry.unstaged
-                        return (
-                          <li key={entry.path} className="git-file-row">
-                            <input
-                              type="checkbox"
-                              checked={false}
-                              disabled={gitBusy}
-                              onChange={() => handleToggleStage(entry.path, false)}
-                              title="Stage"
-                            />
-                            <button type="button" className="git-file-path" onClick={() => viewDiff({ ...entry, staged: false })}>
-                              {slash >= 0 && <span className="dir">{entry.path.slice(0, slash + 1)}</span>}
-                              <span className="name">{slash >= 0 ? entry.path.slice(slash + 1) : entry.path}</span>
-                            </button>
-                            <span className={`git-badge git-badge-${code.toLowerCase()}`}>{code}</span>
-                            <button
-                              type="button"
-                              className="git-discard-link"
-                              disabled={gitBusy}
-                              onClick={() => handleDiscardPath([entry.path])}
-                              title="Revert this change to its last committed version"
-                            >
-                              {gitBusy && gitBusyAction === 'discard' ? '…' : 'Discard'}
-                            </button>
-                          </li>
-                        )
-                      })}
-                    </ul>
-                  </div>
-                )}
-
-                {gitStatus.length === 0 && <p className="editor-hint">No changes.</p>}
-              </div>
-            </div>
-
-            <div className="git-step">
-              <div className="git-step-rail">
-                <div className={`git-step-dot ${staged.length > 0 ? 'on' : 'off'}`}>3</div>
-                <div className="git-step-rail-line" />
-              </div>
-              <div className="git-step-body">
-                <div className="git-step-title">Commit</div>
-                <form onSubmit={handleCommit} className="editor-commit-form">
-                  <textarea
-                    value={commitMessage}
-                    onChange={(e) => setCommitMessage(e.target.value)}
-                    placeholder="Commit message"
-                    rows={2}
-                  />
-                  <button type="submit" className="git-commit-btn" disabled={gitBusy || !commitMessage.trim() || staged.length === 0}>
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M5 13l4 4L19 7" /></svg>
-                    {gitBusy && gitBusyAction === 'commit'
-                      ? 'Committing…'
-                      : `Commit ${staged.length > 0 ? `(${staged.length})` : ''}`}
-                  </button>
-                </form>
-              </div>
-            </div>
-
-            <div className="git-step">
-              <div className="git-step-rail">
-                <div className="git-step-dot off">4</div>
-              </div>
-              <div className="git-step-body">
-                <div className="git-step-title">Push</div>
-                <button type="button" className="git-push-btn" onClick={handlePush} disabled={pushing}>
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
-                  {pushing ? 'Pushing…' : 'Push'}
-                </button>
-                {pushNeedsUpstream && (
-                  <button
-                    type="button"
-                    className="git-push-btn editor-push-upstream"
-                    onClick={handlePushSetUpstream}
-                    disabled={pushing}
-                    title="This branch has no upstream yet — push and set one"
-                  >
-                    {pushing ? 'Pushing…' : 'Set upstream & push'}
-                  </button>
-                )}
-                {pushStatus && <span className="editor-push-status">{pushStatus}</span>}
-              </div>
-            </div>
-          </div>
+        {panel === 'git' && (
+          <GitPanel
+            branches={branches}
+            branchBusy={branchBusy}
+            branchError={branchError}
+            onSwitchBranch={handleSwitchBranch}
+            newBranchOpen={newBranchOpen}
+            onToggleNewBranch={() => setNewBranchOpen((v) => !v)}
+            newBranchName={newBranchName}
+            onNewBranchNameChange={setNewBranchName}
+            onCreateBranch={handleCreateBranch}
+            creatingBranch={creatingBranch}
+            gitStatus={gitStatus}
+            staged={staged}
+            unstaged={unstaged}
+            gitBusy={gitBusy}
+            gitBusyAction={gitBusyAction}
+            gitError={gitError}
+            onToggleStage={handleToggleStage}
+            onStageAll={handleStageAll}
+            onUnstageAll={handleUnstageAll}
+            onDiscardPath={handleDiscardPath}
+            onViewDiff={viewDiff}
+            commitMessage={commitMessage}
+            onCommitMessageChange={setCommitMessage}
+            onCommit={handleCommit}
+            pushing={pushing}
+            pushStatus={pushStatus}
+            pushNeedsUpstream={pushNeedsUpstream}
+            onPush={handlePush}
+            onPushSetUpstream={handlePushSetUpstream}
+          />
         )}
       </aside>
       )}
@@ -1240,111 +1065,33 @@ export default function EditorView({
       )}
 
       <main className="editor-main" ref={mainColumnRef}>
-        <div className="editor-main-content">
-          {openTabs.length > 0 && (
-            <div className="editor-tabs">
-              {openTabs.map((t) => {
-                const tabDirty = t.content !== t.savedContent
-                return (
-                  <div
-                    key={t.path}
-                    className={`editor-tab ${t.path === activeTabPath && !diffPath ? 'is-active' : ''}`}
-                  >
-                    <button
-                      type="button"
-                      className="editor-tab-label"
-                      title={t.path}
-                      onClick={() => {
-                        setDiffPath(null)
-                        setActiveTabPath(t.path)
-                      }}
-                    >
-                      {t.path.split(/[/\\]/).pop()}
-                      {tabDirty && <span className="editor-tab-dirty">●</span>}
-                    </button>
-                    <button
-                      type="button"
-                      className="editor-tab-close"
-                      title="Close"
-                      onClick={() => closeTab(t.path)}
-                    >
-                      ✕
-                    </button>
-                  </div>
-                )
-              })}
-            </div>
-          )}
-          {openTabs.length > 0 && !diffPath && (
-            <div className="editor-file-header">
-              <span className="editor-file-path">{openPath}</span>
-              {fileStatus && <span className="editor-file-status">{fileStatus}</span>}
-              {!canWrite && (
-                <span className="editor-readonly-badge" title="File writes are disabled in Settings → File access">
-                  Read-only
-                </span>
-              )}
-              <button
-                type="button"
-                className={`editor-save-button${saving ? ' is-saving' : ''}`}
-                onClick={handleSave}
-                disabled={!canWrite || !dirty || saving}
-                title={canWrite ? '' : 'File writes are disabled in Settings → File access'}
-              >
-                {saving ? 'Saving…' : dirty ? 'Save' : 'Saved'}
-              </button>
-            </div>
-          )}
-          {/* Every open tab keeps its own CodeMirror instance mounted (just
-              hidden) at all times, the same always-mounted-but-hidden
-              pattern the Terminal tabs below use — switching tabs must not
-              tear down and rebuild the editor, or undo history/scroll
-              position/selection would all reset on every switch. */}
-          {openTabs.map((t) => (
-            <div
-              key={t.path}
-              className="editor-codemirror"
-              style={{ display: t.path === activeTabPath && !diffPath ? 'block' : 'none' }}
-              onKeyDown={handleEditorKeyDown}
-            >
-              <CodeMirror
-                value={t.content}
-                height="100%"
-                theme={theme === 'light' ? githubLight : githubDark}
-                extensions={languageExtensionsFor(t.path)}
-                onChange={(value) =>
-                  setOpenTabs((prev) => prev.map((x) => (x.path === t.path ? { ...x, content: value } : x)))
-                }
-                onCreateEditor={(view) => {
-                  codeMirrorViewsByPath.current[t.path] = view
-                }}
-                readOnly={!canWrite}
-              />
-            </div>
-          ))}
-          {diffPath ? (
-            <>
-              <div className="editor-file-header">
-                <span className="editor-file-path">Diff: {diffPath}</span>
-                <button type="button" className="editor-diff-close" onClick={() => setDiffPath(null)}>Close</button>
-              </div>
-              <div className="editor-diff">
-                {diffLines.map((line, i) => (
-                  <div key={i} className={`editor-diff-line editor-diff-line--${line.type}`}>
-                    <span className="editor-diff-gutter">
-                      {line.type === 'add' ? '+' : line.type === 'del' ? '−' : ''}
-                    </span>
-                    <span className="editor-diff-text">{line.text}</span>
-                  </div>
-                ))}
-              </div>
-            </>
-          ) : openTabs.length === 0 ? (
-            <div className="editor-empty-state">
-              {setupComplete ? <p>Select a file to open it.</p> : setupChecklist}
-            </div>
-          ) : null}
-        </div>
+        <EditorPane
+          openTabs={openTabs}
+          activeTabPath={activeTabPath}
+          diffPath={diffPath}
+          onSelectTab={(path) => {
+            setDiffPath(null)
+            setActiveTabPath(path)
+          }}
+          onCloseTab={closeTab}
+          openPath={openPath}
+          fileStatus={fileStatus}
+          canWrite={canWrite}
+          dirty={dirty}
+          saving={saving}
+          onSave={handleSave}
+          theme={theme}
+          languageExtensionsFor={languageExtensionsFor}
+          onEditorKeyDown={handleEditorKeyDown}
+          onTabContentChange={(path, value) =>
+            setOpenTabs((prev) => prev.map((x) => (x.path === path ? { ...x, content: value } : x)))
+          }
+          codeMirrorViewsByPath={codeMirrorViewsByPath}
+          diffLines={diffLines}
+          onCloseDiff={() => setDiffPath(null)}
+          setupComplete={setupComplete}
+          setupChecklist={setupChecklist}
+        />
 
         {!terminalCollapsed && (
           <div className="terminal-panel-divider" onMouseDown={handleTerminalDragStart} />
