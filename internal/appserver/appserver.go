@@ -165,7 +165,7 @@ func Build(cfg Config) (*Built, error) {
 	}
 	terminalGate := terminal.NewGate(terminalSettings.Enabled)
 	if terminalGate.Enabled() {
-		log.Printf("terminal enabled — /api/terminal/ws will spawn an interactive PowerShell session for any loopback connection")
+		log.Printf("terminal enabled — /api/terminal/ws will spawn an interactive shell session for any loopback connection")
 	}
 
 	handler := chat.New(db, llmRouter, vecStore, fileReader, terminalGate)

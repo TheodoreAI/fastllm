@@ -4,6 +4,13 @@ fastllm
 .fastllm.launched
 fastllm.db
 fastllm.log
+
+# `go build ./...` from repo root writes each main package's binary here
+# named after its directory (cmd/server -> server, cmd/desktop -> desktop)
+# when run without -o — easy to do by accident when cross-compile-checking
+# all packages at once.
+/server
+/desktop
 web/node_modules/
 web/dist/
 .env
