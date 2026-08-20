@@ -3148,6 +3148,18 @@ body {
   border-bottom-color: var(--accent);
 }
 
+.editor-panel-tab-label {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-2) var(--space-1);
+  color: var(--text);
+  font-size: 0.75rem;
+  font-weight: 500;
+  border-bottom: 2px solid var(--accent);
+}
+
 .editor-badge {
   background: var(--accent);
   color: var(--accent-contrast);

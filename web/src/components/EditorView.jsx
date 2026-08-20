@@ -995,14 +995,16 @@ export default function EditorView({
               )}
             </div>
             {folderError && <p className="editor-error">{folderError}</p>}
+            {/* A static label matching whichever panel the left rail's
+                Files/Search/Git buttons (see App.jsx) currently has
+                selected — not a clickable switcher itself, since that
+                selection already lives there; this used to hardcode
+                "Files" regardless of panel, which was wrong the moment
+                Search or Git was actually the one showing below it. */}
             <div className="editor-panel-tabs">
-              <button
-                type="button"
-                className={panel === 'files' ? 'is-active' : ''}
-                onClick={() => onPanelChange?.('files')}
-              >
-                Files
-              </button>
+              <span className="editor-panel-tab-label">
+                {panel === 'search' ? 'Search' : panel === 'git' ? 'Git' : 'Files'}
+              </span>
             </div>
 
         {panel === 'files' && (
