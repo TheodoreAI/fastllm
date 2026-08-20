@@ -1085,6 +1085,17 @@ body {
   background: var(--accent);
 }
 
+/* Distinct from .is-active (used by Files/Search/Git — mutually
+   exclusive selected-panel "tabs") on purpose: the editor-pane toggle
+   isn't a tab, it's a visibility switch that can be true at the same time
+   as one of those is active, so it shouldn't compete for the same solid
+   accent-fill treatment — a quieter tinted wash gives it real feedback
+   without visually reading as "two tabs selected at once". */
+.view-rail button.is-toggled {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
 .view-rail-git {
   position: relative;
 }
@@ -1126,9 +1137,14 @@ body {
 }
 
 .split-divider {
-  flex: 0 0 5px;
+  flex: 0 0 6px;
   cursor: col-resize;
-  background: var(--border);
+  /* A lighter neutral tone rather than a bright line — reads as a gap
+     between panels instead of a border drawn on top of them, and works
+     regardless of which two same- or different-colored surfaces sit on
+     either side (unlike var(--border), which needs contrast against
+     whatever it's over). */
+  background: color-mix(in srgb, var(--bg-window), white 10%);
   position: relative;
   z-index: 2;
 }
@@ -1158,9 +1174,9 @@ body {
 }
 
 .terminal-panel-divider {
-  flex: 0 0 5px;
+  flex: 0 0 6px;
   cursor: row-resize;
-  background: var(--border);
+  background: color-mix(in srgb, var(--bg-window), white 10%);
   position: relative;
   z-index: 2;
 }
@@ -1185,7 +1201,6 @@ body {
   min-height: 0;
   min-width: 0;
   background: var(--bg-panel);
-  border-top: 1px solid var(--border);
 }
 
 .terminal-panel.is-collapsed {
@@ -3072,9 +3087,9 @@ body {
 }
 
 .editor-sidebar-divider {
-  flex: 0 0 5px;
+  flex: 0 0 6px;
   cursor: col-resize;
-  background: var(--border);
+  background: color-mix(in srgb, var(--bg-window), white 10%);
   position: relative;
   z-index: 2;
 }

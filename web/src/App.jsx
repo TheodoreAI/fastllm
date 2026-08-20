@@ -318,15 +318,21 @@ export default function App() {
   // same toggle Ctrl+B already does); clicking it from anywhere else
   // selects that panel and makes sure the sidebar is actually expanded to
   // show it, rather than leaving it collapsed from an earlier
-  // Ctrl+B/manual collapse.
+  // Ctrl+B/manual collapse. Also un-collapses the whole editor pane
+  // (EditorView's paneCollapsed — see toggleEditorPaneCollapsed below) if
+  // that's what's hiding it — Search/Git/Files should always be reachable
+  // from their own rail buttons regardless of that toggle's state, same as
+  // clicking one while the sidebar itself was manually collapsed already
+  // does.
   function openEditorPanel(panel) {
-    const alreadyShowingPanel = editorPanel === panel && !editorSidebarCollapsed
+    const alreadyShowingPanel = editorPanel === panel && !editorSidebarCollapsed && !editorPaneCollapsed
     if (alreadyShowingPanel) {
       setEditorSidebarCollapsed(true)
       return
     }
     setEditorPanel(panel)
     setEditorSidebarCollapsed(false)
+    setEditorPaneCollapsed(false)
   }
 
   // The Files rail button mirrors VS Code's Explorer icon: clicking it
@@ -335,15 +341,17 @@ export default function App() {
   // the keydown handler above); clicking it from anywhere else selects
   // the Files panel and makes sure the sidebar is actually expanded to
   // show it, rather than leaving it collapsed from an earlier
-  // Ctrl+B/manual collapse.
+  // Ctrl+B/manual collapse. Also un-collapses the whole editor pane, same
+  // reasoning as openEditorPanel above.
   function toggleFilesPanel() {
-    const alreadyShowingFiles = editorPanel === 'files' && !editorSidebarCollapsed
+    const alreadyShowingFiles = editorPanel === 'files' && !editorSidebarCollapsed && !editorPaneCollapsed
     if (alreadyShowingFiles) {
       setEditorSidebarCollapsed(true)
       return
     }
     setEditorPanel('files')
     setEditorSidebarCollapsed(false)
+    setEditorPaneCollapsed(false)
   }
 
   // Collapses the file editor/sidebar (not just the Files/Search/Git
@@ -986,6 +994,7 @@ export default function App() {
       <nav className="view-rail">
         <button
           type="button"
+          className={editorPaneCollapsed ? '' : 'is-toggled'}
           title={editorPaneCollapsed ? 'Show editor panel' : 'Hide editor panel'}
           onClick={toggleEditorPaneCollapsed}
         >
@@ -1118,7 +1127,12 @@ export default function App() {
         />
       </div>
 
-      {!editorPaneCollapsed && !chatCollapsed && (
+      {/* Kept regardless of editorPaneCollapsed — the editor-pane column
+          still has its own width (holding the terminal, if nothing else)
+          even with the file editor/sidebar hidden, so the gap and the
+          drag-to-resize handle both still apply. Only chatCollapsed hides
+          it, since there's nothing on the other side to divide from then. */}
+      {!chatCollapsed && (
         <div className="split-divider" onMouseDown={handleSplitDragStart} />
       )}
 
