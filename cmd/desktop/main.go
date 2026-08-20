@@ -23,6 +23,7 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/mac"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -121,6 +122,14 @@ func main() {
 		},
 		BackgroundColour: &options.RGBA{R: 30, G: 30, B: 30, A: 1},
 		Bind:             []interface{}{bridge},
+		// Wails only wires up the macOS traffic-light zoom (green/fullscreen)
+		// button when Mac is non-nil — see NewWindow in wails/v2's darwin
+		// window.go: `zoomable` is computed inside `if frontendOptions.Mac
+		// != nil`, unlike DisableResize which applies unconditionally. Left
+		// nil, the window silently gets zoomable=0 and the button never
+		// renders at all (not just disabled). An empty Options{} is enough
+		// — DisableZoom defaults to false, i.e. zoom enabled.
+		Mac: &mac.Options{},
 		OnStartup:        app.startup,
 		OnBeforeClose:    app.beforeClose,
 		OnShutdown:       app.shutdown,
