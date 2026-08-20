@@ -212,7 +212,7 @@ export default function EditorView({
             <span className="editor-setup-checklist-mark">{step.done ? '✓' : ''}</span>
             <span className="editor-setup-checklist-label">{step.label}</span>
             {!step.done && (
-              <button type="button" onClick={step.action}>
+              <button type="button" className="btn-secondary" onClick={step.action}>
                 {step.key === 'folder' ? 'Choose…' : 'Open Settings'}
               </button>
             )}
