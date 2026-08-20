@@ -20,6 +20,7 @@ import { useSectionOrder } from './useSectionOrder'
 import { useSidebarCollapsed } from './useSidebarCollapsed'
 import { useEditorSidebarCollapsed } from './useEditorSidebarCollapsed'
 import { useTerminalCollapsed } from './useTerminalCollapsed'
+import { useEditorPaneCollapsed } from './useEditorPaneCollapsed'
 import { useSplitWidth } from './useSplitWidth'
 import { useConnectionStatus } from './useConnectionStatus'
 import { useModel } from './useModel'
@@ -235,6 +236,7 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useSidebarCollapsed()
   const [editorSidebarCollapsed, setEditorSidebarCollapsed] = useEditorSidebarCollapsed()
   const [terminalCollapsed, setTerminalCollapsed] = useTerminalCollapsed()
+  const [editorPaneCollapsed, setEditorPaneCollapsed] = useEditorPaneCollapsed()
   const [tweakBarOpen, setTweakBarOpen] = useState(false)
   const [openFolderSignal, setOpenFolderSignal] = useState(0)
   const [editorPanel, setEditorPanel] = useEditorPanel()
@@ -342,6 +344,21 @@ export default function App() {
     }
     setEditorPanel('files')
     setEditorSidebarCollapsed(false)
+  }
+
+  // Collapses the whole editor pane (not just its own internal Files/
+  // Search/Git sidebar — see toggleFilesPanel above for that) so chat can
+  // take the full width, mirroring handleCloseChat's collapse of the
+  // chat pane the other way. Unlike chat, there's no "+ New chat"-style
+  // action elsewhere that implicitly re-expands the editor pane, so this
+  // toggle (a view-rail button — see its render below) is the only way
+  // back in; guards against collapsing into a state with nothing visible
+  // by re-expanding chat first if it was already collapsed.
+  function toggleEditorPaneCollapsed() {
+    setEditorPaneCollapsed((collapsed) => {
+      if (!collapsed && chatCollapsed) setChatCollapsed(false)
+      return !collapsed
+    })
   }
 
   useEffect(() => {
@@ -1007,6 +1024,17 @@ export default function App() {
           </svg>
           {gitChangeCount > 0 && <span className="view-rail-badge">{gitChangeCount}</span>}
         </button>
+        <button
+          type="button"
+          title={editorPaneCollapsed ? 'Show editor panel' : 'Hide editor panel'}
+          onClick={toggleEditorPaneCollapsed}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <rect x="3" y="4" width="18" height="16" rx="2" />
+            <path d="M10 4v16" />
+            {!editorPaneCollapsed && <rect x="3" y="4" width="7" height="16" rx="1" fill="currentColor" stroke="none" opacity="0.35" />}
+          </svg>
+        </button>
 
         <div className="view-rail-spacer" />
 
@@ -1063,16 +1091,24 @@ export default function App() {
 
       <div className="main-row">
       <div className="split-container" ref={splitContainerRef}>
+      {/* Kept mounted (just hidden) rather than unmounted when collapsed —
+          unmounting would kill every open tab's unsaved buffer and every
+          live terminal session. `visible` gates EditorView's own
+          first-terminal-mount logic, same as it would for any other
+          hidden-but-mounted state. */}
       <div
         className="editor-pane"
-        style={{ flex: chatCollapsed ? '1 1 auto' : `0 0 ${splitWidth * 100}%` }}
+        style={{
+          display: editorPaneCollapsed ? 'none' : 'flex',
+          flex: chatCollapsed ? '1 1 auto' : `0 0 ${splitWidth * 100}%`,
+        }}
       >
         <EditorView
           fileAccessSettings={fileAccessSettings}
           onFileAccessSettingsChange={setFileAccessSettings}
           theme={theme}
           terminalEnabled={terminalSettings.enabled}
-          visible
+          visible={!editorPaneCollapsed}
           openFolderSignal={openFolderSignal}
           onOpenSettings={handleOpenSettings}
           panel={editorPanel}
@@ -1086,35 +1122,35 @@ export default function App() {
         />
       </div>
 
-      {!chatCollapsed && (
-        <>
-          <div className="split-divider" onMouseDown={handleSplitDragStart} />
+      {!editorPaneCollapsed && !chatCollapsed && (
+        <div className="split-divider" onMouseDown={handleSplitDragStart} />
+      )}
 
-          <div className="body">
-            <ChatPanel
-              messages={messages}
-              messagesLoading={messagesLoading}
-              conversationId={conversationId}
-              conversationTitle={conversations.find((c) => String(c.id) === String(conversationId))?.title}
-              onCloseChat={handleCloseChat}
-              bottomRef={bottomRef}
-              input={input}
-              onInputChange={setInput}
-              streaming={streaming}
-              onSendMessage={sendMessage}
-              onStop={stopStreaming}
-              userDisplayName={settings?.username}
-              onRequestApproveWrite={requestApproveWrite}
-              onRejectWrite={handleRejectWrite}
-              pendingImages={pendingImages}
-              composerImageError={composerImageError}
-              onComposerPaste={handleComposerPaste}
-              onRemovePendingImage={removePendingImage}
-              visionSupported={visionSupported}
-              activeEditorFile={activeEditorFile}
-            />
-          </div>
-        </>
+      {!chatCollapsed && (
+        <div className="body">
+          <ChatPanel
+            messages={messages}
+            messagesLoading={messagesLoading}
+            conversationId={conversationId}
+            conversationTitle={conversations.find((c) => String(c.id) === String(conversationId))?.title}
+            onCloseChat={handleCloseChat}
+            bottomRef={bottomRef}
+            input={input}
+            onInputChange={setInput}
+            streaming={streaming}
+            onSendMessage={sendMessage}
+            onStop={stopStreaming}
+            userDisplayName={settings?.username}
+            onRequestApproveWrite={requestApproveWrite}
+            onRejectWrite={handleRejectWrite}
+            pendingImages={pendingImages}
+            composerImageError={composerImageError}
+            onComposerPaste={handleComposerPaste}
+            onRemovePendingImage={removePendingImage}
+            visionSupported={visionSupported}
+            activeEditorFile={activeEditorFile}
+          />
+        </div>
       )}
       </div>
 
