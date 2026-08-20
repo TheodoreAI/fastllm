@@ -3651,7 +3651,17 @@ body {
 }
 
 .editor-setup-checklist {
-  width: 320px;
+  width: 100%;
+  max-width: 320px;
+  /* Flex items default to a content-based automatic minimum width that
+     ignores an explicit width/max-width — with the nowrap label below,
+     that content-min was wider than the actual editor pane whenever the
+     split with the chat pane made it narrow, so the checklist refused to
+     shrink and overflowed past the pane's edge into the file sidebar.
+     min-width: 0 lets it actually shrink; the label's own text-overflow:
+     ellipsis (below) is what keeps the content itself legible at that
+     point instead of just clipping mid-layout. */
+  min-width: 0;
   text-align: left;
 }
 
@@ -3669,6 +3679,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-width: 0;
 }
 
 .editor-setup-checklist li {
@@ -3679,6 +3690,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--bg-panel);
+  min-width: 0;
 }
 
 .editor-setup-checklist li.is-done {
@@ -4219,7 +4231,8 @@ body {
 
 .settings-field .model-select,
 .settings-field input[type='text'],
-.settings-field input[type='number'] {
+.settings-field input[type='number'],
+.settings-field input[type='password'] {
   width: 100%;
   background: color-mix(in srgb, var(--bg-panel), var(--text) 6%);
   color: var(--text);
