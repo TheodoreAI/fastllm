@@ -2118,6 +2118,51 @@ body {
   min-width: 0;
 }
 
+.chat-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.chat-header-title {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-dim);
+}
+
+.chat-header-close {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.chat-header-close:hover {
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+  color: var(--text);
+}
+
+.chat-header-close .inline-icon {
+  width: 16px;
+  height: 16px;
+}
+
 .messages {
   flex: 1;
   overflow-y: auto;
@@ -3103,6 +3148,18 @@ body {
   border-bottom-color: var(--accent);
 }
 
+.editor-panel-tab-label {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-2) var(--space-1);
+  color: var(--text);
+  font-size: 0.75rem;
+  font-weight: 500;
+  border-bottom: 2px solid var(--accent);
+}
+
 .editor-badge {
   background: var(--accent);
   color: var(--accent-contrast);
@@ -3309,6 +3366,13 @@ body {
   color: var(--text);
 }
 
+.tree-readonly-hint {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.6875rem;
+  color: var(--text-faint);
+}
+
 .tree-rename-input {
   flex: 1;
   min-width: 0;
@@ -3437,192 +3501,341 @@ body {
   font-family: inherit;
 }
 
-/* Commit + Push now sit in one row (see editor-commit-actions below)
-   instead of Push floating alone in its own row underneath — Commit
-   keeps the filled accent treatment as the primary action, Push and Set
-   upstream are secondary/outlined so the row still reads Commit-first. */
-.editor-commit-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.editor-commit-actions button[type='submit'] {
-  padding: 6px 12px;
-  border-radius: var(--radius-sm);
-  border: none;
-  background: var(--accent);
-  color: var(--accent-contrast);
-  font-size: 0.75rem;
-  font-weight: 500;
-  cursor: pointer;
-}
-
-.editor-commit-actions button:not([type='submit']) {
-  padding: 6px 10px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-strong);
-  background: var(--bg-panel);
-  color: var(--text);
-  font-size: 0.75rem;
-  cursor: pointer;
-}
-
-.editor-commit-actions button:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-.editor-commit-actions .editor-push-upstream {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.editor-branch-row {
-  display: flex;
-  gap: 6px;
-}
-
-.editor-branch-select {
-  flex: 1;
-  min-width: 0;
-  padding: 6px 8px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-strong);
-  background: var(--bg-input);
-  color: var(--text);
-  font-size: 0.75rem;
-  font-family: ui-monospace, 'SF Mono', Consolas, 'Cascadia Code', monospace;
-}
-
-.editor-branch-row button {
-  padding: 6px 10px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-strong);
-  background: var(--bg-panel);
-  color: var(--text);
-  font-size: 0.6875rem;
-  cursor: pointer;
-}
-
-.editor-branch-row button:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
 .editor-push-status {
   font-size: 0.75rem;
   color: var(--success);
 }
 
-/* 4 buttons (Stage all/Stage/Unstage/Discard) rather than the previous
-   3 (no "all" variant) — flex-wrap lets them fall to two rows of two
-   in a narrow sidebar instead of squeezing "Stage all"'s label. */
-.editor-git-actions {
+/* Card/stepper Git panel — the whole flow (Branch, Stage, Commit, Push)
+   reads top-to-bottom as numbered steps on a connecting rail, rather
+   than the old always-visible 4-button toolbar sitting apart from the
+   staged/unstaged lists it acted on. */
+.git-stepper {
+  padding: 12px 10px 14px;
+}
+
+.git-step {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  gap: 10px;
 }
 
-.editor-git-actions button {
-  flex: 1 1 calc(50% - 3px);
-  min-width: 70px;
-  padding: 5px 6px;
-  border-radius: var(--radius-sm);
+.git-step-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.git-step-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  flex: 0 0 auto;
+}
+
+.git-step-dot.on {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.git-step-dot.off {
+  background: var(--bg-input);
+  color: var(--text-faint);
   border: 1px solid var(--border-strong);
-  background: var(--bg-panel);
-  color: var(--text);
-  font-size: 0.6875rem;
-  cursor: pointer;
 }
 
-.editor-git-actions button:disabled {
+.git-step-rail-line {
+  width: 1px;
+  flex: 1;
+  background: var(--border-strong);
+  margin: 2px 0;
+}
+
+.git-step-body {
+  flex: 1;
+  min-width: 0;
+  padding-bottom: 16px;
+}
+
+.git-step:last-child .git-step-body {
+  padding-bottom: 0;
+}
+
+.git-step-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin: 1px 0 8px;
+}
+
+.git-branch-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  margin: 6px 0;
+  background: var(--bg-input);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+}
+
+.git-step-body > .editor-search-form {
+  margin-top: 6px;
+}
+
+.git-branch-icon {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+}
+
+.git-branch-select {
+  flex: 1;
+  min-width: 0;
+  /* Extra right padding clears the custom chevron drawn below — same
+     treatment as .model-select (the Model picker dropdown). */
+  padding-right: 16px;
+  border: none;
+  background-color: transparent;
+  color: var(--text);
+  font-size: 0.75rem;
+  font-weight: 500;
+  font-family: inherit;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-dim) 50%),
+    linear-gradient(135deg, var(--text-dim) 50%, transparent 50%);
+  background-position: calc(100% - 8px) center, calc(100% - 3px) center;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+
+.git-branch-select option {
+  font-weight: 400;
+  color: var(--text);
+  background: var(--bg-panel);
+}
+
+.git-icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.git-icon-btn:hover:not(:disabled) {
+  background: rgba(128, 128, 128, 0.18);
+  color: var(--text);
+}
+
+.git-icon-btn:disabled {
   opacity: 0.5;
   cursor: default;
 }
 
-/* Discard selected — the one destructive action among Stage/Unstage
-   selected, so it gets a red-tinted outline instead of the neutral
-   .editor-git-actions button styling both of those keep, without going
-   as loud as the solid .btn-danger used in the confirm modal itself. */
-.editor-git-actions button.btn-danger-outline {
-  border-color: var(--danger);
-  color: var(--danger);
+.git-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px;
 }
 
-.editor-git-actions button.btn-danger-outline:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--danger) 12%, var(--bg-panel));
+.git-card + .git-card {
+  margin-top: 6px;
 }
 
-.editor-panel-body h4 {
-  margin: 6px 2px 0;
-  font-size: 0.6875rem;
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
+.git-card-head {
+  display: flex;
+  align-items: center;
+  padding: 2px 2px 6px;
+}
+
+.git-card-head .title {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: var(--text-faint);
+  flex: 1;
+}
+
+.git-card-head button {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 0;
+}
+
+.git-card-head button:hover:not(:disabled) {
+  color: color-mix(in srgb, var(--accent), white 22%);
+}
+
+.git-card-head button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.git-file-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.git-file-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 2px;
+}
+
+.git-file-row input[type='checkbox'] {
+  width: 13px;
+  height: 13px;
+  accent-color: var(--accent);
+  flex: 0 0 auto;
+}
+
+.git-file-path {
+  flex: 1;
+  min-width: 0;
+  display: block;
+  border: none;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.75rem;
+  font-family: ui-monospace, 'SF Mono', Consolas, 'Cascadia Code', monospace;
+}
+
+.git-file-path .dir {
   color: var(--text-faint);
 }
 
-.editor-git-list li {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.editor-git-list li button {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  border: none;
-  background: transparent;
+.git-file-path .name {
   color: var(--text);
-  font-size: 0.75rem;
-  padding: 4px 6px;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: ui-monospace, 'SF Mono', Consolas, 'Cascadia Code', monospace;
 }
 
-.editor-git-list li button:hover {
-  background: rgba(128, 128, 128, 0.14);
+.git-file-path:hover .name {
+  color: var(--accent);
 }
 
-.editor-git-code {
-  display: inline-flex;
+.git-badge {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  border-radius: 3px;
+  display: flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
-  font-size: 0.625rem;
+  font-size: 10px;
   font-weight: 700;
   font-family: ui-monospace, 'SF Mono', Consolas, 'Cascadia Code', monospace;
-  flex-shrink: 0;
 }
 
-.editor-git-m {
-  background: color-mix(in srgb, var(--warning) 22%, transparent);
+.git-badge-m {
   color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 22%, transparent);
 }
 
-.editor-git-a {
-  background: color-mix(in srgb, var(--success) 22%, transparent);
+.git-badge-a {
   color: var(--success);
+  background: color-mix(in srgb, var(--success) 22%, transparent);
 }
 
-.editor-git-d {
+.git-badge-d {
+  color: var(--danger);
   background: color-mix(in srgb, var(--danger) 22%, transparent);
+}
+
+.git-badge-u {
+  color: var(--text-dim);
+  background: color-mix(in srgb, var(--text-faint) 22%, transparent);
+}
+
+.git-discard-link {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 10.5px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.git-discard-link:hover:not(:disabled) {
   color: var(--danger);
 }
 
-.editor-git-untracked {
-  background: color-mix(in srgb, var(--text-faint) 22%, transparent);
-  color: var(--text-dim);
+.git-discard-link:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.git-commit-btn,
+.git-push-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px;
+  border-radius: var(--radius);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.git-commit-btn {
+  border: none;
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.git-commit-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent), white 12%);
+}
+
+.git-push-btn {
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--text);
+  margin-top: 6px;
+}
+
+.git-push-btn:hover:not(:disabled) {
+  background: rgba(128, 128, 128, 0.1);
+}
+
+.git-push-btn:disabled,
+.git-commit-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.git-push-btn.editor-push-upstream {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .editor-main {
@@ -3814,6 +4027,17 @@ body {
 .editor-file-status {
   font-size: 0.75rem;
   color: var(--text-dim);
+}
+
+.editor-readonly-badge {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  color: var(--warning);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 /* Tinted wash instead of a solid filled pill, matching .sidebar-icon-btn /
