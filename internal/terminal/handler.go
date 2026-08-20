@@ -60,17 +60,23 @@ func NewHandler(registry *Registry, gate *Gate, fileReader *files.Reader) http.H
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 			// cmd/server's browser build is always same-origin (no
 			// OriginPatterns needed there). cmd/desktop's Wails webview is
-			// a genuine exception: its pages load from the virtual host
-			// http://wails.localhost (see internal/frontend/desktop/windows
-			// in the wails module), while this handler is reached through
-			// a real loopback TCP listener on 127.0.0.1 — a different host
-			// by definition, since the whole reason that listener exists
-			// is that the webview's own in-process bridge can't do a
+			// a genuine exception: on Windows/Linux its pages load from
+			// the virtual host http://wails.localhost (see
+			// internal/frontend/desktop/windows in the wails module), but
+			// on macOS the webview instead uses a bare custom URL scheme
+			// ("wails://wails/..."), which WKWebView reports as the plain
+			// literal Origin header "wails" — no "://", no host, nothing
+			// websocket.Accept's URL parser can treat as a normal
+			// scheme+host pattern; it has to be listed as its own exact
+			// pattern. Either way, this handler is reached through a real
+			// loopback TCP listener on 127.0.0.1 — a different origin by
+			// definition, since the whole reason that listener exists is
+			// that the webview's own in-process bridge can't do a
 			// WebSocket upgrade at all (see cmd/desktop/main.go). Without
-			// this, websocket.Accept's default same-origin check rejects
-			// every connection from the desktop app with "Origin ... is
-			// not a valid URL with a host" / a mismatched-host error.
-			OriginPatterns: []string{"wails.localhost", "localhost", "localhost:*", "127.0.0.1:*"},
+			// all of these, websocket.Accept's default same-origin check
+			// rejects every connection from the desktop app with "Origin
+			// ... is not authorized for Host ...".
+			OriginPatterns: []string{"wails.localhost", "wails", "localhost", "localhost:*", "127.0.0.1:*"},
 		})
 		if err != nil {
 			log.Printf("terminal: websocket accept failed: %v", err)
