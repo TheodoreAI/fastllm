@@ -34,6 +34,14 @@ function XCircleIcon(props) {
   )
 }
 
+function PlusIcon(props) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      <path d="M12 5v14M5 12h14" />
+    </svg>
+  )
+}
+
 function ImageIcon(props) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
@@ -90,6 +98,7 @@ export default function ChatPanel({
   conversationId,
   conversationTitle,
   onCloseChat,
+  onNewChat,
   bottomRef,
   input,
   onInputChange,
@@ -228,19 +237,22 @@ export default function ChatPanel({
 
   return (
     <main className="chat">
-      {conversationId != null && (
-        // Not a delete — clicking this just deselects the conversation
-        // (same as "+ New chat" in the sidebar, see App.jsx's
-        // startNewChat), so it stays in the sidebar list untouched. Only
-        // shown once a conversation is actually open; there's nothing to
-        // close from the blank "new chat" state.
-        <div className="chat-header">
-          <span className="chat-header-title" title={conversationTitle}>{conversationTitle}</span>
-          <button type="button" className="chat-header-close" title="Close this chat" onClick={onCloseChat}>
-            <XCircleIcon className="inline-icon" />
-          </button>
-        </div>
-      )}
+      {/* Not a delete — clicking this just deselects the conversation (same
+          as "+ New chat" in the sidebar, see App.jsx's startNewChat), so it
+          stays in the sidebar list untouched. Shown even in the blank "new
+          chat" state (nothing to deselect there, but collapsing the pane
+          itself is still a valid action) with a placeholder title. */}
+      <div className="chat-header">
+        <span className="chat-header-title" title={conversationTitle}>
+          {conversationId != null ? conversationTitle : 'New chat'}
+        </span>
+        <button type="button" className="chat-header-new" title="New chat" onClick={onNewChat}>
+          <PlusIcon className="inline-icon" />
+        </button>
+        <button type="button" className="chat-header-close" title="Close this chat" onClick={onCloseChat}>
+          <XCircleIcon className="inline-icon" />
+        </button>
+      </div>
       <div className="messages">
         {messagesLoading && <div className="messages-loading">Loading…</div>}
         {!messagesLoading && messages.map((m, i) => {

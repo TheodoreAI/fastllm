@@ -1085,6 +1085,17 @@ body {
   background: var(--accent);
 }
 
+/* Distinct from .is-active (used by Files/Search/Git — mutually
+   exclusive selected-panel "tabs") on purpose: the editor-pane toggle
+   isn't a tab, it's a visibility switch that can be true at the same time
+   as one of those is active, so it shouldn't compete for the same solid
+   accent-fill treatment — a quieter tinted wash gives it real feedback
+   without visually reading as "two tabs selected at once". */
+.view-rail button.is-toggled {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
 .view-rail-git {
   position: relative;
 }
@@ -1126,9 +1137,14 @@ body {
 }
 
 .split-divider {
-  flex: 0 0 5px;
+  flex: 0 0 6px;
   cursor: col-resize;
-  background: var(--border);
+  /* A lighter neutral tone rather than a bright line — reads as a gap
+     between panels instead of a border drawn on top of them, and works
+     regardless of which two same- or different-colored surfaces sit on
+     either side (unlike var(--border), which needs contrast against
+     whatever it's over). */
+  background: color-mix(in srgb, var(--bg-window), white 10%);
   position: relative;
   z-index: 2;
 }
@@ -1158,9 +1174,9 @@ body {
 }
 
 .terminal-panel-divider {
-  flex: 0 0 5px;
+  flex: 0 0 6px;
   cursor: row-resize;
-  background: var(--border);
+  background: color-mix(in srgb, var(--bg-window), white 10%);
   position: relative;
   z-index: 2;
 }
@@ -1185,7 +1201,6 @@ body {
   min-height: 0;
   min-width: 0;
   background: var(--bg-panel);
-  border-top: 1px solid var(--border);
 }
 
 .terminal-panel.is-collapsed {
@@ -2138,6 +2153,7 @@ body {
   color: var(--text-dim);
 }
 
+.chat-header-new,
 .chat-header-close {
   flex: 0 0 auto;
   display: flex;
@@ -2153,11 +2169,13 @@ body {
   cursor: pointer;
 }
 
+.chat-header-new:hover,
 .chat-header-close:hover {
   background: color-mix(in srgb, var(--text) 10%, transparent);
   color: var(--text);
 }
 
+.chat-header-new .inline-icon,
 .chat-header-close .inline-icon {
   width: 16px;
   height: 16px;
@@ -3069,9 +3087,9 @@ body {
 }
 
 .editor-sidebar-divider {
-  flex: 0 0 5px;
+  flex: 0 0 6px;
   cursor: col-resize;
-  background: var(--border);
+  background: color-mix(in srgb, var(--bg-window), white 10%);
   position: relative;
   z-index: 2;
 }
@@ -4769,13 +4787,48 @@ body.picking-mode #tweak-bar-panel {
   padding: 0;
 }
 
-.tb-group select,
-.tb-row-full select {
+/* GroupedDropdown (reused here instead of a raw <select> — see the
+   comment above TweakBar's *_GROUPS constants) styles itself from this
+   app's --bg-panel/--text/--accent tokens by default, which the tweak
+   bar itself lets the user override — without these overrides, tweaking
+   those tokens would make the panel's own dropdowns unreadable while
+   you're using them to do exactly that. Every other control in this
+   panel hardcodes its colors for the same reason (see the WCAG
+   pass/fail readouts below); pinned here with an ID-scoped selector
+   rather than !important since that alone outweighs .model-dropdown-*'s
+   plain class selectors. */
+#tweak-bar-panel .model-dropdown-trigger {
   background: #2c2c2e;
   color: #f2f2f2;
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-color: rgba(255, 255, 255, 0.15);
   border-radius: 4px;
   padding: 3px 4px;
+  font-size: 11px;
+}
+
+#tweak-bar-panel .model-dropdown-caret {
+  border-color: #a8a8ad;
+}
+
+#tweak-bar-panel .model-dropdown-list {
+  background: #2c2c2e;
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+#tweak-bar-panel .model-dropdown-group-label {
+  color: #a8a8ad;
+}
+
+#tweak-bar-panel .model-dropdown-option {
+  color: #f2f2f2;
+}
+
+#tweak-bar-panel .model-dropdown-option:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+#tweak-bar-panel .model-dropdown-option.is-selected {
+  background: rgba(10, 132, 255, 0.35);
 }
 
 .tb-flash {

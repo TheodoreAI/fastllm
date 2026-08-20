@@ -19,6 +19,7 @@ import (
 	"fastllm/internal/folderpicker"
 	"fastllm/internal/screenshot"
 	"fastllm/internal/terminal"
+	"fastllm/web"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -117,7 +118,20 @@ func main() {
 		Title:  appTitle,
 		Width:  1280,
 		Height: 860,
+		// Assets must be set (not just Handler) for `wails dev` to route
+		// the webview at the live Vite dev server at all — see
+		// internal/app/app_dev.go in the wails/v2 module: with Assets nil,
+		// dev mode logs "No AssetServer.Assets has been defined ... the
+		// frontend DevServer will not be used" and silently falls back to
+		// serving whatever was last compiled into the binary via Handler,
+		// which is why hot reload appeared to do nothing. In the normal
+		// (non-dev) case this changes nothing observable: Assets is tried
+		// first and Handler is still the fallback for any path Assets
+		// doesn't have (see assetserver.Options' doc comment) — every
+		// non-static route (the /api/* ones) 404s out of web.FS() exactly
+		// like it always has, and falls through to Handler same as before.
 		AssetServer: &assetserver.Options{
+			Assets:  web.FS(),
 			Handler: built.Mux,
 		},
 		BackgroundColour: &options.RGBA{R: 30, G: 30, B: 30, A: 1},
