@@ -4769,13 +4769,48 @@ body.picking-mode #tweak-bar-panel {
   padding: 0;
 }
 
-.tb-group select,
-.tb-row-full select {
+/* GroupedDropdown (reused here instead of a raw <select> — see the
+   comment above TweakBar's *_GROUPS constants) styles itself from this
+   app's --bg-panel/--text/--accent tokens by default, which the tweak
+   bar itself lets the user override — without these overrides, tweaking
+   those tokens would make the panel's own dropdowns unreadable while
+   you're using them to do exactly that. Every other control in this
+   panel hardcodes its colors for the same reason (see the WCAG
+   pass/fail readouts below); pinned here with an ID-scoped selector
+   rather than !important since that alone outweighs .model-dropdown-*'s
+   plain class selectors. */
+#tweak-bar-panel .model-dropdown-trigger {
   background: #2c2c2e;
   color: #f2f2f2;
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-color: rgba(255, 255, 255, 0.15);
   border-radius: 4px;
   padding: 3px 4px;
+  font-size: 11px;
+}
+
+#tweak-bar-panel .model-dropdown-caret {
+  border-color: #a8a8ad;
+}
+
+#tweak-bar-panel .model-dropdown-list {
+  background: #2c2c2e;
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+#tweak-bar-panel .model-dropdown-group-label {
+  color: #a8a8ad;
+}
+
+#tweak-bar-panel .model-dropdown-option {
+  color: #f2f2f2;
+}
+
+#tweak-bar-panel .model-dropdown-option:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+#tweak-bar-panel .model-dropdown-option.is-selected {
+  background: rgba(10, 132, 255, 0.35);
 }
 
 .tb-flash {
