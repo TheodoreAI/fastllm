@@ -1337,7 +1337,7 @@ export default function EditorView({
               everVisible &&
               terminalTabs.map((id) => (
                 <div key={id} style={{ display: id === activeTerminalTab ? 'contents' : 'none' }}>
-                  <TerminalView theme={theme} />
+                  <TerminalView theme={theme} folderRoot={fileAccessSettings?.root} />
                 </div>
               ))
             ) : (
