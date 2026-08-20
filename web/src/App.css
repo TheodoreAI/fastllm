@@ -1014,11 +1014,6 @@ body {
   pointer-events: none;
 }
 
-.body {
-  position: relative;
-  z-index: 1;
-}
-
 .app-version {
   position: absolute;
   right: 8px;
@@ -1127,13 +1122,11 @@ body {
   display: flex;
   min-height: 0;
   min-width: 0;
-}
-
-.body {
-  flex: 1;
-  display: flex;
-  min-height: 0;
-  min-width: 0;
+  /* Each pane also floors at its own min-width (see App.jsx's renderPanes)
+     — if three panes' floors genuinely don't fit the window, scroll the
+     row horizontally rather than letting the browser's flex algorithm
+     force one of them thinner than its floor. */
+  overflow-x: auto;
 }
 
 .split-divider {
@@ -1166,45 +1159,39 @@ body {
   right: -3px;
 }
 
-.editor-pane {
-  flex: 1;
-  display: flex;
-  min-height: 0;
-  min-width: 0;
-}
-
-.terminal-panel-divider {
-  flex: 0 0 6px;
+/* The horizontal divider between the top-left and bottom-left slots (see
+   App.jsx's renderPanes) — same element, just rotated: flex:0 0 6px reads
+   as a height instead of a width once it's a child of .pane-column's
+   column-direction flex, so only the cursor and hit-area axis need
+   overriding here. */
+.split-divider-row {
   cursor: row-resize;
-  background: color-mix(in srgb, var(--bg-window), white 10%);
-  position: relative;
-  z-index: 2;
 }
 
-.terminal-panel-divider:hover,
-.terminal-panel-divider:active {
-  background: var(--accent);
-}
-
-.terminal-panel-divider::after {
-  content: '';
-  position: absolute;
+.split-divider-row::after {
   left: 0;
   right: 0;
   top: -3px;
   bottom: -3px;
 }
 
-.terminal-panel {
+/* The left column of the Editor/Terminal/Chat grid — stacks its top-left
+   and bottom-left slots (see App.jsx's renderPanes); not itself a
+   DraggableSection, just a plain flex wrapper the two slot panes and their
+   divider live inside. */
+.pane-column {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.terminal-pane {
   display: flex;
   flex-direction: column;
   min-height: 0;
   min-width: 0;
   background: var(--bg-panel);
-}
-
-.terminal-panel.is-collapsed {
-  flex: 0 0 auto;
 }
 
 .terminal-panel-header {
@@ -1214,10 +1201,6 @@ body {
   justify-content: space-between;
   padding: 4px 10px;
   border-bottom: 1px solid var(--border);
-}
-
-.terminal-panel.is-collapsed .terminal-panel-header {
-  border-bottom: none;
 }
 
 .terminal-panel-title {
@@ -1298,25 +1281,6 @@ body {
 }
 
 .terminal-tab-add:hover {
-  background: rgba(128, 128, 128, 0.18);
-  color: var(--text);
-}
-
-.terminal-panel-collapse-toggle {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  border: none;
-  background: transparent;
-  color: var(--text-faint);
-  font-size: 10px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.terminal-panel-collapse-toggle:hover {
   background: rgba(128, 128, 128, 0.18);
   color: var(--text);
 }
@@ -1459,12 +1423,71 @@ body {
   transition: background 0.1s ease;
 }
 
+/* A full outline rather than a directional (top-edge) box-shadow — works
+   as a drop indicator regardless of whether siblings stack vertically
+   (the sidebar's sections) or sit side by side (the Editor/Terminal/Chat
+   panes — see .is-pane-column below), instead of needing a second
+   orientation-specific variant. */
 .draggable-section.is-drag-over {
-  box-shadow: 0 -2px 0 0 var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .draggable-section.is-dragging {
   opacity: 0.4;
+}
+
+/* Modifier for using DraggableSection to wrap a full-height top-level
+   pane (Editor/Terminal/Chat — see App.jsx's usePaneSlots) instead of a
+   sidebar list item — needs to actually fill its flex slot (as a column:
+   title bar on top, pane content filling the rest) rather than sizing to
+   content. Always passed a `label` (see DraggableSection), so its handle
+   renders as a flowed title bar, not the sidebar's absolute corner icon —
+   the pane's own header already has real buttons in that corner (Chat's
+   +/✕, Terminal's tab-add) that the overlay would otherwise block. */
+.draggable-section.is-pane-column {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-radius: 0;
+  /* Stacks above .app::before's decorative gradient overlay (z-index: 0)
+     — .draggable-section is already position:relative, so this is the
+     only piece needed; mirrors what the old dedicated .body/.editor-pane
+     wrappers did before panes became reorderable DraggableSections. */
+  z-index: 1;
+}
+
+.draggable-section-titlebar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 8px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.draggable-section-title {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+/* Always visible here (not hover-revealed like the sidebar's default —
+   see .draggable-section:hover .drag-handle below) since this title bar
+   is itself a deliberate, persistent piece of chrome rather than a
+   compact row the handle would otherwise clutter. */
+.draggable-section-titlebar .drag-handle {
+  position: static;
+  opacity: 0.55;
+}
+
+.draggable-section-titlebar .drag-handle:hover {
+  opacity: 1;
 }
 
 .drag-handle {
@@ -2131,6 +2154,11 @@ body {
   flex-direction: column;
   background: var(--bg-chat);
   min-width: 0;
+  /* Without this, a long message list forces .chat to grow past its slot
+     instead of scrolling internally (see .messages below) — and since
+     .split-container's row stretches every sibling to match the tallest
+     one, that overflow used to blow out Editor/Terminal's height too. */
+  min-height: 0;
 }
 
 .chat-header {
@@ -2183,6 +2211,7 @@ body {
 
 .messages {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 20px 24px;
   display: flex;

@@ -29,21 +29,21 @@ import { languageExtensionFor, languageNameFor } from '../editorLanguages'
 import { parseDiff } from '../diffFormat'
 import { aiCompletionExtension } from '../aiCompletion'
 import { useEditorSidebarWidth } from '../useEditorSidebarWidth'
-import { useTerminalPanelHeight } from '../useTerminalPanelHeight'
 import FileTree from './FileTree'
 import GitPanel from './GitPanel'
 import SearchPanel from './SearchPanel'
 import EditorPane from './EditorPane'
-import TerminalView from './TerminalView'
 import ConfirmDeleteModal from './ConfirmDeleteModal'
 
+// Terminal used to live nested inside this component (a bottom-docked
+// panel under the file tabs) — it's now its own top-level pane in App.jsx,
+// reorderable alongside Editor and Chat (see usePaneSlots), so none of its
+// state/handlers live here anymore.
 export default function EditorView({
   fileAccessSettings,
   onFileAccessSettingsChange,
   theme,
   terminalEnabled,
-  visible,
-  paneCollapsed,
   openFolderSignal,
   onOpenSettings,
   panel,
@@ -52,8 +52,6 @@ export default function EditorView({
   onOpenPathChange,
   sidebarCollapsed,
   onSidebarCollapsedChange,
-  terminalCollapsed,
-  onTerminalCollapsedChange,
 }) {
   const [tree, setTree] = useState([])
   const [treeStatus, setTreeStatus] = useState('')
@@ -130,58 +128,7 @@ export default function EditorView({
   const [folderError, setFolderError] = useState('')
   const setSidebarCollapsed = onSidebarCollapsedChange
   const [sidebarWidth, setSidebarWidth] = useEditorSidebarWidth()
-  const [terminalPanelHeight, setTerminalPanelHeight] = useTerminalPanelHeight()
-  const setTerminalCollapsed = onTerminalCollapsedChange
-  const mainColumnRef = useRef(null)
   const sidebarRef = useRef(null)
-  // EditorView is always mounted (just hidden) so Chat<->Editor switches
-  // don't lose state — but that means the terminal shouldn't mount along
-  // with it, or every app load would spawn a PowerShell session even for
-  // someone who never opens the Editor tab. Tracks whether this view has
-  // ever actually been made visible, so the first terminal tab only
-  // mounts — and spawns a real shell — the first time the user navigates
-  // here.
-  const [everVisible, setEverVisible] = useState(false)
-  useEffect(() => {
-    if (visible) setEverVisible(true)
-  }, [visible])
-
-  // Each terminal tab is an independently mounted <TerminalView>, its own
-  // xterm instance and WebSocket/PTY session server-side (see
-  // internal/terminal/registry.go — already tracks any number of
-  // sessions and tears every one of them down together on app shutdown,
-  // so multiple tabs needed no backend changes). All tabs stay mounted
-  // (display:none when inactive) so switching tabs never loses
-  // scrollback or kills the underlying shell, mirroring the
-  // always-mounted convention used for the Chat/Editor panes themselves.
-  const [terminalTabs, setTerminalTabs] = useState(() => [1])
-  const [activeTerminalTab, setActiveTerminalTab] = useState(1)
-  const nextTerminalIdRef = useRef(2)
-
-  function addTerminalTab() {
-    const id = nextTerminalIdRef.current++
-    setTerminalTabs((prev) => [...prev, id])
-    setActiveTerminalTab(id)
-  }
-
-  function closeTerminalTab(id) {
-    setTerminalTabs((prev) => {
-      const next = prev.filter((t) => t !== id)
-      // Closing the last tab still leaves at least one behind — a
-      // terminal panel with zero tabs and no way to get one back short
-      // of reloading the whole app would be a dead end, not a real
-      // "closed" state.
-      if (next.length === 0) {
-        const freshId = nextTerminalIdRef.current++
-        setActiveTerminalTab(freshId)
-        return [freshId]
-      }
-      if (id === activeTerminalTab) {
-        setActiveTerminalTab(next[next.length - 1])
-      }
-      return next
-    })
-  }
 
   const enabled = !!fileAccessSettings?.read_enabled
   const canWrite = !!fileAccessSettings?.write_enabled
@@ -904,39 +851,11 @@ export default function EditorView({
   const staged = gitStatus.filter((s) => s.staged)
   const unstaged = gitStatus.filter((s) => s.unstaged)
 
-  // Drags the terminal panel's top divider to resize it vertically.
-  // Tracks the cursor against the main column's own bottom edge (rather
-  // than delta movement) so a fast drag can't desync from the cursor.
-  // Clamped so the panel can't be dragged to nothing or to swallow the
-  // whole column.
-  function handleTerminalDragStart(e) {
-    e.preventDefault()
-    const container = mainColumnRef.current
-    if (!container) return
-
-    const previousUserSelect = document.body.style.userSelect
-    document.body.style.userSelect = 'none'
-
-    function handleMove(moveEvent) {
-      const rect = container.getBoundingClientRect()
-      const height = rect.bottom - moveEvent.clientY
-      setTerminalPanelHeight(Math.min(rect.height - 120, Math.max(120, height)))
-    }
-    function handleUp() {
-      window.removeEventListener('mousemove', handleMove)
-      window.removeEventListener('mouseup', handleUp)
-      document.body.style.userSelect = previousUserSelect
-    }
-    window.addEventListener('mousemove', handleMove)
-    window.addEventListener('mouseup', handleUp)
-  }
-
   // Drags the sidebar's right-edge divider to resize the Files/Search/Git
   // panel horizontally. Tracks the cursor against the sidebar's own left
   // edge (rather than delta movement) so a fast drag can't desync from
-  // the cursor — same approach as handleTerminalDragStart above, just on
-  // the horizontal axis. Clamped so the panel can't be dragged to nothing
-  // or to swallow the whole editor.
+  // the cursor. Clamped so the panel can't be dragged to nothing or to
+  // swallow the whole editor.
   function handleSidebarDragStart(e) {
     e.preventDefault()
     const el = sidebarRef.current
@@ -969,7 +888,7 @@ export default function EditorView({
 
   return (
     <div className="editor-view">
-      {!paneCollapsed && !sidebarCollapsed && (
+      {!sidebarCollapsed && (
       <aside
         ref={sidebarRef}
         className="editor-sidebar"
@@ -1061,138 +980,38 @@ export default function EditorView({
       </aside>
       )}
 
-      {!paneCollapsed && !sidebarCollapsed && (
+      {!sidebarCollapsed && (
         <div className="editor-sidebar-divider" onMouseDown={handleSidebarDragStart} />
       )}
 
-      <main className="editor-main" ref={mainColumnRef}>
-        {/* editor-main-content itself is flex:1 (see App.css), which is
-            what keeps the terminal pinned to the bottom of this column —
-            without something to fill that space here, the fixed-height
-            terminal-panel below would end up flex-start'd to the TOP of
-            the column instead, with the empty area beneath it rather than
-            above. A bare filler div does the same job EditorPane's own
-            flex:1 content already did. */}
-        {!paneCollapsed ? (
-          <EditorPane
-            openTabs={openTabs}
-            activeTabPath={activeTabPath}
-            diffPath={diffPath}
-            onSelectTab={(path) => {
-              setDiffPath(null)
-              setActiveTabPath(path)
-            }}
-            onCloseTab={closeTab}
-            openPath={openPath}
-            fileStatus={fileStatus}
-            canWrite={canWrite}
-            dirty={dirty}
-            saving={saving}
-            onSave={handleSave}
-            theme={theme}
-            languageExtensionsFor={languageExtensionsFor}
-            onEditorKeyDown={handleEditorKeyDown}
-            onTabContentChange={(path, value) =>
-              setOpenTabs((prev) => prev.map((x) => (x.path === path ? { ...x, content: value } : x)))
-            }
-            codeMirrorViewsByPath={codeMirrorViewsByPath}
-            diffLines={diffLines}
-            onCloseDiff={() => setDiffPath(null)}
-            setupComplete={setupComplete}
-            setupChecklist={setupChecklist}
-          />
-        ) : (
-          <div className="editor-main-content" />
-        )}
-
-        {/* Always rendered (not just when draggable) so the gap between
-            the editor content and the terminal panel stays consistent —
-            just not draggable when there's nothing above it to resize
-            against (paneCollapsed) or nothing below it to resize
-            (terminalCollapsed). */}
-        <div
-          className="terminal-panel-divider"
-          onMouseDown={!paneCollapsed && !terminalCollapsed ? handleTerminalDragStart : undefined}
-          style={!paneCollapsed && !terminalCollapsed ? undefined : { cursor: 'default' }}
+      <main className="editor-main">
+        <EditorPane
+          openTabs={openTabs}
+          activeTabPath={activeTabPath}
+          diffPath={diffPath}
+          onSelectTab={(path) => {
+            setDiffPath(null)
+            setActiveTabPath(path)
+          }}
+          onCloseTab={closeTab}
+          openPath={openPath}
+          fileStatus={fileStatus}
+          canWrite={canWrite}
+          dirty={dirty}
+          saving={saving}
+          onSave={handleSave}
+          theme={theme}
+          languageExtensionsFor={languageExtensionsFor}
+          onEditorKeyDown={handleEditorKeyDown}
+          onTabContentChange={(path, value) =>
+            setOpenTabs((prev) => prev.map((x) => (x.path === path ? { ...x, content: value } : x)))
+          }
+          codeMirrorViewsByPath={codeMirrorViewsByPath}
+          diffLines={diffLines}
+          onCloseDiff={() => setDiffPath(null)}
+          setupComplete={setupComplete}
+          setupChecklist={setupChecklist}
         />
-
-        {/* Terminal stays visible and usable independent of the file
-            editor/sidebar above — collapsing the editor pane (paneCollapsed,
-            see App.jsx's editorPaneCollapsed) must not also take the
-            terminal down with it, since the two are unrelated tools that
-            happen to share this column. Keeps its usual fixed
-            terminalPanelHeight regardless of paneCollapsed, rather than
-            growing to fill the freed-up space — the height the user
-            dragged it to shouldn't change just because something else in
-            the same column got hidden. */}
-        <div
-          className={`terminal-panel ${terminalCollapsed ? 'is-collapsed' : ''}`}
-          style={{ flex: terminalCollapsed ? '0 0 auto' : `0 0 ${terminalPanelHeight}px` }}
-        >
-          <div className="terminal-panel-header">
-            {terminalEnabled && !terminalCollapsed ? (
-              <div className="terminal-tabs">
-                {terminalTabs.map((id, index) => (
-                  <div
-                    key={id}
-                    className={`terminal-tab ${id === activeTerminalTab ? 'is-active' : ''}`}
-                  >
-                    <button
-                      type="button"
-                      className="terminal-tab-label"
-                      onClick={() => setActiveTerminalTab(id)}
-                    >
-                      Terminal {index + 1}
-                    </button>
-                    <button
-                      type="button"
-                      className="terminal-tab-close"
-                      title="Close terminal"
-                      onClick={() => closeTerminalTab(id)}
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ))}
-                <button
-                  type="button"
-                  className="terminal-tab-add"
-                  title="New terminal"
-                  onClick={addTerminalTab}
-                >
-                  +
-                </button>
-              </div>
-            ) : (
-              <span className="terminal-panel-title">Terminal</span>
-            )}
-            <button
-              type="button"
-              className="terminal-panel-collapse-toggle"
-              title={terminalCollapsed ? 'Expand terminal' : 'Collapse terminal'}
-              onClick={() => setTerminalCollapsed((c) => !c)}
-            >
-              {terminalCollapsed ? '▲' : '▼'}
-            </button>
-          </div>
-          <div
-            className="terminal-panel-body"
-            style={{ display: terminalCollapsed ? 'none' : undefined }}
-          >
-            {terminalEnabled ? (
-              everVisible &&
-              terminalTabs.map((id) => (
-                <div key={id} style={{ display: id === activeTerminalTab ? 'contents' : 'none' }}>
-                  <TerminalView theme={theme} folderRoot={fileAccessSettings?.root} />
-                </div>
-              ))
-            ) : (
-              <div className="terminal-disabled-state">
-                <p>Terminal is disabled. Enable it in Settings → Terminal.</p>
-              </div>
-            )}
-          </div>
-        </div>
       </main>
 
       {pendingConfirm && (
