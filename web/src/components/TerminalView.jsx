@@ -52,6 +52,15 @@ export default function TerminalView({ theme, folderRoot }) {
   const [status, setStatus] = useState('connecting') // connecting | connected | disconnected | elevated
 
   useEffect(() => {
+    // Reset explicitly on every mount, not just declared once via
+    // useRef(false) — React StrictMode's dev-only double-invoke (mount ->
+    // cleanup -> mount again, same component instance, same refs) leaves
+    // this stuck at true forever after the first synthetic cleanup
+    // otherwise, silently short-circuiting connect() below on every real
+    // mount that follows (see the guard right after wsURL() resolves).
+    // Harmless to also do this in a production build, which never
+    // double-invokes and would just be re-setting an already-false value.
+    unmountedRef.current = false
     const term = new Terminal({
       cursorBlink: true,
       fontFamily: 'Menlo, Consolas, "SF Mono", monospace',
