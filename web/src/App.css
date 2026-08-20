@@ -3366,6 +3366,13 @@ body {
   color: var(--text);
 }
 
+.tree-readonly-hint {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.6875rem;
+  color: var(--text-faint);
+}
+
 .tree-rename-input {
   flex: 1;
   min-width: 0;
@@ -3573,9 +3580,14 @@ body {
   align-items: center;
   gap: 6px;
   padding: 6px 8px;
+  margin: 6px 0;
   background: var(--bg-input);
   border: 1px solid var(--border-strong);
   border-radius: 999px;
+}
+
+.git-step-body > .editor-search-form {
+  margin-top: 6px;
 }
 
 .git-branch-icon {
@@ -4015,6 +4027,17 @@ body {
 .editor-file-status {
   font-size: 0.75rem;
   color: var(--text-dim);
+}
+
+.editor-readonly-badge {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  color: var(--warning);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 /* Tinted wash instead of a solid filled pill, matching .sidebar-icon-btn /

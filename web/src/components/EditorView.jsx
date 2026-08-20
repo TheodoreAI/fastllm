@@ -1279,6 +1279,11 @@ export default function EditorView({
             <div className="editor-file-header">
               <span className="editor-file-path">{openPath}</span>
               {fileStatus && <span className="editor-file-status">{fileStatus}</span>}
+              {!canWrite && (
+                <span className="editor-readonly-badge" title="File writes are disabled in Settings → File access">
+                  Read-only
+                </span>
+              )}
               <button
                 type="button"
                 className={`editor-save-button${saving ? ' is-saving' : ''}`}

@@ -443,7 +443,7 @@ export default function FileTree({ paths, openPath, onOpenFile, canWrite, onCrea
       }}
       onDrop={handleRootDrop}
     >
-      {canWrite && (
+      {canWrite ? (
         <div className="tree-toolbar">
           <button type="button" className="tree-toolbar-btn" title="New File" onClick={() => startCreate('')}>
             {NEW_FILE_ICON}
@@ -453,6 +453,10 @@ export default function FileTree({ paths, openPath, onOpenFile, canWrite, onCrea
             {NEW_FOLDER_ICON}
             <span>New Folder</span>
           </button>
+        </div>
+      ) : (
+        <div className="tree-readonly-hint" title="Enable write access in Settings → File access">
+          Read-only — writes disabled in Settings
         </div>
       )}
       <ul className="editor-file-list tree-list">
