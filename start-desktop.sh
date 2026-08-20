@@ -7,6 +7,18 @@ set -u
 APPDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$APPDIR"
 
+# .env is gitignored — see start.sh's identical block for why: a place
+# for machine-local LLM_BASE_URL/LLM_CHAT_MODEL overrides with no
+# business being committed. Not required; nothing changes if it's
+# absent. Sourced before wails build/launch so the built app inherits it
+# the same way a plain `go run` would.
+if [ -f "$APPDIR/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    source "$APPDIR/.env"
+    set +a
+fi
+
 DESKTOPDIR="$APPDIR/cmd/desktop"
 BINDIR="$DESKTOPDIR/build/bin"
 
@@ -92,9 +104,18 @@ fi
 # this while the app is already open just brings the existing window to
 # front instead of starting a second instance, so no port/process check
 # is needed here the way start.sh needs one for cmd/server.
+#
+# Exec the embedded binary directly rather than `open "$EXE"` for the
+# .app case: `open` launches through macOS LaunchServices/launchd, which
+# does not reliably inherit this shell's exported environment — the
+# .env sourcing above would silently fail to reach the app's process.
+# Executing the binary directly (same as the bare-binary Linux path
+# already did) inherits it the normal way a child process does.
 if [ -d "$EXE" ]; then
-    open "$EXE"
+    APP_BINARY="$EXE/Contents/MacOS/$(defaults read "$EXE/Contents/Info" CFBundleExecutable)"
+    chmod +x "$APP_BINARY"
+    nohup "$APP_BINARY" >/dev/null 2>&1 &
 else
     chmod +x "$EXE"
-    "$EXE" &
+    nohup "$EXE" >/dev/null 2>&1 &
 fi
