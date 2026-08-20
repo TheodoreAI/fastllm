@@ -3649,12 +3649,25 @@ body {
 .git-card {
   background: var(--bg-panel);
   border: 1px solid var(--border);
+  border-left: 2px solid var(--border);
   border-radius: var(--radius);
   padding: 8px;
 }
 
 .git-card + .git-card {
   margin-top: 6px;
+}
+
+/* Staged and unstaged cards otherwise share identical chrome — the left
+   accent stripe + tinted title is the only thing telling them apart at a
+   glance, so it needs to read clearly even at a quick skim. */
+.git-card-staged {
+  border-left-color: var(--success);
+  background: color-mix(in srgb, var(--success) 5%, var(--bg-panel));
+}
+
+.git-card-unstaged {
+  border-left-color: var(--warning);
 }
 
 .git-card-head {
@@ -3669,6 +3682,14 @@ body {
   letter-spacing: 0.3px;
   color: var(--text-faint);
   flex: 1;
+}
+
+.git-card-staged .git-card-head .title {
+  color: var(--success);
+}
+
+.git-card-unstaged .git-card-head .title {
+  color: var(--warning);
 }
 
 .git-card-head button {
