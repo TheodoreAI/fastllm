@@ -42,12 +42,13 @@ async function wsURL() {
 // so the session and scrollback survive navigating to Chat/Editor and back
 // — see the always-mounted / display:none convention used for every other
 // pane there.
-export default function TerminalView({ theme }) {
+export default function TerminalView({ theme, folderRoot }) {
   const containerRef = useRef(null)
   const termRef = useRef(null)
   const fitAddonRef = useRef(null)
   const socketRef = useRef(null)
   const unmountedRef = useRef(false)
+  const folderRootRef = useRef(folderRoot)
   const [status, setStatus] = useState('connecting') // connecting | connected | disconnected | elevated
 
   useEffect(() => {
@@ -155,6 +156,38 @@ export default function TerminalView({ theme }) {
       termRef.current.options.theme = theme === 'light' ? LIGHT_THEME : DARK_THEME
     }
   }, [theme])
+
+  // folderRoot (fileAccessSettings.root, threaded down from App.jsx via
+  // EditorView) changes once a folder picker selection actually completes
+  // — unlike openFolderSignal, which only means "the picker dialog was
+  // requested" and fires whether or not anything was picked (including on
+  // a cancelled dialog). The session's cwd is fixed at spawn time — read
+  // from fileReader.GetRoot() only when Start() is called (see
+  // internal/terminal/handler.go) — so without this, switching folders
+  // silently leaves every already-open terminal tab sitting in the old
+  // folder with no indication anything's stale, since the shell has no way
+  // to know the "opened folder" concept changed underneath it. Restarting
+  // reconnects the WebSocket, which spawns a fresh session against
+  // whatever folder is current by then. Guarded against firing on mount
+  // (folderRootRef is seeded with the initial value at declare time, so
+  // the first run here always sees "unchanged") since connect() is
+  // already called once from the mount effect above.
+  useEffect(() => {
+    const prev = folderRootRef.current
+    folderRootRef.current = folderRoot
+    // Both sides must be a real, already-known root — folderRoot starts
+    // as '' in App.jsx until the initial GET /api/settings/files resolves,
+    // and that '' -> real-root transition on first load is not a folder
+    // switch, just settings finishing hydration; restarting on it would
+    // reconnect (and briefly flicker) every terminal tab on every app
+    // launch for no reason.
+    if (prev && folderRoot && prev !== folderRoot) {
+      restart()
+    }
+    // restart intentionally omitted — it closes over refs, not state, so
+    // it doesn't need to be in the dependency array.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [folderRoot])
 
   function sendResize(term) {
     const socket = socketRef.current

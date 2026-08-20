@@ -30,6 +30,12 @@ const EXTENSION_MAP = {
   css: () => css(),
   html: () => html(),
   htm: () => html(),
+  // No dedicated @codemirror/lang-vue package exists — a .vue Single-File
+  // Component is HTML-shaped (<template>/<script>/<style> blocks), and
+  // html()'s default config already nests javascript()/css() parsing
+  // inside <script>/<style> tags, which covers the common case well
+  // enough without pulling in a heavier Vue-specific parser.
+  vue: () => html(),
   json: () => json(),
   go: () => go(),
   c: () => cpp(),
@@ -76,6 +82,7 @@ const LANGUAGE_NAMES = {
   css: 'CSS',
   html: 'HTML',
   htm: 'HTML',
+  vue: 'Vue',
   json: 'JSON',
   go: 'Go',
   c: 'C',

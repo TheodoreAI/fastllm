@@ -408,11 +408,44 @@ type tagsResponse struct {
 	} `json:"models"`
 }
 
-// ListModels queries Ollama's native /api/tags endpoint and returns every
-// model that is not embedding-only. It relies on the Ollama-specific
-// endpoint, so it only works when BaseURL points at an Ollama server
-// (returns an error otherwise, which callers should treat as "unavailable").
+// openaiModelsResponse is GET {BaseURL}/models' shape — the fallback used
+// when a server doesn't implement Ollama's /api/tags (see ListModels
+// below). Models carries the same Ollama-style shape as tagsResponse:
+// some OpenAI-compatible servers (llama-server, confirmed 2026-08) tack
+// this on alongside the standard `data` field specifically to give
+// Ollama-compatible clients the capability info /api/tags would. Data is
+// the plain OpenAI-standard shape every such server is expected to
+// implement, used only when Models is empty — it carries no capability
+// info, so everything in it is treated as chat-capable (best effort: a
+// server whose /models list includes embedding-only models with no way
+// to distinguish them will have those show up in the picker too).
+type openaiModelsResponse struct {
+	Models []struct {
+		Name         string   `json:"name"`
+		Capabilities []string `json:"capabilities"`
+	} `json:"models"`
+	Data []struct {
+		ID string `json:"id"`
+	} `json:"data"`
+}
+
+// ListModels returns every chat-capable model the configured backend
+// currently serves. Tries Ollama's native /api/tags first (the richer
+// source: it reports capabilities, letting embedding-only models get
+// filtered out); if that's not implemented — any non-2xx status or
+// request failure — falls back to the standard OpenAI-compatible GET
+// {BaseURL}/models, which every OpenAI-compatible server (llama-server,
+// LM Studio, vLLM, ...) is expected to implement. Returns an error only
+// when neither endpoint works, which callers should treat as
+// "unavailable" rather than fatal.
 func (c *Client) ListModels(ctx context.Context) ([]Model, error) {
+	if models, err := c.listModelsFromTags(ctx); err == nil {
+		return models, nil
+	}
+	return c.listModelsFromOpenAI(ctx)
+}
+
+func (c *Client) listModelsFromTags(ctx context.Context) ([]Model, error) {
 	root := strings.TrimSuffix(c.BaseURL, "/v1")
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, root+"/api/tags", nil)
 	if err != nil {
@@ -443,6 +476,48 @@ func (c *Client) ListModels(ctx context.Context) ([]Model, error) {
 			continue // embedding-only model, not usable for chat
 		}
 		out = append(out, Model{Name: m.Name, Capabilities: m.Capabilities, SupportsFileTools: SupportsTools(m.Name), SupportsVision: SupportsVisionForModel(m.Name)})
+	}
+	return out, nil
+}
+
+func (c *Client) listModelsFromOpenAI(ctx context.Context) ([]Model, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/models", nil)
+	if err != nil {
+		return nil, err
+	}
+	if c.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("llm: list models failed: %s", resp.Status)
+	}
+
+	var mr openaiModelsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&mr); err != nil {
+		return nil, err
+	}
+
+	if len(mr.Models) > 0 {
+		out := make([]Model, 0, len(mr.Models))
+		for _, m := range mr.Models {
+			if containsString(m.Capabilities, "embedding") && !containsString(m.Capabilities, "completion") {
+				continue
+			}
+			out = append(out, Model{Name: m.Name, Capabilities: m.Capabilities, SupportsFileTools: SupportsTools(m.Name), SupportsVision: SupportsVisionForModel(m.Name)})
+		}
+		return out, nil
+	}
+
+	out := make([]Model, 0, len(mr.Data))
+	for _, m := range mr.Data {
+		out = append(out, Model{Name: m.ID, SupportsFileTools: SupportsTools(m.ID), SupportsVision: SupportsVisionForModel(m.ID)})
 	}
 	return out, nil
 }
