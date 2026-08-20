@@ -108,7 +108,7 @@ export default function GitPanel({
           <div className="git-step-title">Stage changes</div>
 
           {staged.length > 0 && (
-            <div className="git-card">
+            <div className="git-card git-card-staged">
               <div className="git-card-head">
                 <span className="title">STAGED · {staged.length}</span>
                 <button type="button" onClick={onUnstageAll} disabled={gitBusy}>
@@ -140,7 +140,7 @@ export default function GitPanel({
           )}
 
           {unstaged.length > 0 && (
-            <div className="git-card">
+            <div className="git-card git-card-unstaged">
               <div className="git-card-head">
                 <span className="title">CHANGES · {unstaged.length}</span>
                 <button type="button" onClick={onStageAll} disabled={gitBusy}>
