@@ -92,7 +92,6 @@ export default function EditorView({
   const [searching, setSearching] = useState(false)
 
   const [gitStatus, setGitStatus] = useState([])
-  const [selectedPaths, setSelectedPaths] = useState(new Set())
   const [diffPath, setDiffPath] = useState(null)
   const [diffText, setDiffText] = useState('')
   const diffLines = useMemo(() => parseDiff(diffText), [diffText])
@@ -672,15 +671,6 @@ export default function EditorView({
     }
   }
 
-  function togglePathSelection(path) {
-    setSelectedPaths((prev) => {
-      const next = new Set(prev)
-      if (next.has(path)) next.delete(path)
-      else next.add(path)
-      return next
-    })
-  }
-
   async function viewDiff(entry) {
     setDiffPath(entry.path)
     setDiffText('Loading…')
@@ -692,14 +682,18 @@ export default function EditorView({
     }
   }
 
-  async function handleStageSelected() {
-    if (selectedPaths.size === 0) return
+  // Each row's checkbox IS the stage toggle now (checked = staged),
+  // rather than a separate "select these, then click a bulk-action
+  // button" mechanism — one click does what used to take a select-then-
+  // act pair, and it's the same direct-manipulation pattern GitHub
+  // Desktop uses for the same list.
+  async function handleToggleStage(path, currentlyStaged) {
     setGitBusy(true)
-    setGitBusyAction('stage')
+    setGitBusyAction(currentlyStaged ? 'unstage' : 'stage')
     setGitError('')
     try {
-      await stageGitPaths([...selectedPaths])
-      setSelectedPaths(new Set())
+      if (currentlyStaged) await unstageGitPaths([path])
+      else await stageGitPaths([path])
       refreshGitStatus()
     } catch (err) {
       setGitError(err.message)
@@ -716,7 +710,6 @@ export default function EditorView({
     setGitError('')
     try {
       await stageGitPaths(unstaged.map((entry) => entry.path))
-      setSelectedPaths(new Set())
       refreshGitStatus()
     } catch (err) {
       setGitError(err.message)
@@ -726,14 +719,13 @@ export default function EditorView({
     }
   }
 
-  async function handleUnstageSelected() {
-    if (selectedPaths.size === 0) return
+  async function handleUnstageAll() {
+    if (staged.length === 0) return
     setGitBusy(true)
     setGitBusyAction('unstage')
     setGitError('')
     try {
-      await unstageGitPaths([...selectedPaths])
-      setSelectedPaths(new Set())
+      await unstageGitPaths(staged.map((entry) => entry.path))
       refreshGitStatus()
     } catch (err) {
       setGitError(err.message)
@@ -743,19 +735,21 @@ export default function EditorView({
     }
   }
 
-  // Discards the selected unstaged entries — the one destructive,
-  // no-undo action in this panel, so it goes through the same confirm
-  // dialog as file/folder delete. Only ever applied to unstaged() entries
-  // (see the "Discard selected" button below, which is disabled unless
-  // the selection overlaps unstaged) — a staged-only path has nothing for
-  // `git restore` (no --staged) to act on anyway. Split into two groups
-  // since `git restore` only makes sense for a file git has already
-  // tracked at some point: an untracked file (status "?") has no
-  // committed/staged content to restore back to, so discarding one of
-  // those means deleting it outright instead (same as the file tree's
-  // own delete), not a git restore call.
-  async function handleDiscardSelected() {
-    const unstagedPaths = unstaged.filter((entry) => selectedPaths.has(entry.path))
+  // Discards unstaged entries — the one destructive, no-undo action in
+  // this panel, so it goes through the same confirm dialog as file/folder
+  // delete. Only ever applied to unstaged() entries — a staged-only path
+  // has nothing for `git restore` (no --staged) to act on anyway. Split
+  // into two groups since `git restore` only makes sense for a file git
+  // has already tracked at some point: an untracked file (status "?") has
+  // no committed/staged content to restore back to, so discarding one of
+  // those means deleting it outright instead (same as the file tree's own
+  // delete), not a git restore call.
+  //
+  // Takes an explicit path list — each row's own Discard action passes
+  // just its own path, scoping the confirm dialog and the revert to that
+  // one file.
+  async function handleDiscardPath(paths) {
+    const unstagedPaths = unstaged.filter((entry) => paths.includes(entry.path))
     if (unstagedPaths.length === 0) return
     const trackedPaths = unstagedPaths.filter((entry) => entry.unstaged !== '?').map((entry) => entry.path)
     const untrackedPaths = unstagedPaths.filter((entry) => entry.unstaged === '?').map((entry) => entry.path)
@@ -795,11 +789,6 @@ export default function EditorView({
           removeTabNoConfirm(t.path)
         }
       }
-      setSelectedPaths((prev) => {
-        const next = new Set(prev)
-        for (const path of discardedPaths) next.delete(path)
-        return next
-      })
       refreshTree()
       refreshGitStatus()
     } catch (err) {
@@ -1056,97 +1045,181 @@ export default function EditorView({
             <p className="editor-hint">This folder isn't a git repository, so version control isn't available here.</p>
           </div>
         ) : panel === 'git' && (
-          <div className="editor-panel-body">
+          <div className="editor-panel-body git-stepper">
             {branchError && <p className="editor-error">{branchError}</p>}
-            <div className="editor-branch-row">
-              <select
-                className="editor-branch-select"
-                value={branches.find((b) => b.current)?.name ?? ''}
-                onChange={(e) => handleSwitchBranch(e.target.value)}
-                disabled={branchBusy || branches.length === 0}
-              >
-                {branches.map((b) => (
-                  <option key={b.name} value={b.name}>
-                    {b.name}
-                  </option>
-                ))}
-              </select>
-              <button type="button" onClick={() => setNewBranchOpen((v) => !v)} disabled={branchBusy}>
-                New
-              </button>
-            </div>
-            {newBranchOpen && (
-              <form onSubmit={handleCreateBranch} className="editor-search-form">
-                <input
-                  value={newBranchName}
-                  onChange={(e) => setNewBranchName(e.target.value)}
-                  placeholder="New branch name"
-                  autoFocus
-                />
-                <button type="submit" disabled={branchBusy || !newBranchName.trim()}>
-                  {creatingBranch ? 'Creating…' : 'Create'}
-                </button>
-              </form>
-            )}
-
             {gitError && <p className="editor-error">{gitError}</p>}
 
-            <div className="editor-git-actions">
-              <button
-                type="button"
-                onClick={handleStageAll}
-                disabled={gitBusy || unstaged.length === 0}
-                title="Stage every unstaged change"
-              >
-                {gitBusy && gitBusyAction === 'stage' && selectedPaths.size === 0 ? 'Staging…' : 'Stage all'}
-              </button>
-              <button
-                type="button"
-                onClick={handleStageSelected}
-                disabled={gitBusy || selectedPaths.size === 0}
-                title="Stage the selected files"
-              >
-                {gitBusy && gitBusyAction === 'stage' && selectedPaths.size > 0 ? 'Staging…' : 'Stage'}
-              </button>
-              <button
-                type="button"
-                onClick={handleUnstageSelected}
-                disabled={gitBusy || selectedPaths.size === 0}
-                title="Unstage the selected files"
-              >
-                {gitBusy && gitBusyAction === 'unstage' ? 'Unstaging…' : 'Unstage'}
-              </button>
-              <button
-                type="button"
-                className="btn-danger-outline"
-                onClick={handleDiscardSelected}
-                disabled={gitBusy || !unstaged.some((entry) => selectedPaths.has(entry.path))}
-                title="Revert selected unstaged changes to their last committed version"
-              >
-                {gitBusy && gitBusyAction === 'discard' ? 'Discarding…' : 'Discard'}
-              </button>
+            <div className="git-step">
+              <div className="git-step-rail">
+                <div className="git-step-dot on">1</div>
+                <div className="git-step-rail-line" />
+              </div>
+              <div className="git-step-body">
+                <div className="git-step-title">Branch</div>
+                <div className="git-branch-row">
+                  <svg className="git-branch-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="6" y1="3" x2="6" y2="15" /><circle cx="18" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 9a9 9 0 0 1-9 9" /></svg>
+                  <select
+                    className="git-branch-select"
+                    value={branches.find((b) => b.current)?.name ?? ''}
+                    onChange={(e) => handleSwitchBranch(e.target.value)}
+                    disabled={branchBusy || branches.length === 0}
+                  >
+                    {branches.map((b) => (
+                      <option key={b.name} value={b.name}>
+                        {b.name}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="git-icon-btn"
+                    title="New branch"
+                    onClick={() => setNewBranchOpen((v) => !v)}
+                    disabled={branchBusy}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
+                  </button>
+                </div>
+                {newBranchOpen && (
+                  <form onSubmit={handleCreateBranch} className="editor-search-form">
+                    <input
+                      value={newBranchName}
+                      onChange={(e) => setNewBranchName(e.target.value)}
+                      placeholder="New branch name"
+                      autoFocus
+                    />
+                    <button type="submit" disabled={branchBusy || !newBranchName.trim()}>
+                      {creatingBranch ? 'Creating…' : 'Create'}
+                    </button>
+                  </form>
+                )}
+              </div>
             </div>
 
-            <form onSubmit={handleCommit} className="editor-commit-form">
-              <textarea
-                value={commitMessage}
-                onChange={(e) => setCommitMessage(e.target.value)}
-                placeholder="Commit message"
-                rows={2}
-              />
-              <div className="editor-commit-actions">
-                <button type="submit" disabled={gitBusy || !commitMessage.trim() || staged.length === 0}>
-                  {gitBusy && gitBusyAction === 'commit'
-                    ? 'Committing…'
-                    : `Commit ${staged.length > 0 ? `(${staged.length})` : ''}`}
-                </button>
-                <button type="button" onClick={handlePush} disabled={pushing} title="Push to the remote">
+            <div className="git-step">
+              <div className="git-step-rail">
+                <div className={`git-step-dot ${gitStatus.length > 0 ? 'on' : 'off'}`}>2</div>
+                <div className="git-step-rail-line" />
+              </div>
+              <div className="git-step-body">
+                <div className="git-step-title">Stage changes</div>
+
+                {staged.length > 0 && (
+                  <div className="git-card">
+                    <div className="git-card-head">
+                      <span className="title">STAGED · {staged.length}</span>
+                      <button type="button" onClick={handleUnstageAll} disabled={gitBusy}>
+                        {gitBusy && gitBusyAction === 'unstage' ? 'Unstaging…' : 'Unstage all'}
+                      </button>
+                    </div>
+                    <ul className="git-file-list">
+                      {staged.map((entry) => {
+                        const slash = entry.path.lastIndexOf('/')
+                        return (
+                          <li key={entry.path} className="git-file-row">
+                            <input
+                              type="checkbox"
+                              checked
+                              disabled={gitBusy}
+                              onChange={() => handleToggleStage(entry.path, true)}
+                              title="Unstage"
+                            />
+                            <button type="button" className="git-file-path" onClick={() => viewDiff({ ...entry, staged: true })}>
+                              {slash >= 0 && <span className="dir">{entry.path.slice(0, slash + 1)}</span>}
+                              <span className="name">{slash >= 0 ? entry.path.slice(slash + 1) : entry.path}</span>
+                            </button>
+                            <span className={`git-badge git-badge-${entry.staged.toLowerCase()}`}>{entry.staged}</span>
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  </div>
+                )}
+
+                {unstaged.length > 0 && (
+                  <div className="git-card">
+                    <div className="git-card-head">
+                      <span className="title">CHANGES · {unstaged.length}</span>
+                      <button type="button" onClick={handleStageAll} disabled={gitBusy}>
+                        {gitBusy && gitBusyAction === 'stage' ? 'Staging…' : 'Stage all'}
+                      </button>
+                    </div>
+                    <ul className="git-file-list">
+                      {unstaged.map((entry) => {
+                        const slash = entry.path.lastIndexOf('/')
+                        const code = entry.unstaged === '?' ? 'U' : entry.unstaged
+                        return (
+                          <li key={entry.path} className="git-file-row">
+                            <input
+                              type="checkbox"
+                              checked={false}
+                              disabled={gitBusy}
+                              onChange={() => handleToggleStage(entry.path, false)}
+                              title="Stage"
+                            />
+                            <button type="button" className="git-file-path" onClick={() => viewDiff({ ...entry, staged: false })}>
+                              {slash >= 0 && <span className="dir">{entry.path.slice(0, slash + 1)}</span>}
+                              <span className="name">{slash >= 0 ? entry.path.slice(slash + 1) : entry.path}</span>
+                            </button>
+                            <span className={`git-badge git-badge-${code.toLowerCase()}`}>{code}</span>
+                            <button
+                              type="button"
+                              className="git-discard-link"
+                              disabled={gitBusy}
+                              onClick={() => handleDiscardPath([entry.path])}
+                              title="Revert this change to its last committed version"
+                            >
+                              {gitBusy && gitBusyAction === 'discard' ? '…' : 'Discard'}
+                            </button>
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  </div>
+                )}
+
+                {gitStatus.length === 0 && <p className="editor-hint">No changes.</p>}
+              </div>
+            </div>
+
+            <div className="git-step">
+              <div className="git-step-rail">
+                <div className={`git-step-dot ${staged.length > 0 ? 'on' : 'off'}`}>3</div>
+                <div className="git-step-rail-line" />
+              </div>
+              <div className="git-step-body">
+                <div className="git-step-title">Commit</div>
+                <form onSubmit={handleCommit} className="editor-commit-form">
+                  <textarea
+                    value={commitMessage}
+                    onChange={(e) => setCommitMessage(e.target.value)}
+                    placeholder="Commit message"
+                    rows={2}
+                  />
+                  <button type="submit" className="git-commit-btn" disabled={gitBusy || !commitMessage.trim() || staged.length === 0}>
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M5 13l4 4L19 7" /></svg>
+                    {gitBusy && gitBusyAction === 'commit'
+                      ? 'Committing…'
+                      : `Commit ${staged.length > 0 ? `(${staged.length})` : ''}`}
+                  </button>
+                </form>
+              </div>
+            </div>
+
+            <div className="git-step">
+              <div className="git-step-rail">
+                <div className="git-step-dot off">4</div>
+              </div>
+              <div className="git-step-body">
+                <div className="git-step-title">Push</div>
+                <button type="button" className="git-push-btn" onClick={handlePush} disabled={pushing}>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
                   {pushing ? 'Pushing…' : 'Push'}
                 </button>
                 {pushNeedsUpstream && (
                   <button
                     type="button"
-                    className="editor-push-upstream"
+                    className="git-push-btn editor-push-upstream"
                     onClick={handlePushSetUpstream}
                     disabled={pushing}
                     title="This branch has no upstream yet — push and set one"
@@ -1154,55 +1227,9 @@ export default function EditorView({
                     {pushing ? 'Pushing…' : 'Set upstream & push'}
                   </button>
                 )}
+                {pushStatus && <span className="editor-push-status">{pushStatus}</span>}
               </div>
-              {pushStatus && <span className="editor-push-status">{pushStatus}</span>}
-            </form>
-
-            {staged.length > 0 && (
-              <>
-                <h4>Staged</h4>
-                <ul className="editor-git-list">
-                  {staged.map((entry) => (
-                    <li key={entry.path}>
-                      <input
-                        type="checkbox"
-                        checked={selectedPaths.has(entry.path)}
-                        onChange={() => togglePathSelection(entry.path)}
-                      />
-                      <button type="button" onClick={() => viewDiff({ ...entry, staged: true })}>
-                        <span className={`editor-git-code editor-git-${entry.staged.toLowerCase()}`}>{entry.staged}</span>
-                        {entry.path}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </>
-            )}
-
-            {unstaged.length > 0 && (
-              <>
-                <h4>Changes</h4>
-                <ul className="editor-git-list">
-                  {unstaged.map((entry) => (
-                    <li key={entry.path}>
-                      <input
-                        type="checkbox"
-                        checked={selectedPaths.has(entry.path)}
-                        onChange={() => togglePathSelection(entry.path)}
-                      />
-                      <button type="button" onClick={() => viewDiff({ ...entry, staged: false })}>
-                        <span className={`editor-git-code editor-git-${entry.unstaged === '?' ? 'untracked' : entry.unstaged.toLowerCase()}`}>
-                          {entry.unstaged === '?' ? 'U' : entry.unstaged}
-                        </span>
-                        {entry.path}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </>
-            )}
-
-            {gitStatus.length === 0 && <p className="editor-hint">No changes.</p>}
+            </div>
           </div>
         )}
       </aside>
