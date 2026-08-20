@@ -20,6 +20,7 @@ import { useSectionOrder } from './useSectionOrder'
 import { useSidebarCollapsed } from './useSidebarCollapsed'
 import { useEditorSidebarCollapsed } from './useEditorSidebarCollapsed'
 import { useTerminalCollapsed } from './useTerminalCollapsed'
+import { useEditorPaneCollapsed } from './useEditorPaneCollapsed'
 import { useSplitWidth } from './useSplitWidth'
 import { useConnectionStatus } from './useConnectionStatus'
 import { useModel } from './useModel'
@@ -235,6 +236,7 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useSidebarCollapsed()
   const [editorSidebarCollapsed, setEditorSidebarCollapsed] = useEditorSidebarCollapsed()
   const [terminalCollapsed, setTerminalCollapsed] = useTerminalCollapsed()
+  const [editorPaneCollapsed, setEditorPaneCollapsed] = useEditorPaneCollapsed()
   const [tweakBarOpen, setTweakBarOpen] = useState(false)
   const [openFolderSignal, setOpenFolderSignal] = useState(0)
   const [editorPanel, setEditorPanel] = useEditorPanel()
@@ -316,15 +318,21 @@ export default function App() {
   // same toggle Ctrl+B already does); clicking it from anywhere else
   // selects that panel and makes sure the sidebar is actually expanded to
   // show it, rather than leaving it collapsed from an earlier
-  // Ctrl+B/manual collapse.
+  // Ctrl+B/manual collapse. Also un-collapses the whole editor pane
+  // (EditorView's paneCollapsed — see toggleEditorPaneCollapsed below) if
+  // that's what's hiding it — Search/Git/Files should always be reachable
+  // from their own rail buttons regardless of that toggle's state, same as
+  // clicking one while the sidebar itself was manually collapsed already
+  // does.
   function openEditorPanel(panel) {
-    const alreadyShowingPanel = editorPanel === panel && !editorSidebarCollapsed
+    const alreadyShowingPanel = editorPanel === panel && !editorSidebarCollapsed && !editorPaneCollapsed
     if (alreadyShowingPanel) {
       setEditorSidebarCollapsed(true)
       return
     }
     setEditorPanel(panel)
     setEditorSidebarCollapsed(false)
+    setEditorPaneCollapsed(false)
   }
 
   // The Files rail button mirrors VS Code's Explorer icon: clicking it
@@ -333,15 +341,27 @@ export default function App() {
   // the keydown handler above); clicking it from anywhere else selects
   // the Files panel and makes sure the sidebar is actually expanded to
   // show it, rather than leaving it collapsed from an earlier
-  // Ctrl+B/manual collapse.
+  // Ctrl+B/manual collapse. Also un-collapses the whole editor pane, same
+  // reasoning as openEditorPanel above.
   function toggleFilesPanel() {
-    const alreadyShowingFiles = editorPanel === 'files' && !editorSidebarCollapsed
+    const alreadyShowingFiles = editorPanel === 'files' && !editorSidebarCollapsed && !editorPaneCollapsed
     if (alreadyShowingFiles) {
       setEditorSidebarCollapsed(true)
       return
     }
     setEditorPanel('files')
     setEditorSidebarCollapsed(false)
+    setEditorPaneCollapsed(false)
+  }
+
+  // Collapses the file editor/sidebar (not just the Files/Search/Git
+  // sub-panel — see toggleFilesPanel above for that, and not the terminal,
+  // which EditorView keeps independently visible via its own paneCollapsed
+  // handling — the two are deliberately decoupled). This toggle (a
+  // view-rail button — see its render below) is the only way back in,
+  // same as handleCloseChat's X button is the only way back into chat.
+  function toggleEditorPaneCollapsed() {
+    setEditorPaneCollapsed((collapsed) => !collapsed)
   }
 
   useEffect(() => {
@@ -974,6 +994,18 @@ export default function App() {
       <nav className="view-rail">
         <button
           type="button"
+          className={editorPaneCollapsed ? '' : 'is-toggled'}
+          title={editorPaneCollapsed ? 'Show editor panel' : 'Hide editor panel'}
+          onClick={toggleEditorPaneCollapsed}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <rect x="3" y="4" width="18" height="16" rx="2" />
+            <path d="M10 4v16" />
+            {!editorPaneCollapsed && <rect x="3" y="4" width="7" height="16" rx="1" fill="currentColor" stroke="none" opacity="0.35" />}
+          </svg>
+        </button>
+        <button
+          type="button"
           className={editorPanel === 'files' && !editorSidebarCollapsed ? 'is-active' : ''}
           title="Files"
           onClick={toggleFilesPanel}
@@ -1063,6 +1095,14 @@ export default function App() {
 
       <div className="main-row">
       <div className="split-container" ref={splitContainerRef}>
+      {/* editorPaneCollapsed hides the file editor/sidebar (see EditorView's
+          paneCollapsed prop) but not the terminal — the two are decoupled,
+          so this column stays rendered and full width even when the editor
+          itself is collapsed, rather than the whole column disappearing
+          the way it used to. `visible` (terminal's first-mount gate) can
+          stay permanently true now that this is never display:none — it
+          only ever mattered for skipping the terminal's first mount before
+          the Editor tab had been opened at all. */}
       <div
         className="editor-pane"
         style={{ flex: chatCollapsed ? '1 1 auto' : `0 0 ${splitWidth * 100}%` }}
@@ -1073,6 +1113,7 @@ export default function App() {
           theme={theme}
           terminalEnabled={terminalSettings.enabled}
           visible
+          paneCollapsed={editorPaneCollapsed}
           openFolderSignal={openFolderSignal}
           onOpenSettings={handleOpenSettings}
           panel={editorPanel}
@@ -1086,35 +1127,41 @@ export default function App() {
         />
       </div>
 
+      {/* Kept regardless of editorPaneCollapsed — the editor-pane column
+          still has its own width (holding the terminal, if nothing else)
+          even with the file editor/sidebar hidden, so the gap and the
+          drag-to-resize handle both still apply. Only chatCollapsed hides
+          it, since there's nothing on the other side to divide from then. */}
       {!chatCollapsed && (
-        <>
-          <div className="split-divider" onMouseDown={handleSplitDragStart} />
+        <div className="split-divider" onMouseDown={handleSplitDragStart} />
+      )}
 
-          <div className="body">
-            <ChatPanel
-              messages={messages}
-              messagesLoading={messagesLoading}
-              conversationId={conversationId}
-              conversationTitle={conversations.find((c) => String(c.id) === String(conversationId))?.title}
-              onCloseChat={handleCloseChat}
-              bottomRef={bottomRef}
-              input={input}
-              onInputChange={setInput}
-              streaming={streaming}
-              onSendMessage={sendMessage}
-              onStop={stopStreaming}
-              userDisplayName={settings?.username}
-              onRequestApproveWrite={requestApproveWrite}
-              onRejectWrite={handleRejectWrite}
-              pendingImages={pendingImages}
-              composerImageError={composerImageError}
-              onComposerPaste={handleComposerPaste}
-              onRemovePendingImage={removePendingImage}
-              visionSupported={visionSupported}
-              activeEditorFile={activeEditorFile}
-            />
-          </div>
-        </>
+      {!chatCollapsed && (
+        <div className="body">
+          <ChatPanel
+            messages={messages}
+            messagesLoading={messagesLoading}
+            conversationId={conversationId}
+            conversationTitle={conversations.find((c) => String(c.id) === String(conversationId))?.title}
+            onCloseChat={handleCloseChat}
+            onNewChat={startNewChat}
+            bottomRef={bottomRef}
+            input={input}
+            onInputChange={setInput}
+            streaming={streaming}
+            onSendMessage={sendMessage}
+            onStop={stopStreaming}
+            userDisplayName={settings?.username}
+            onRequestApproveWrite={requestApproveWrite}
+            onRejectWrite={handleRejectWrite}
+            pendingImages={pendingImages}
+            composerImageError={composerImageError}
+            onComposerPaste={handleComposerPaste}
+            onRemovePendingImage={removePendingImage}
+            visionSupported={visionSupported}
+            activeEditorFile={activeEditorFile}
+          />
+        </div>
       )}
       </div>
 

@@ -43,6 +43,7 @@ export default function EditorView({
   theme,
   terminalEnabled,
   visible,
+  paneCollapsed,
   openFolderSignal,
   onOpenSettings,
   panel,
@@ -968,7 +969,7 @@ export default function EditorView({
 
   return (
     <div className="editor-view">
-      {!sidebarCollapsed && (
+      {!paneCollapsed && !sidebarCollapsed && (
       <aside
         ref={sidebarRef}
         className="editor-sidebar"
@@ -1060,43 +1061,70 @@ export default function EditorView({
       </aside>
       )}
 
-      {!sidebarCollapsed && (
+      {!paneCollapsed && !sidebarCollapsed && (
         <div className="editor-sidebar-divider" onMouseDown={handleSidebarDragStart} />
       )}
 
       <main className="editor-main" ref={mainColumnRef}>
-        <EditorPane
-          openTabs={openTabs}
-          activeTabPath={activeTabPath}
-          diffPath={diffPath}
-          onSelectTab={(path) => {
-            setDiffPath(null)
-            setActiveTabPath(path)
-          }}
-          onCloseTab={closeTab}
-          openPath={openPath}
-          fileStatus={fileStatus}
-          canWrite={canWrite}
-          dirty={dirty}
-          saving={saving}
-          onSave={handleSave}
-          theme={theme}
-          languageExtensionsFor={languageExtensionsFor}
-          onEditorKeyDown={handleEditorKeyDown}
-          onTabContentChange={(path, value) =>
-            setOpenTabs((prev) => prev.map((x) => (x.path === path ? { ...x, content: value } : x)))
-          }
-          codeMirrorViewsByPath={codeMirrorViewsByPath}
-          diffLines={diffLines}
-          onCloseDiff={() => setDiffPath(null)}
-          setupComplete={setupComplete}
-          setupChecklist={setupChecklist}
-        />
-
-        {!terminalCollapsed && (
-          <div className="terminal-panel-divider" onMouseDown={handleTerminalDragStart} />
+        {/* editor-main-content itself is flex:1 (see App.css), which is
+            what keeps the terminal pinned to the bottom of this column —
+            without something to fill that space here, the fixed-height
+            terminal-panel below would end up flex-start'd to the TOP of
+            the column instead, with the empty area beneath it rather than
+            above. A bare filler div does the same job EditorPane's own
+            flex:1 content already did. */}
+        {!paneCollapsed ? (
+          <EditorPane
+            openTabs={openTabs}
+            activeTabPath={activeTabPath}
+            diffPath={diffPath}
+            onSelectTab={(path) => {
+              setDiffPath(null)
+              setActiveTabPath(path)
+            }}
+            onCloseTab={closeTab}
+            openPath={openPath}
+            fileStatus={fileStatus}
+            canWrite={canWrite}
+            dirty={dirty}
+            saving={saving}
+            onSave={handleSave}
+            theme={theme}
+            languageExtensionsFor={languageExtensionsFor}
+            onEditorKeyDown={handleEditorKeyDown}
+            onTabContentChange={(path, value) =>
+              setOpenTabs((prev) => prev.map((x) => (x.path === path ? { ...x, content: value } : x)))
+            }
+            codeMirrorViewsByPath={codeMirrorViewsByPath}
+            diffLines={diffLines}
+            onCloseDiff={() => setDiffPath(null)}
+            setupComplete={setupComplete}
+            setupChecklist={setupChecklist}
+          />
+        ) : (
+          <div className="editor-main-content" />
         )}
 
+        {/* Always rendered (not just when draggable) so the gap between
+            the editor content and the terminal panel stays consistent —
+            just not draggable when there's nothing above it to resize
+            against (paneCollapsed) or nothing below it to resize
+            (terminalCollapsed). */}
+        <div
+          className="terminal-panel-divider"
+          onMouseDown={!paneCollapsed && !terminalCollapsed ? handleTerminalDragStart : undefined}
+          style={!paneCollapsed && !terminalCollapsed ? undefined : { cursor: 'default' }}
+        />
+
+        {/* Terminal stays visible and usable independent of the file
+            editor/sidebar above — collapsing the editor pane (paneCollapsed,
+            see App.jsx's editorPaneCollapsed) must not also take the
+            terminal down with it, since the two are unrelated tools that
+            happen to share this column. Keeps its usual fixed
+            terminalPanelHeight regardless of paneCollapsed, rather than
+            growing to fill the freed-up space — the height the user
+            dragged it to shouldn't change just because something else in
+            the same column got hidden. */}
         <div
           className={`terminal-panel ${terminalCollapsed ? 'is-collapsed' : ''}`}
           style={{ flex: terminalCollapsed ? '0 0 auto' : `0 0 ${terminalPanelHeight}px` }}

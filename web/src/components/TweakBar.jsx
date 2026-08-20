@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { contrastRatio, aaLevel } from '../wcagContrast'
+import GroupedDropdown from './GroupedDropdown'
 import {
   DEFAULTS,
   STORAGE_KEY,
@@ -8,6 +9,38 @@ import {
   MOTION_ANIM_NAME,
   INSPECT_STYLE_KEYS,
 } from '../tweakBarConstants'
+
+// Ungrouped option lists for the tweak bar's own dropdowns — shaped for
+// GroupedDropdown's generic groups format (a single group with no
+// `label` renders with no header row), reused here instead of a raw
+// <select> for the same reason ModelPicker uses it: this app's own
+// scrollbar/styling on the popup rather than an OS-rendered one.
+const FONT_FAMILY_GROUPS = [
+  { key: 'font-family', options: Object.entries(FONT_STACKS).map(([label, stack]) => ({ value: stack, label })) },
+]
+const FONT_WEIGHT_GROUPS = [
+  {
+    key: 'font-weight',
+    options: [
+      { value: '300', label: 'Light' },
+      { value: '400', label: 'Regular' },
+      { value: '500', label: 'Medium' },
+      { value: '600', label: 'Semibold' },
+      { value: '700', label: 'Bold' },
+    ],
+  },
+]
+const MOTION_PRESET_GROUPS = [
+  {
+    key: 'motion-preset',
+    options: [
+      { value: 'none', label: 'None' },
+      { value: 'fade-in', label: 'Fade in' },
+      { value: 'rise-in', label: 'Rise in' },
+      { value: 'pulse-accent', label: 'Pulse accent' },
+    ],
+  },
+]
 
 // Dev tool, not a feature — a floating panel for live-overriding fastllm's
 // design tokens (color, typography, spacing, motion) plus a click-to-copy
@@ -287,13 +320,11 @@ export default function TweakBar({ open, onToggle }) {
       <div className="tb-row tb-row-full">
         <label>
           Font family
-          <select value={state.fontFamily} onChange={(e) => patch({ fontFamily: e.target.value })}>
-            {Object.entries(FONT_STACKS).map(([label, stack]) => (
-              <option key={label} value={stack}>
-                {label}
-              </option>
-            ))}
-          </select>
+          <GroupedDropdown
+            groups={FONT_FAMILY_GROUPS}
+            value={state.fontFamily}
+            onChange={(v) => patch({ fontFamily: v })}
+          />
         </label>
       </div>
 
@@ -301,13 +332,11 @@ export default function TweakBar({ open, onToggle }) {
         <div className="tb-group-title">Typography</div>
         <label>
           Weight
-          <select value={state.fontWeight} onChange={(e) => patch({ fontWeight: e.target.value })}>
-            <option value="300">Light</option>
-            <option value="400">Regular</option>
-            <option value="500">Medium</option>
-            <option value="600">Semibold</option>
-            <option value="700">Bold</option>
-          </select>
+          <GroupedDropdown
+            groups={FONT_WEIGHT_GROUPS}
+            value={state.fontWeight}
+            onChange={(v) => patch({ fontWeight: v })}
+          />
         </label>
         <label>
           Size <span>{Math.round(state.fontSize * 100)}%</span>
@@ -415,12 +444,11 @@ export default function TweakBar({ open, onToggle }) {
         <div className="tb-group-title">Motion</div>
         <label>
           Preset
-          <select value={state.motionPreset} onChange={(e) => patch({ motionPreset: e.target.value })}>
-            <option value="none">None</option>
-            <option value="fade-in">Fade in</option>
-            <option value="rise-in">Rise in</option>
-            <option value="pulse-accent">Pulse accent</option>
-          </select>
+          <GroupedDropdown
+            groups={MOTION_PRESET_GROUPS}
+            value={state.motionPreset}
+            onChange={(v) => patch({ motionPreset: v })}
+          />
         </label>
         <label>
           Speed <span>{state.motionSpeed}x</span>
