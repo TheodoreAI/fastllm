@@ -60,7 +60,11 @@ const KEYBINDINGS = [
 // inventing a new expand/collapse affordance.
 function SubSection({ id, label, expanded, onToggle, children }) {
   return (
-    <div className="settings-section">
+    // Real DOM id (not just the `expanded` state key) so a cross-link like
+    // the Editor's "Enable the terminal" checklist item can scroll this
+    // exact section into view once it's open — see the expandSection
+    // effect below.
+    <div className="settings-section" id={`settings-section-${id}`}>
       <button
         type="button"
         className="settings-subsection-toggle"
@@ -145,13 +149,22 @@ export default function SettingsPanel({
   }
 
   // Lets a cross-link elsewhere in the app (ModelPicker's "manage
-  // models") force one specific sub-section open — e.g. jumping to LLM
-  // backend — without the panel otherwise needing to be a controlled
-  // component. See App.jsx's onOpenSettings.
+  // models", the Editor's "Enable the terminal" checklist item) force one
+  // specific sub-section open — e.g. jumping to LLM backend or Terminal —
+  // without the panel otherwise needing to be a controlled component. See
+  // App.jsx's onOpenSettings. Also scrolls that section into view: with
+  // several sub-sections above it already expanded (their own remembered
+  // state — see useSettingsExpanded), the target can easily open below the
+  // fold, which reads as "the button did nothing" even though it worked.
+  // The rAF defers the scroll one paint past the state flip above, so it
+  // measures the section's real (expanded) position instead of the
+  // collapsed one still on screen this same tick.
   useEffect(() => {
-    if (expandSection) {
-      setExpanded((prev) => ({ ...prev, [expandSection]: true }))
-    }
+    if (!expandSection) return
+    setExpanded((prev) => ({ ...prev, [expandSection]: true }))
+    requestAnimationFrame(() => {
+      document.getElementById(`settings-section-${expandSection}`)?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+    })
   }, [expandSection, setExpanded])
 
   // Drives disabling the read/write checkboxes and Save button before an
