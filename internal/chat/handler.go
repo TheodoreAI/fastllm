@@ -244,6 +244,14 @@ type Handler struct {
 
 	liveConvMu sync.Mutex
 	liveConvID int64
+	// liveTargetConvID is an explicit override set via SetLiveTarget (see
+	// live.go) — normally the conversation currently open in the Chat
+	// panel, kept in sync by the frontend on every selection change so
+	// bridge traffic lands wherever the human is actually looking instead
+	// of always the fixed "Live Terminal" conversation. 0 means no
+	// override is active; liveConversationID falls back to liveConvID/the
+	// auto-created "Live Terminal" conversation in that case.
+	liveTargetConvID int64
 
 	writesMu sync.Mutex
 	writes   map[string]*PendingWrite
