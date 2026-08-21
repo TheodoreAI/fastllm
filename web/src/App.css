@@ -5126,15 +5126,33 @@ body {
    (Cmd/Ctrl+F) — its own baseTheme only sets layout (padding, inline
    spacing for its inputs/buttons/labels), no colors, so unstyled it
    renders in the browser's bare default form-control look, clashing
-   with the rest of the app. .cm-panels positions the whole bar at the
-   top of the editor; .cm-search is the actual find/replace bar within it. */
-.cm-panels {
-  background: var(--bg-panel);
-  color: var(--text);
-}
-
-.cm-panels-top {
-  border-bottom: 1px solid var(--border-strong);
+   with the rest of the app.
+   .cm-panels-bottom is CodeMirror's own layout slot for this panel here
+   (basicSetup's default search() config docks it at the bottom, not
+   top) — normally a flex child of .cm-editor (itself `position:
+   relative` per CodeMirror's baseTheme), so it pushes the
+   scroller/gutters up from the bottom and shrinks the visible code.
+   Taking it out of flow with position: absolute, anchored to
+   .cm-editor's own relative box, makes it float over the code —
+   docked top-right, the conventional find-widget position most editors
+   use — instead of displacing anything. */
+/* !important throughout: CodeMirror injects its own base theme as a
+   dynamic <style> tag at runtime, after this stylesheet loads — with
+   equal selector specificity (.cm-panels vs .cm-panels-bottom, both a
+   single class), the later-inserted rule wins ties by cascade order
+   regardless of which selector reads as "more specific", so a plain
+   override here would lose to their own position: sticky; left: 0;
+   right: 0. left/z-index are reset for the same reason: their left: 0
+   + right: 0 would otherwise stretch this to the full editor width
+   even once position: absolute wins. */
+.cm-panels-bottom {
+  position: absolute !important;
+  top: 6px !important;
+  right: 6px !important;
+  left: auto !important;
+  bottom: auto !important;
+  width: auto !important;
+  z-index: 4 !important;
 }
 
 .cm-search {
@@ -5143,6 +5161,12 @@ body {
   align-items: center;
   padding: 8px 34px 8px 10px !important;
   gap: 4px;
+  max-width: 420px;
+  background: var(--bg-panel);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-overlay);
 }
 
 .cm-search br {
