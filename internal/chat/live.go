@@ -17,10 +17,20 @@ import (
 // external tool, like a terminal-based AI CLI, can be pointed at) and
 // LiveStream (the SSE endpoint the frontend subscribes to so the Chat
 // panel can render that traffic as it happens, not just after a reload).
+// TurnID identifies which request a token/done event belongs to.
+// ExternalChatCompletions and AnthropicMessages both append to the same
+// shared "Live Terminal" conversation, and nothing prevents two requests
+// (an auxiliary background call a CLI makes alongside its main answer, a
+// second terminal tab, etc.) from streaming concurrently — without a
+// per-request id, the frontend has no way to tell which in-flight
+// assistant message a given "token" event belongs to, and ends up
+// appending both streams' tokens to whichever message happens to be last,
+// interleaving them into scrambled text.
 type LiveEvent struct {
 	ConversationID int64  `json:"conversation_id"`
 	Type           string `json:"type"` // "user_message" | "token" | "done"
 	Text           string `json:"text,omitempty"`
+	TurnID         string `json:"turn_id"`
 }
 
 // LiveBroadcaster fans a LiveEvent out to every currently-subscribed SSE
@@ -184,7 +194,8 @@ func (h *Handler) ExternalChatCompletions(w http.ResponseWriter, r *http.Request
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	h.Live.Publish(LiveEvent{ConversationID: convID, Type: "user_message", Text: userText})
+	turnID := "turn_" + newWriteID()
+	h.Live.Publish(LiveEvent{ConversationID: convID, Type: "user_message", Text: userText, TurnID: turnID})
 
 	llmMessages := make([]llm.Message, 0, len(req.Messages))
 	for _, m := range req.Messages {
@@ -201,7 +212,7 @@ func (h *Handler) ExternalChatCompletions(w http.ResponseWriter, r *http.Request
 		var full strings.Builder
 		err := h.LLM.StreamChat(ctx, model, llmMessages, "", func(token string) {
 			full.WriteString(token)
-			h.Live.Publish(LiveEvent{ConversationID: convID, Type: "token", Text: token})
+			h.Live.Publish(LiveEvent{ConversationID: convID, Type: "token", Text: token, TurnID: turnID})
 		}, func(string) {}, func(llm.Usage) {})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -210,7 +221,7 @@ func (h *Handler) ExternalChatCompletions(w http.ResponseWriter, r *http.Request
 		if _, err := store.SaveAssistantMessage(h.DB, defaultWorkspace, convID, full.String(), nil); err != nil {
 			log.Printf("save external assistant message: %v", err)
 		}
-		h.Live.Publish(LiveEvent{ConversationID: convID, Type: "done"})
+		h.Live.Publish(LiveEvent{ConversationID: convID, Type: "done", TurnID: turnID})
 		writeOpenAIResponse(w, model, full.String())
 		return
 	}
@@ -227,7 +238,7 @@ func (h *Handler) ExternalChatCompletions(w http.ResponseWriter, r *http.Request
 	var full strings.Builder
 	err = h.LLM.StreamChat(ctx, model, llmMessages, "", func(token string) {
 		full.WriteString(token)
-		h.Live.Publish(LiveEvent{ConversationID: convID, Type: "token", Text: token})
+		h.Live.Publish(LiveEvent{ConversationID: convID, Type: "token", Text: token, TurnID: turnID})
 		writeOpenAIChunk(w, model, token)
 		flusher.Flush()
 	}, func(string) {}, func(llm.Usage) {})
@@ -241,7 +252,7 @@ func (h *Handler) ExternalChatCompletions(w http.ResponseWriter, r *http.Request
 	if _, err := store.SaveAssistantMessage(h.DB, defaultWorkspace, convID, full.String(), nil); err != nil {
 		log.Printf("save external assistant message: %v", err)
 	}
-	h.Live.Publish(LiveEvent{ConversationID: convID, Type: "done"})
+	h.Live.Publish(LiveEvent{ConversationID: convID, Type: "done", TurnID: turnID})
 	fmt.Fprint(w, "data: [DONE]\n\n")
 	flusher.Flush()
 }
@@ -371,7 +382,8 @@ func (h *Handler) AnthropicMessages(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	h.Live.Publish(LiveEvent{ConversationID: convID, Type: "user_message", Text: userText})
+	msgID := "msg_" + newWriteID()
+	h.Live.Publish(LiveEvent{ConversationID: convID, Type: "user_message", Text: userText, TurnID: msgID})
 
 	llmMessages := make([]llm.Message, 0, len(req.Messages))
 	for _, m := range req.Messages {
@@ -383,14 +395,13 @@ func (h *Handler) AnthropicMessages(w http.ResponseWriter, r *http.Request) {
 	if model == "" {
 		model = h.LLM.ChatModel()
 	}
-	msgID := "msg_" + newWriteID()
 
 	if !req.Stream {
 		var full strings.Builder
 		var usage llm.Usage
 		err := h.LLM.StreamChat(ctx, model, llmMessages, "", func(token string) {
 			full.WriteString(token)
-			h.Live.Publish(LiveEvent{ConversationID: convID, Type: "token", Text: token})
+			h.Live.Publish(LiveEvent{ConversationID: convID, Type: "token", Text: token, TurnID: msgID})
 		}, func(string) {}, func(u llm.Usage) { usage = u })
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -399,7 +410,7 @@ func (h *Handler) AnthropicMessages(w http.ResponseWriter, r *http.Request) {
 		if _, err := store.SaveAssistantMessage(h.DB, defaultWorkspace, convID, full.String(), nil); err != nil {
 			log.Printf("save external assistant message: %v", err)
 		}
-		h.Live.Publish(LiveEvent{ConversationID: convID, Type: "done"})
+		h.Live.Publish(LiveEvent{ConversationID: convID, Type: "done", TurnID: msgID})
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"id":            msgID,
@@ -446,7 +457,7 @@ func (h *Handler) AnthropicMessages(w http.ResponseWriter, r *http.Request) {
 	var usage llm.Usage
 	err = h.LLM.StreamChat(ctx, model, llmMessages, "", func(token string) {
 		full.WriteString(token)
-		h.Live.Publish(LiveEvent{ConversationID: convID, Type: "token", Text: token})
+		h.Live.Publish(LiveEvent{ConversationID: convID, Type: "token", Text: token, TurnID: msgID})
 		writeSSE("content_block_delta", map[string]any{
 			"type": "content_block_delta", "index": 0,
 			"delta": map[string]string{"type": "text_delta", "text": token},
@@ -461,7 +472,7 @@ func (h *Handler) AnthropicMessages(w http.ResponseWriter, r *http.Request) {
 	if _, err := store.SaveAssistantMessage(h.DB, defaultWorkspace, convID, full.String(), nil); err != nil {
 		log.Printf("save external assistant message: %v", err)
 	}
-	h.Live.Publish(LiveEvent{ConversationID: convID, Type: "done"})
+	h.Live.Publish(LiveEvent{ConversationID: convID, Type: "done", TurnID: msgID})
 
 	writeSSE("content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
 	writeSSE("message_delta", map[string]any{
