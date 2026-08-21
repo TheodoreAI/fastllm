@@ -413,17 +413,26 @@ export default function App() {
                 if (evt.type === 'user_message') {
                   setMessages((prev) => [
                     ...prev,
-                    { role: 'user', content: evt.text, images: [] },
-                    { role: 'assistant', content: '', sources: [], reasoning: '', toolCalls: [], pendingWrites: [], buildChecks: [], usage: null },
+                    { role: 'user', content: evt.text, images: [], liveTurnId: evt.turn_id },
+                    { role: 'assistant', content: '', sources: [], reasoning: '', toolCalls: [], pendingWrites: [], buildChecks: [], usage: null, liveTurnId: evt.turn_id },
                   ])
                 } else if (evt.type === 'token') {
+                  // Keyed by turn_id, not "the last message" — two turns
+                  // (e.g. a CLI's background call racing its main answer)
+                  // can be streaming into this same conversation at once,
+                  // and appending both to whichever message is last
+                  // interleaves their tokens into scrambled text.
                   setMessages((prev) => {
-                    if (prev.length === 0) return prev
-                    const next = [...prev]
-                    next[next.length - 1] = {
-                      ...next[next.length - 1],
-                      content: next[next.length - 1].content + evt.text,
+                    let idx = -1
+                    for (let i = prev.length - 1; i >= 0; i--) {
+                      if (prev[i].role === 'assistant' && prev[i].liveTurnId === evt.turn_id) {
+                        idx = i
+                        break
+                      }
                     }
+                    if (idx === -1) return prev
+                    const next = [...prev]
+                    next[idx] = { ...next[idx], content: next[idx].content + evt.text }
                     return next
                   })
                 }
