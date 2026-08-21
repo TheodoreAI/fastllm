@@ -1037,7 +1037,7 @@ const EditorView = forwardRef(function EditorView(
       ...base,
       ...lspLintExtensionFor(path, lspDiagnosticsByPath),
       lspCompletionExtensionFor(path, lspClientRef, flushLspChange, lspCompletionSourceByPath),
-      lspHoverExtensionFor(path, lspClientRef, flushLspChange),
+      ...lspHoverExtensionFor(path, lspClientRef, flushLspChange),
       ...lspDefinitionExtensionFor(path, lspClientRef, jumpToDefinition, flushLspChange),
     ]
   }
