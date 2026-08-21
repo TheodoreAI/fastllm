@@ -5120,6 +5120,89 @@ body {
   border-top: 1px solid var(--border-strong);
 }
 
+/* ---------- CodeMirror find/replace panel (@codemirror/search) ---------- */
+
+/* This panel comes from @uiw/react-codemirror's default basicSetup
+   (Cmd/Ctrl+F) — its own baseTheme only sets layout (padding, inline
+   spacing for its inputs/buttons/labels), no colors, so unstyled it
+   renders in the browser's bare default form-control look, clashing
+   with the rest of the app. .cm-panels positions the whole bar at the
+   top of the editor; .cm-search is the actual find/replace bar within it. */
+.cm-panels {
+  background: var(--bg-panel);
+  color: var(--text);
+}
+
+.cm-panels-top {
+  border-bottom: 1px solid var(--border-strong);
+}
+
+.cm-search {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 8px 34px 8px 10px !important;
+  gap: 4px;
+}
+
+.cm-search br {
+  flex-basis: 100%;
+  height: 0;
+}
+
+.cm-search .cm-textfield {
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-input);
+  color: var(--text);
+  font-size: 0.8125rem;
+  min-width: 140px;
+}
+
+.cm-search .cm-textfield:focus {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.cm-search .cm-button {
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.cm-search .cm-button:hover {
+  filter: brightness(1.1);
+}
+
+.cm-search label {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.cm-search input[type='checkbox'] {
+  accent-color: var(--accent);
+}
+
+.cm-search [name='close'] {
+  color: var(--text-dim);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.cm-search [name='close']:hover {
+  color: var(--text);
+}
+
 /* ---------------------------------------------------------------------
    TweakBar (components/TweakBar.jsx) — dev-only design-token panel.
    Deliberately fixed dark colors rather than var(--…) tokens: the whole
