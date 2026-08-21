@@ -3,6 +3,7 @@
 package chat
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -18,6 +19,7 @@ import (
 	"os/user"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -61,6 +63,33 @@ var listFilesTool = llm.Tool{
 					"description": "Subdirectory to list, relative to the project root (e.g. \"src\" or \"src/utils\"). Omit or use \"\" to list the entire project.",
 				},
 			},
+		},
+	},
+}
+
+// searchFilesTool is the schema advertised alongside list_files/read_file
+// when file access is enabled, so the model can locate content across the
+// project without already knowing which file it's in or reading files one
+// at a time to find it. Read-only, same sandboxed root as the other file
+// tools — see searchFiles.
+var searchFilesTool = llm.Tool{
+	Type: "function",
+	Function: llm.ToolFunction{
+		Name:        "search_files",
+		Description: "Search file contents in the local project directory for a regular expression (Go RE2 syntax), across all files (respecting .gitignore in a git project). Returns matching lines as \"path:line: text\". Use this to find where something is defined or used before reading files individually.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"pattern": map[string]any{
+					"type":        "string",
+					"description": "Regular expression (Go RE2 syntax) to search for, matched against each line's content.",
+				},
+				"path": map[string]any{
+					"type":        "string",
+					"description": "Subdirectory to search within, relative to the project root. Omit or use \"\" to search the entire project.",
+				},
+			},
+			"required": []string{"pattern"},
 		},
 	},
 }
@@ -662,7 +691,7 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 	lastReadHash := map[string]string{}
 
 	for round := 0; round < maxToolRounds; round++ {
-		tools := []llm.Tool{readFileTool, listFilesTool}
+		tools := []llm.Tool{readFileTool, listFilesTool, searchFilesTool}
 		if writesEnabled {
 			tools = append(tools, writeFileTool, editFileTool)
 			if hasGoModule && len(pendingByPath) > 0 {
@@ -692,6 +721,14 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 				}
 				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
 				results[call.ID] = h.listFiles(ctx, root, args.Path)
+
+			case "search_files":
+				var args struct {
+					Pattern string `json:"pattern"`
+					Path    string `json:"path"`
+				}
+				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+				results[call.ID] = h.searchFiles(ctx, root, args.Pattern, args.Path)
 
 			case "read_file":
 				var args struct {
@@ -945,6 +982,84 @@ func (h *Handler) listFiles(ctx context.Context, root, requestedPath string) str
 	result := strings.Join(matched, "\n")
 	if truncated {
 		result += fmt.Sprintf("\n\n[truncated to %d of more entries — narrow with a subdirectory path]", listFilesMaxEntries)
+	}
+	return result
+}
+
+// searchFilesMaxMatches caps how many matching lines searchFiles hands
+// back in one call — same reasoning as listFilesMaxEntries: bounds the
+// tool result size regardless of how common the pattern is in the repo.
+const searchFilesMaxMatches = 200
+
+// searchFilesMaxFileBytes caps how much of any single file searchFiles
+// scans — large binary or generated files shouldn't stall a search or
+// produce nonsense matches; source and doc files are comfortably under
+// this.
+const searchFilesMaxFileBytes = 1024 * 1024
+
+// searchFiles implements the search_files tool: a regex grep over every
+// file in the project (same git-aware file set as listFiles, so it
+// respects .gitignore), returning matching lines as "path:line: text".
+// requestedPath, if non-empty, restricts the search to that subdirectory,
+// same semantics as listFiles's prefix filter. root has already been
+// validated/snapshotted by the caller (runFileTools), same as listFiles.
+func (h *Handler) searchFiles(ctx context.Context, root, pattern, requestedPath string) string {
+	if strings.TrimSpace(pattern) == "" {
+		return "Error: pattern must not be empty."
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return "Error: invalid regular expression: " + err.Error()
+	}
+
+	all, err := gitrepo.ListFiles(ctx, root)
+	if errors.Is(err, gitrepo.ErrNotARepo) {
+		all, err = walkFiles(root)
+	}
+	if err != nil {
+		return "Error listing files: " + err.Error()
+	}
+
+	prefix := path.Clean(strings.Trim(requestedPath, "/"))
+	var matches []string
+	truncated := false
+scan:
+	for _, f := range all {
+		if prefix != "" && prefix != "." && f != prefix && !strings.HasPrefix(f, prefix+"/") {
+			continue
+		}
+		info, err := os.Stat(filepath.Join(root, f))
+		if err != nil || info.IsDir() || info.Size() > searchFilesMaxFileBytes {
+			continue
+		}
+		file, err := os.Open(filepath.Join(root, f))
+		if err != nil {
+			continue
+		}
+		scanner := bufio.NewScanner(file)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		lineNum := 0
+		for scanner.Scan() {
+			lineNum++
+			line := scanner.Text()
+			if re.MatchString(line) {
+				matches = append(matches, fmt.Sprintf("%s:%d: %s", f, lineNum, strings.TrimSpace(line)))
+				if len(matches) >= searchFilesMaxMatches {
+					truncated = true
+					file.Close()
+					break scan
+				}
+			}
+		}
+		file.Close()
+	}
+
+	if len(matches) == 0 {
+		return fmt.Sprintf("No matches for %q.", pattern)
+	}
+	result := strings.Join(matches, "\n")
+	if truncated {
+		result += fmt.Sprintf("\n\n[truncated to %d matches — narrow the pattern or path]", searchFilesMaxMatches)
 	}
 	return result
 }
