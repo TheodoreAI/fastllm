@@ -18,6 +18,7 @@ import (
 	"fastllm/internal/appserver"
 	"fastllm/internal/chat"
 	"fastllm/internal/folderpicker"
+	"fastllm/internal/lsp"
 	"fastllm/internal/screenshot"
 	"fastllm/internal/terminal"
 	"fastllm/web"
@@ -118,7 +119,7 @@ func main() {
 	// reach fastllm's own /v1/chat/completions proxy through.
 	built.TerminalBaseURL.Set(fmt.Sprintf("http://127.0.0.1:%d", bridge.port))
 
-	app := &desktopApp{registry: built.TerminalRegistry, handler: built.Handler}
+	app := &desktopApp{registry: built.TerminalRegistry, lspRegistry: built.LSPRegistry, handler: built.Handler}
 
 	err = wails.Run(&options.App{
 		Title:  appTitle,
@@ -208,9 +209,10 @@ func (b *terminalBridge) TerminalPort() int {
 // mirrors what cmd/server's quitHandler does on POST /api/quit, since
 // there's no HTTP request driving shutdown here, just the window closing.
 type desktopApp struct {
-	ctx      context.Context
-	registry *terminal.Registry
-	handler  *chat.Handler
+	ctx         context.Context
+	registry    *terminal.Registry
+	lspRegistry *lsp.Registry
+	handler     *chat.Handler
 }
 
 func (a *desktopApp) startup(ctx context.Context) {
@@ -265,6 +267,7 @@ func (a *desktopApp) beforeClose(ctx context.Context) (prevent bool) {
 // whole process dies before this even runs.
 func (a *desktopApp) shutdown(ctx context.Context) {
 	a.registry.CloseAll()
+	a.lspRegistry.CloseAll()
 }
 
 // screenshotHandler captures fastllm's own native window (see

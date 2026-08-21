@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"fastllm/internal/appserver"
+	"fastllm/internal/lsp"
 	"fastllm/internal/terminal"
 )
 
@@ -50,7 +51,7 @@ func main() {
 	}
 
 	server := &http.Server{Addr: addr, Handler: built.Mux}
-	built.Mux.HandleFunc("POST /api/quit", quitHandler(server, built.TerminalRegistry))
+	built.Mux.HandleFunc("POST /api/quit", quitHandler(server, built.TerminalRegistry, built.LSPRegistry))
 
 	log.Printf("fastllm listening on %s (llm backend: %s)", addr, cfg.LLMBaseURL)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -63,12 +64,13 @@ func main() {
 // remote exposure, so no auth is needed beyond it already listening on
 // localhost. Responds first, then shuts down from a goroutine so the
 // response actually reaches the browser before the process exits.
-func quitHandler(server *http.Server, terminalRegistry *terminal.Registry) http.HandlerFunc {
+func quitHandler(server *http.Server, terminalRegistry *terminal.Registry, lspRegistry *lsp.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		go func() {
 			time.Sleep(200 * time.Millisecond)
 			terminalRegistry.CloseAll()
+			lspRegistry.CloseAll()
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			server.Shutdown(ctx)
