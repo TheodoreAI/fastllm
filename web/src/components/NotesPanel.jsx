@@ -46,12 +46,30 @@ export default function NotesPanel() {
 
   return (
     <div className="editor-panel-body editor-notes-panel">
-      <p className="editor-hint">
-        A terminal AI CLI can read and append here via{' '}
-        <code className="settings-inline-code">$FASTLLM_BASE_URL/api/notes</code> and{' '}
-        <code className="settings-inline-code">$FASTLLM_BASE_URL/api/notes/append</code>{' '}
-        (enable Settings → Terminal's "Point local AI CLIs at fastllm" toggle first).
-      </p>
+      <div className="editor-notes-header">
+        <div className="editor-notes-header-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M14 3H6.5A1.5 1.5 0 0 0 5 4.5v15A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V8Z" />
+            <path d="M14 3v4a1 1 0 0 0 1 1h4M9 12h6M9 16h6" />
+          </svg>
+          <span>Scratchpad</span>
+        </div>
+        <span className={`editor-notes-status editor-notes-status-${status}`}>
+          {status === 'saving' ? 'Saving…' : status === 'saved' ? 'Saved' : ''}
+        </span>
+      </div>
+      <div className="editor-notes-hint">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <rect x="3" y="4" width="18" height="14" rx="2" />
+          <path d="m7 9 3 3-3 3M13 15h4" />
+        </svg>
+        <p>
+          A terminal AI CLI can read and append here via{' '}
+          <code className="settings-inline-code">$FASTLLM_BASE_URL/api/notes</code> and{' '}
+          <code className="settings-inline-code">$FASTLLM_BASE_URL/api/notes/append</code>. Enable Settings →
+          Terminal's <strong>"Point local AI CLIs at fastllm"</strong> toggle first.
+        </p>
+      </div>
       <textarea
         className="editor-notes-textarea"
         value={content}
@@ -60,7 +78,6 @@ export default function NotesPanel() {
         disabled={!loaded}
         spellCheck={false}
       />
-      <div className="editor-notes-status">{status === 'saving' ? 'Saving…' : status === 'saved' ? 'Saved' : ''}</div>
     </div>
   )
 }
