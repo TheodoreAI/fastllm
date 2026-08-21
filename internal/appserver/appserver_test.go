@@ -1,10 +1,15 @@
 package appserver
 
 import (
+	"context"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"fastllm/internal/llm"
+	"fastllm/internal/store"
 )
 
 func TestConfigFromEnvDefaults(t *testing.T) {
@@ -146,5 +151,88 @@ func TestBuildRegistersRoutesAndReturnsUsableHandles(t *testing.T) {
 		if rec.Code == 404 {
 			t.Errorf("%s %s: got 404 — route not registered on the mux", route.method, route.path)
 		}
+	}
+}
+
+// TestBuildAppliesFileAndTerminalSettingsFromEnv guards against Build
+// silently discarding the real persisted file-access/terminal settings and
+// falling back to the (disabled) zero-value defaults instead — the two look
+// identical unless a test actually seeds a non-default config through cfg
+// and checks it took effect on the built Handler.
+func TestBuildAppliesFileAndTerminalSettingsFromEnv(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "fastllm.db")
+	filesRoot := t.TempDir()
+
+	cfg := Config{
+		DBPath:          dbPath,
+		LLMBaseURL:      "http://127.0.0.1:0/v1",
+		LLMChatModel:    "test-model",
+		FilesRoot:       filesRoot,
+		FilesWrite:      true,
+		TerminalEnabled: true,
+	}
+	built, err := Build(cfg)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+	defer built.DB.Close()
+
+	if !built.Handler.Files.Enabled() {
+		t.Error("Handler.Files.Enabled() = false, want true — FilesRoot was set in Config")
+	}
+	if !built.Handler.Files.WritesEnabled() {
+		t.Error("Handler.Files.WritesEnabled() = false, want true — FilesWrite was set in Config")
+	}
+	if got := built.Handler.Files.GetRoot(); got != filesRoot {
+		t.Errorf("Handler.Files.GetRoot() = %q, want %q — the seeded root, not the zero-value default", got, filesRoot)
+	}
+	if !built.Handler.Terminal.Enabled() {
+		t.Error("Handler.Terminal.Enabled() = false, want true — TerminalEnabled was set in Config")
+	}
+}
+
+// TestBuildLoadsPersistedCloudProviderSettings guards against Build
+// discarding a real, previously-saved cloud-provider config and building
+// the LLM router as if no providers were configured at all — pre-seeding
+// the DB with an Anthropic key and checking ListModels actually surfaces an
+// anthropic-prefixed model is the only externally observable signal Build
+// exposes for "the loaded cloud settings, not the defaults, took effect".
+func TestBuildLoadsPersistedCloudProviderSettings(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "fastllm.db")
+
+	seedDB, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("store.Open for seeding returned error: %v", err)
+	}
+	if err := store.SaveCloudProviderSettings(seedDB, store.CloudProviderSettings{AnthropicAPIKey: "fake-test-key"}); err != nil {
+		t.Fatalf("SaveCloudProviderSettings returned error: %v", err)
+	}
+	if err := seedDB.Close(); err != nil {
+		t.Fatalf("closing seed DB: %v", err)
+	}
+
+	built, err := Build(Config{
+		DBPath:       dbPath,
+		LLMBaseURL:   "http://127.0.0.1:0/v1", // never dialed; ListModels swallows the local-listing error
+		LLMChatModel: "test-model",
+	})
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+	defer built.DB.Close()
+
+	models, err := built.Handler.LLM.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListModels returned error: %v", err)
+	}
+	found := false
+	for _, m := range models {
+		if strings.HasPrefix(m.Name, llm.AnthropicPrefix) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("ListModels contains no anthropic-prefixed model — the seeded AnthropicAPIKey was not applied (Build fell back to default/empty cloud settings)")
 	}
 }

@@ -169,7 +169,8 @@ func TestLintParsesOxlintJSONOutput(t *testing.T) {
 	}
 	fakeOutput := `{"diagnostics":[
 		{"message":"'x' is never used","code":"no-unused-vars","severity":"error","labels":[{"span":{"offset":6,"length":1}}]},
-		{"message":"prefer const","code":"prefer-const","severity":"advice","labels":[{"span":{"offset":0,"length":3}}]}
+		{"message":"prefer const","code":"prefer-const","severity":"advice","labels":[{"span":{"offset":0,"length":3}}]},
+		{"message":"file-level issue","code":"no-empty-file","severity":"error","labels":[]}
 	]}`
 	script := "#!/bin/sh\ncat <<'EOF'\n" + fakeOutput + "\nEOF\nexit 1\n"
 	binPath := filepath.Join(binDir, "oxlint")
@@ -186,8 +187,8 @@ func TestLintParsesOxlintJSONOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Lint returned error: %v", err)
 	}
-	if len(diagnostics) != 2 {
-		t.Fatalf("got %d diagnostics, want 2", len(diagnostics))
+	if len(diagnostics) != 3 {
+		t.Fatalf("got %d diagnostics, want 3", len(diagnostics))
 	}
 	if diagnostics[0].Severity != "error" {
 		t.Errorf("diagnostics[0].Severity = %q, want %q", diagnostics[0].Severity, "error")
@@ -200,5 +201,8 @@ func TestLintParsesOxlintJSONOutput(t *testing.T) {
 	}
 	if diagnostics[1].Rule != "prefer-const" {
 		t.Errorf("diagnostics[1].Rule = %q, want %q", diagnostics[1].Rule, "prefer-const")
+	}
+	if diagnostics[2].Offset != 0 || diagnostics[2].Length != 0 {
+		t.Errorf("diagnostics[2] offset/length = %d/%d, want 0/0 — an empty labels array must not fabricate a span", diagnostics[2].Offset, diagnostics[2].Length)
 	}
 }
