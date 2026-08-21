@@ -65,6 +65,17 @@ CREATE TABLE IF NOT EXISTS skills (
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- notes is a single freeform scratchpad per workspace — e.g. for a
+-- terminal-based AI CLI experimenting against a local model (see
+-- internal/chat/notes.go) to record what workflow it's converging on, in
+-- a place that survives past the terminal scrolling away and is visible
+-- from the Editor's own sidebar.
+CREATE TABLE IF NOT EXISTS notes (
+	workspace_id TEXT PRIMARY KEY,
+	content TEXT NOT NULL DEFAULT '',
+	updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 -- meta holds one-time migration/seed flags, e.g. "seeded_default_skills",
 -- so a fresh install gets starter data exactly once even if the user
 -- later deletes all of it.
@@ -582,6 +593,49 @@ func LoadMessages(db *sql.DB, workspaceID string, conversationID int64) ([]Messa
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+// GetNotes returns the workspace's scratchpad content, or "" if nothing's
+// been saved yet.
+func GetNotes(db *sql.DB, workspaceID string) (string, error) {
+	var content string
+	err := db.QueryRow(`SELECT content FROM notes WHERE workspace_id = ?`, workspaceID).Scan(&content)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return content, nil
+}
+
+// SaveNotes overwrites the workspace's scratchpad content.
+func SaveNotes(db *sql.DB, workspaceID, content string) error {
+	_, err := db.Exec(
+		`INSERT INTO notes (workspace_id, content, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+		 ON CONFLICT(workspace_id) DO UPDATE SET content = excluded.content, updated_at = CURRENT_TIMESTAMP`,
+		workspaceID, content)
+	return err
+}
+
+// AppendNotes adds text as a new line onto the workspace's existing
+// scratchpad content — the terminal-friendly counterpart to SaveNotes'
+// overwrite, for a CLI appending one finding at a time (see
+// internal/chat/notes.go) without first having to fetch and resend the
+// whole document.
+func AppendNotes(db *sql.DB, workspaceID, text string) (string, error) {
+	existing, err := GetNotes(db, workspaceID)
+	if err != nil {
+		return "", err
+	}
+	next := text
+	if existing != "" {
+		next = existing + "\n" + text
+	}
+	if err := SaveNotes(db, workspaceID, next); err != nil {
+		return "", err
+	}
+	return next, nil
 }
 
 func SaveDocument(db *sql.DB, workspaceID, filename string) (int64, error) {

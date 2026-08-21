@@ -170,6 +170,20 @@ export function fetchTerminalSettings() {
     .catch(swallowNetworkError({ enabled: false }))
 }
 
+export function fetchNotes() {
+  return fetch('/api/notes')
+    .then((r) => okJson(r, 'fetchNotes'))
+    .catch(swallowNetworkError({ content: '' }))
+}
+
+export function saveNotes(content) {
+  return fetch('/api/notes', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  })
+}
+
 export function fetchCloudProviderSettings() {
   return fetch('/api/settings/cloud-providers')
     .then((r) => okJson(r, 'fetchCloudProviderSettings'))
