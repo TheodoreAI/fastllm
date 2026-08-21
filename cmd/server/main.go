@@ -8,7 +8,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"time"
@@ -37,6 +39,15 @@ func main() {
 		log.Fatalf("build server: %v", err)
 	}
 	defer built.DB.Close()
+
+	// Settings → Terminal's "point local AI CLIs at fastllm" toggle (see
+	// terminal.BaseURLHolder) needs this server's own loopback address —
+	// not known until now, since addr can bind any interface (":8080"
+	// binds all of them) while a spawned shell always reaches this same
+	// process via 127.0.0.1 regardless of what it's bound to.
+	if _, port, err := net.SplitHostPort(addr); err == nil && port != "" {
+		built.TerminalBaseURL.Set(fmt.Sprintf("http://127.0.0.1:%s", port))
+	}
 
 	server := &http.Server{Addr: addr, Handler: built.Mux}
 	built.Mux.HandleFunc("POST /api/quit", quitHandler(server, built.TerminalRegistry))

@@ -773,6 +773,14 @@ func SaveFileAccessSettings(db *sql.DB, s FileAccessSettings) error {
 // on/off switch, not a set of scoped permissions.
 type TerminalSettings struct {
 	Enabled bool `json:"enabled"`
+	// InjectLiveChatEnv, when true, sets OPENAI_BASE_URL (and a placeholder
+	// OPENAI_API_KEY) in every new terminal session's environment, pointed
+	// at this server's own /v1/chat/completions proxy (see
+	// internal/chat/live.go) — so a terminal-based AI CLI (Claude Code, a
+	// ChatGPT/Gemini CLI, etc.) run inside the built-in Terminal talks to
+	// fastllm's local model with no manual export, and that conversation
+	// shows up live in the Chat panel.
+	InjectLiveChatEnv bool `json:"injectLiveChatEnv"`
 }
 
 var DefaultTerminalSettings = TerminalSettings{}

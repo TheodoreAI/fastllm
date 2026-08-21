@@ -46,7 +46,7 @@ type controlMessage struct {
 // directory. Read fresh on every connect (not passed once at startup)
 // since the opened folder can change live via Settings → File access
 // without a restart, same as the reader itself.
-func NewHandler(registry *Registry, gate *Gate, fileReader *files.Reader) http.HandlerFunc {
+func NewHandler(registry *Registry, gate *Gate, fileReader *files.Reader, baseURL *BaseURLHolder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !gate.Enabled() {
 			http.NotFound(w, r)
@@ -91,7 +91,20 @@ func NewHandler(registry *Registry, gate *Gate, fileReader *files.Reader) http.H
 			return
 		}
 
-		session, err := Start(defaultCols, defaultRows, fileReader.GetRoot())
+		var extraEnv []string
+		if gate.InjectEnv() {
+			if url := baseURL.Get(); url != "" {
+				// OPENAI_API_KEY is a placeholder, not a real credential —
+				// fastllm's /v1/chat/completions proxy (internal/chat/live.go)
+				// doesn't check it, but most OpenAI-compatible CLI tools
+				// refuse to start with the var unset or empty.
+				extraEnv = []string{
+					"OPENAI_BASE_URL=" + url + "/v1",
+					"OPENAI_API_KEY=fastllm-local",
+				}
+			}
+		}
+		session, err := Start(defaultCols, defaultRows, fileReader.GetRoot(), extraEnv)
 		if err != nil {
 			log.Printf("terminal: failed to start session: %v", err)
 			// A short, stable machine-readable reason rather than err's full

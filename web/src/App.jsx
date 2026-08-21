@@ -53,6 +53,7 @@ import {
   indexDocument,
   uploadFile,
   streamChat,
+  subscribeLiveChat,
   quitServer,
   isWails,
   captureScreenshot,
@@ -206,6 +207,12 @@ export default function App() {
   const [skillError, setSkillError] = useState('')
   const [conversations, setConversations] = useState([])
   const [conversationId, setConversationId] = useState(null)
+  // Mirrors conversationId for the live-chat SSE subscription below (see
+  // useEffect near subscribeLiveChat) — that subscription is opened once
+  // for the app's whole lifetime, so its event handler needs the current
+  // conversationId at event-arrival time, not whatever was captured in
+  // the closure when the subscription started.
+  const conversationIdRef = useRef(null)
   const [conversationError, setConversationError] = useState('')
   // Collapsed to a slim strip only as a side effect of closing the
   // active chat (see handleCloseChat below), freeing up width for the
@@ -374,6 +381,73 @@ export default function App() {
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [setEditorSidebarCollapsed, setTerminalPaneCollapsed, setSidebarCollapsed])
+
+  useEffect(() => {
+    conversationIdRef.current = conversationId
+  }, [conversationId])
+
+  // Renders an externally-driven conversation (a terminal-based AI CLI
+  // pointed at fastllm's /v1/chat/completions proxy instead of the local
+  // model server directly — see internal/chat/live.go) live in the Chat
+  // panel, the same way the composer's own streamChat call does, instead
+  // of only showing up after a reload. One subscription for the app's
+  // whole lifetime; subscribeLiveChat resolves/rejects per connection
+  // attempt, so a dropped connection (server restart, brief network hit)
+  // just gets retried after a short delay rather than leaving the panel
+  // silently disconnected.
+  useEffect(() => {
+    const controller = new AbortController()
+    let cancelled = false
+
+    async function connect() {
+      while (!cancelled) {
+        try {
+          await subscribeLiveChat(
+            {
+              onEvent: (evt) => {
+                if (evt.type === 'user_message' || evt.type === 'done') {
+                  refreshConversations()
+                }
+                const isActive = String(conversationIdRef.current) === String(evt.conversation_id)
+                if (!isActive) return
+                if (evt.type === 'user_message') {
+                  setMessages((prev) => [
+                    ...prev,
+                    { role: 'user', content: evt.text, images: [] },
+                    { role: 'assistant', content: '', sources: [], reasoning: '', toolCalls: [], pendingWrites: [], buildChecks: [], usage: null },
+                  ])
+                } else if (evt.type === 'token') {
+                  setMessages((prev) => {
+                    if (prev.length === 0) return prev
+                    const next = [...prev]
+                    next[next.length - 1] = {
+                      ...next[next.length - 1],
+                      content: next[next.length - 1].content + evt.text,
+                    }
+                    return next
+                  })
+                }
+              },
+            },
+            controller.signal
+          )
+        } catch (err) {
+          if (cancelled || err.name === 'AbortError') return
+        }
+        if (!cancelled) await new Promise((resolve) => setTimeout(resolve, 3000))
+      }
+    }
+    connect()
+
+    return () => {
+      cancelled = true
+      controller.abort()
+    }
+    // Intentionally empty deps — this subscribes once for the app's
+    // lifetime; conversationIdRef (kept in sync by the effect above) is
+    // how the handler stays current without resubscribing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Search and Git live on the main rail (see the Search/Git buttons
   // below) rather than as tabs inside EditorView's own sidebar. Mirrors
