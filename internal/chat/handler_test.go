@@ -1,9 +1,17 @@
 package chat
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"fastllm/internal/files"
+	"fastllm/internal/llm"
 	"fastllm/internal/store"
 )
 
@@ -102,6 +110,110 @@ func TestCountLines(t *testing.T) {
 		if got := countLines(tt.s); got != tt.want {
 			t.Errorf("countLines(%q) = %d, want %d", tt.s, got, tt.want)
 		}
+	}
+}
+
+// TestRunFileToolsSearchFiles exercises search_files through the actual
+// tool round-trip in runFileTools, rather than calling h.searchFiles
+// directly — this is the path that catches wiring mistakes unit tests on
+// searchFiles alone would miss, e.g. the tool not being advertised, its
+// switch case not dispatching, or its arguments not round-tripping through
+// the model's JSON tool-call payload the way the real llm.Client parses it.
+func TestRunFileToolsSearchFiles(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n\nfunc needle() {}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "other.go"), []byte("package main\n\nfunc other() {}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// round tracks how many /chat/completions requests this test server has
+	// answered, so it can play the model's two-round part in the
+	// conversation: round 1 calls search_files, round 2 (having seen the
+	// tool result) gives a final answer with no tool calls, which is what
+	// ends runFileTools's loop.
+	round := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		round++
+		w.Header().Set("Content-Type", "application/json")
+
+		if round == 1 {
+			var req struct {
+				Tools []llm.Tool `json:"tools"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			found := false
+			for _, tool := range req.Tools {
+				if tool.Function.Name == "search_files" {
+					found = true
+				}
+			}
+			if !found {
+				t.Error("search_files was not advertised in the tools sent to the model")
+			}
+
+			resp := map[string]any{
+				"choices": []map[string]any{{
+					"message": map[string]any{
+						"role":    "assistant",
+						"content": "",
+						"tool_calls": []map[string]any{{
+							"id":   "call_1",
+							"type": "function",
+							"function": map[string]string{
+								"name":      "search_files",
+								"arguments": `{"pattern":"func needle"}`,
+							},
+						}},
+					},
+				}},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		var req struct {
+			Messages []llm.Message `json:"messages"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		last := req.Messages[len(req.Messages)-1]
+		if last.Role != "tool" {
+			t.Fatalf("round 2 request's last message role = %q, want %q", last.Role, "tool")
+		}
+		if !strings.Contains(last.Content, "main.go") || !strings.Contains(last.Content, "func needle") {
+			t.Errorf("tool result content %q doesn't contain the expected match from main.go", last.Content)
+		}
+		if strings.Contains(last.Content, "other.go") {
+			t.Errorf("tool result content %q unexpectedly matched other.go", last.Content)
+		}
+
+		resp := map[string]any{
+			"choices": []map[string]any{{
+				"message": map[string]any{
+					"role":    "assistant",
+					"content": "found it",
+				},
+			}},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	router := llm.NewRouter(llm.New(server.URL, "", "test-model", ""), llm.CloudProviderConfig{})
+	h := New(nil, router, nil, files.New(dir, false), nil)
+
+	messages := []llm.Message{{Role: "user", Content: "where is needle defined?"}}
+	reads, pending, _, _ := h.runFileTools(context.Background(), "test-model", &messages, "", 0)
+
+	if round != 2 {
+		t.Fatalf("got %d requests to the fake LLM server, want 2 (one tool call round, one final answer round)", round)
+	}
+	if len(pending) != 0 {
+		t.Errorf("got %d pending writes, want 0 — search_files is read-only", len(pending))
+	}
+	if len(reads) != 0 {
+		t.Errorf("got %d file reads recorded, want 0 — search_files isn't read_file", len(reads))
 	}
 }
 
