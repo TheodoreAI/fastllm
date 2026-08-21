@@ -92,6 +92,13 @@ type Built struct {
 	DB               *sql.DB
 	TerminalRegistry *terminal.Registry
 	Handler          *chat.Handler
+	// TerminalBaseURL must be set (via .Set("http://127.0.0.1:<port>")) by
+	// the entrypoint once it knows its own actual bound loopback address —
+	// see terminal.BaseURLHolder's doc comment for why Build can't do this
+	// itself. Left unset, Settings → Terminal's "point local AI CLIs at
+	// fastllm" toggle has no effect (handler.go treats an empty base URL as
+	// "nothing to inject").
+	TerminalBaseURL *terminal.BaseURLHolder
 }
 
 // Build opens the DB, applies persisted (or env-seeded) file-access and
@@ -164,6 +171,7 @@ func Build(cfg Config) (*Built, error) {
 		terminalSettings = store.DefaultTerminalSettings
 	}
 	terminalGate := terminal.NewGate(terminalSettings.Enabled)
+	terminalGate.SetInjectEnv(terminalSettings.InjectLiveChatEnv)
 	if terminalGate.Enabled() {
 		log.Printf("terminal enabled — /api/terminal/ws will spawn an interactive shell session for any loopback connection")
 	}
@@ -221,9 +229,24 @@ func Build(cfg Config) (*Built, error) {
 	mux.HandleFunc("POST /api/editor/git/branch", handler.EditorGitCreateBranch)
 
 	terminalRegistry := terminal.NewRegistry()
-	mux.HandleFunc("GET /api/terminal/ws", terminal.NewHandler(terminalRegistry, terminalGate, fileReader))
+	// The entrypoint (cmd/server, cmd/desktop) only learns its own actual
+	// bound loopback address after Build returns and it starts listening —
+	// see BaseURLHolder's doc comment — so it's created empty here and set
+	// once the caller knows it (via Built.TerminalBaseURL below).
+	terminalBaseURL := terminal.NewBaseURLHolder()
+	mux.HandleFunc("GET /api/terminal/ws", terminal.NewHandler(terminalRegistry, terminalGate, fileReader, terminalBaseURL))
+
+	// OpenAI-compatible proxy an external tool (e.g. a terminal-based AI
+	// CLI, run inside the built-in Terminal pane) can point its API base
+	// URL at instead of the local model server directly — see
+	// chat.Handler.ExternalChatCompletions's doc comment. GET /api/live/stream
+	// is the SSE feed the Chat panel subscribes to so that traffic shows
+	// up live instead of only after a reload.
+	mux.HandleFunc("POST /v1/chat/completions", handler.ExternalChatCompletions)
+	mux.HandleFunc("GET /v1/models", handler.ExternalModels)
+	mux.HandleFunc("GET /api/live/stream", handler.LiveStream)
 
 	mux.Handle("/", http.FileServer(http.FS(web.FS())))
 
-	return &Built{Mux: mux, DB: db, TerminalRegistry: terminalRegistry, Handler: handler}, nil
+	return &Built{Mux: mux, DB: db, TerminalRegistry: terminalRegistry, Handler: handler, TerminalBaseURL: terminalBaseURL}, nil
 }

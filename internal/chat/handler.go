@@ -235,12 +235,22 @@ type Handler struct {
 	// window flashing/flicker reported when clicking "Choose folder".
 	FolderChooser func(ctx context.Context) (string, error)
 
+	// Live fans out LiveEvents (see live.go) to every subscribed Chat
+	// panel — populated by ExternalChatCompletions, the /v1/chat/completions
+	// proxy an external tool (e.g. a terminal-based AI CLI) can be pointed
+	// at instead of the local model server directly, so its conversation
+	// shows up live in fastllm's own Chat UI.
+	Live *LiveBroadcaster
+
+	liveConvMu sync.Mutex
+	liveConvID int64
+
 	writesMu sync.Mutex
 	writes   map[string]*PendingWrite
 }
 
 func New(db *sql.DB, llmRouter *llm.Router, vec *vector.Store, fileReader *files.Reader, terminalGate *terminal.Gate) *Handler {
-	return &Handler{DB: db, LLM: llmRouter, Vector: vec, Files: fileReader, Terminal: terminalGate, FolderChooser: folderpicker.Choose, writes: make(map[string]*PendingWrite)}
+	return &Handler{DB: db, LLM: llmRouter, Vector: vec, Files: fileReader, Terminal: terminalGate, FolderChooser: folderpicker.Choose, Live: NewLiveBroadcaster(), writes: make(map[string]*PendingWrite)}
 }
 
 func newWriteID() string {
@@ -1333,6 +1343,7 @@ func (h *Handler) UpdateTerminalSettings(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	h.Terminal.SetEnabled(settings.Enabled)
+	h.Terminal.SetInjectEnv(settings.InjectLiveChatEnv)
 	writeJSON(w, settings)
 }
 

@@ -34,7 +34,7 @@ func defaultShell() string {
 	return "/bin/sh"
 }
 
-func start(cols, rows int, workDir string) (Session, error) {
+func start(cols, rows int, workDir string, extraEnv []string) (Session, error) {
 	// "-l" starts a login shell so the session picks up the user's normal
 	// profile (PATH additions from .zprofile/.bash_profile, etc.) instead
 	// of a bare, minimally-configured shell — matching what double-clicking
@@ -44,7 +44,7 @@ func start(cols, rows int, workDir string) (Session, error) {
 	if workDir != "" {
 		cmd.Dir = workDir
 	}
-	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	cmd.Env = append(append(os.Environ(), "TERM=xterm-256color"), extraEnv...)
 
 	f, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: uint16(rows), Cols: uint16(cols)})
 	if err != nil {

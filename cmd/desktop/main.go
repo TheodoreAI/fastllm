@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -111,6 +112,11 @@ func main() {
 		}
 	}()
 	bridge := &terminalBridge{port: termListener.Addr().(*net.TCPAddr).Port}
+	// Settings → Terminal's "point local AI CLIs at fastllm" toggle (see
+	// terminal.BaseURLHolder) needs this same address — the terminal bridge
+	// listener above is the one loopback port a spawned shell can actually
+	// reach fastllm's own /v1/chat/completions proxy through.
+	built.TerminalBaseURL.Set(fmt.Sprintf("http://127.0.0.1:%d", bridge.port))
 
 	app := &desktopApp{registry: built.TerminalRegistry, handler: built.Handler}
 

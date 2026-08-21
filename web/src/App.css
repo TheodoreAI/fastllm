@@ -4758,6 +4758,16 @@ body {
   color: var(--text-faint);
 }
 
+.settings-inline-code {
+  font-family: Menlo, Consolas, 'SF Mono', monospace;
+  font-size: 0.6875rem;
+  background: var(--bg-input);
+  border-radius: var(--radius-sm);
+  padding: 1px 5px;
+  color: var(--text);
+  user-select: text;
+}
+
 .settings-check-row {
   flex-direction: row !important;
   align-items: center;
