@@ -39,6 +39,8 @@ type Session interface {
 // Start launches a new shell session with the given initial size. workDir
 // sets the session's starting directory — pass "" to use the process's
 // own default (whatever directory the server itself was launched from).
-func Start(cols, rows int, workDir string) (Session, error) {
-	return start(cols, rows, workDir)
+// extraEnv is appended to the session's environment (e.g. OPENAI_BASE_URL —
+// see handler.go's use of Gate.InjectEnv/BaseURLHolder); pass nil for none.
+func Start(cols, rows int, workDir string, extraEnv []string) (Session, error) {
+	return start(cols, rows, workDir, extraEnv)
 }

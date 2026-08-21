@@ -34,6 +34,7 @@ import FileTree from './FileTree'
 import GitPanel from './GitPanel'
 import SearchPanel from './SearchPanel'
 import TestPanel from './TestPanel'
+import NotesPanel from './NotesPanel'
 import EditorPane from './EditorPane'
 import ConfirmDeleteModal from './ConfirmDeleteModal'
 
@@ -926,7 +927,15 @@ export default function EditorView({
                 Search or Git was actually the one showing below it. */}
             <div className="editor-panel-tabs">
               <span className="editor-panel-tab-label">
-                {panel === 'search' ? 'Search' : panel === 'git' ? 'Git' : panel === 'tests' ? 'Tests' : 'Files'}
+                {panel === 'search'
+                  ? 'Search'
+                  : panel === 'git'
+                    ? 'Git'
+                    : panel === 'tests'
+                      ? 'Tests'
+                      : panel === 'notes'
+                        ? 'Notes'
+                        : 'Files'}
               </span>
             </div>
 
@@ -992,6 +1001,7 @@ export default function EditorView({
         )}
 
         {panel === 'tests' && <TestPanel />}
+        {panel === 'notes' && <NotesPanel />}
       </aside>
 
       <div className="editor-sidebar-divider" onMouseDown={handleSidebarDragStart} />

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { FONT_OPTIONS } from '../useFontFamily'
 import { FONT_SCALE_OPTIONS } from '../useFontScale'
 import { THEMES } from '../themes'
-import { browseForFolder, isWails } from '../api'
+import { browseForFolder, isWails, apiOrigin } from '../api'
 import { useEscapeKey } from '../useEscapeKey'
 import { useSettingsExpanded } from '../useSettingsExpanded'
 import ConfirmDeleteModal from './ConfirmDeleteModal'
@@ -125,6 +125,17 @@ export default function SettingsPanel({
   const [fileAccessStatus, setFileAccessStatus] = useState('')
   const [terminalForm, setTerminalForm] = useState(terminalSettings)
   const [terminalStatus, setTerminalStatus] = useState('')
+  // Display-only — shown next to the "point local AI CLIs at fastllm"
+  // toggle so the user can also copy/paste it manually (e.g. into a tool
+  // that reads OPENAI_BASE_URL from a config file rather than the
+  // environment). The toggle itself works independently of whether this
+  // ever resolves — the real base URL is computed server-side per session
+  // (see terminal.BaseURLHolder) from whatever address the app is actually
+  // reachable on, which can differ from this browser tab's own origin.
+  const [liveChatURL, setLiveChatURL] = useState('')
+  useEffect(() => {
+    apiOrigin().then((origin) => setLiveChatURL(`${origin || window.location.origin}/v1`))
+  }, [])
   // Keyed by provider id ('anthropic' | 'openai' | 'gemini') -> the new
   // key text the user has typed. A provider absent from this object was
   // never touched this session, so saving omits its field entirely and
@@ -251,7 +262,7 @@ export default function SettingsPanel({
     e.preventDefault()
     setTerminalStatus('Saving…')
     try {
-      const next = { enabled: !!terminalForm.enabled }
+      const next = { enabled: !!terminalForm.enabled, injectLiveChatEnv: !!terminalForm.injectLiveChatEnv }
       await onSaveTerminalSettings(next)
       setTerminalStatus('Saved. Terminal access updates apply immediately without a server restart.')
     } catch (err) {
@@ -454,6 +465,18 @@ export default function SettingsPanel({
           </label>
           <p className="settings-hint">
             Gives the Editor panel a real PowerShell session on this machine. Unlike file access, this isn't sandboxed — anything the terminal can run, it runs with full access as whatever account runs fastllm. Only enable this if you trust everyone who can reach this app.
+          </p>
+          <label className="settings-field checkbox-field settings-check-row">
+            <input
+              type="checkbox"
+              checked={!!terminalForm.injectLiveChatEnv}
+              disabled={!terminalForm.enabled}
+              onChange={(e) => setTerminalForm({ ...terminalForm, injectLiveChatEnv: e.target.checked })}
+            />
+            <span>Point local AI CLIs at fastllm</span>
+          </label>
+          <p className="settings-hint">
+            Sets OPENAI_BASE_URL and ANTHROPIC_BASE_URL in every new terminal session, so a terminal-based AI tool (Claude Code, a ChatGPT or Gemini CLI, etc.) talks to fastllm with no manual setup — and that conversation shows up live in a "Live Terminal" chat here. Current value: <code className="settings-inline-code">{liveChatURL || '…'}</code>
           </p>
           <button type="submit" className="btn-primary">Save terminal access</button>
           {terminalStatus && (

@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS messages (
 	role TEXT NOT NULL,
 	content TEXT NOT NULL,
 	images TEXT,
+	source TEXT,
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -64,6 +65,17 @@ CREATE TABLE IF NOT EXISTS skills (
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- notes is a single freeform scratchpad per workspace — e.g. for a
+-- terminal-based AI CLI experimenting against a local model (see
+-- internal/chat/notes.go) to record what workflow it's converging on, in
+-- a place that survives past the terminal scrolling away and is visible
+-- from the Editor's own sidebar.
+CREATE TABLE IF NOT EXISTS notes (
+	workspace_id TEXT PRIMARY KEY,
+	content TEXT NOT NULL DEFAULT '',
+	updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 -- meta holds one-time migration/seed flags, e.g. "seeded_default_skills",
 -- so a fresh install gets starter data exactly once even if the user
 -- later deletes all of it.
@@ -87,7 +99,15 @@ type Message struct {
 	Content       string            `json:"content"`
 	Images        []string          `json:"images,omitempty"`         // data URIs — see SaveMessage/LoadMessages
 	PendingWrites []PendingWriteRow `json:"pending_writes,omitempty"` // see SaveMessage/LoadMessages and SetMessagePendingWrites
-	CreatedAt     string            `json:"created_at"`
+	// Source is "" for a message the human typed into the composer, or
+	// "terminal" for one that arrived via the live terminal↔chat bridge
+	// (see internal/chat/live.go) — a "Live Terminal" conversation can mix
+	// both, since nothing stops a human from also typing directly into
+	// that same conversation. The frontend uses this to label a "user"
+	// role message with something other than the machine's own username
+	// when it wasn't actually the human who typed it.
+	Source    string `json:"source,omitempty"`
+	CreatedAt string `json:"created_at"`
 }
 
 // PendingWriteRow is a model-proposed file write, as persisted alongside
@@ -131,6 +151,23 @@ func CreateConversation(db *sql.DB, workspaceID, title string) (int64, error) {
 		return 0, err
 	}
 	return res.LastInsertId()
+}
+
+// ConversationExists reports whether id is still a real row — there's no
+// foreign-key enforcement between messages and conversations (see
+// DeleteConversation), so anything caching a conversation id across
+// requests (e.g. the live terminal bridge's liveConversationID) needs to
+// check this itself rather than assume a previously-valid id still is.
+func ConversationExists(db *sql.DB, workspaceID string, id int64) (bool, error) {
+	var exists int
+	err := db.QueryRow(`SELECT 1 FROM conversations WHERE workspace_id = ? AND id = ?`, workspaceID, id).Scan(&exists)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // ListConversations returns every conversation in the workspace, most
@@ -186,6 +223,26 @@ func Open(path string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Two writers landing on the same instant (e.g. the OpenAI- and
+	// Anthropic-shaped live proxies in internal/chat/live.go both saving a
+	// user message at once) otherwise fail immediately with "database is
+	// locked" under SQLite's default rollback-journal mode. WAL lets
+	// readers proceed without blocking on a writer; busy_timeout makes a
+	// second writer block and retry for up to 5s instead of erroring out
+	// on the first collision. Both are per-connection settings in
+	// modernc.org/sqlite, not per-file — setting them via one db.Exec
+	// only reaches whichever pooled connection happens to run it, so
+	// SetMaxOpenConns(1) pins the pool to that single connection instead
+	// of letting database/sql silently open untouched ones for concurrent
+	// callers. SQLite only supports one writer at a time regardless, so
+	// this costs nothing but the (already-serialized) write throughput.
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`PRAGMA journal_mode=WAL;`); err != nil {
+		return nil, fmt.Errorf("store: enable WAL journal mode: %w", err)
+	}
+	if _, err := db.Exec(`PRAGMA busy_timeout=5000;`); err != nil {
+		return nil, fmt.Errorf("store: set busy_timeout: %w", err)
+	}
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("store: migrate: %w", err)
 	}
@@ -196,6 +253,9 @@ func Open(path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("store: migrate: %w", err)
 	}
 	if err := addMessagesPendingWritesColumn(db); err != nil {
+		return nil, fmt.Errorf("store: migrate: %w", err)
+	}
+	if err := addMessagesSourceColumn(db); err != nil {
 		return nil, fmt.Errorf("store: migrate: %w", err)
 	}
 	if err := seedDefaultSkills(db); err != nil {
@@ -300,6 +360,18 @@ func addMessagesImagesColumn(db *sql.DB) error {
 // same upgrade-path pattern as addConversationIDColumn/addMessagesImagesColumn.
 func addMessagesPendingWritesColumn(db *sql.DB) error {
 	_, err := db.Exec(`ALTER TABLE messages ADD COLUMN pending_writes TEXT`)
+	if err != nil && strings.Contains(err.Error(), "duplicate column name") {
+		return nil
+	}
+	return err
+}
+
+// addMessagesSourceColumn adds the source column to a messages table
+// created before it existed — same upgrade-path pattern as
+// addConversationIDColumn/addMessagesImagesColumn. NULL (the default for
+// every pre-existing row) means "the composer" — see SaveMessageWithSource.
+func addMessagesSourceColumn(db *sql.DB) error {
+	_, err := db.Exec(`ALTER TABLE messages ADD COLUMN source TEXT`)
 	if err != nil && strings.Contains(err.Error(), "duplicate column name") {
 		return nil
 	}
@@ -432,6 +504,16 @@ func migrateGeneralAssistantPrompt(db *sql.DB) error {
 // SaveAssistantMessage (to attach pending writes below) and available to
 // any other caller that wants it, though most just discard it with _.
 func SaveMessage(db *sql.DB, workspaceID string, conversationID int64, role, content string, images []string) (int64, error) {
+	return SaveMessageWithSource(db, workspaceID, conversationID, role, content, images, "")
+}
+
+// SaveMessageWithSource is SaveMessage plus an explicit Source (see
+// Message.Source) — used by the live terminal↔chat bridge
+// (internal/chat/live.go) to mark its messages as not human-typed, so the
+// Chat panel doesn't label them with the machine's own username. Every
+// other caller goes through the plain SaveMessage above, which always
+// stores "" (the composer).
+func SaveMessageWithSource(db *sql.DB, workspaceID string, conversationID int64, role, content string, images []string, source string) (int64, error) {
 	var imagesJSON any
 	if len(images) > 0 {
 		enc, err := json.Marshal(images)
@@ -440,9 +522,13 @@ func SaveMessage(db *sql.DB, workspaceID string, conversationID int64, role, con
 		}
 		imagesJSON = string(enc)
 	}
+	var sourceVal any
+	if source != "" {
+		sourceVal = source
+	}
 	res, err := db.Exec(
-		`INSERT INTO messages (workspace_id, conversation_id, role, content, images) VALUES (?, ?, ?, ?, ?)`,
-		workspaceID, conversationID, role, content, imagesJSON)
+		`INSERT INTO messages (workspace_id, conversation_id, role, content, images, source) VALUES (?, ?, ?, ?, ?, ?)`,
+		workspaceID, conversationID, role, content, imagesJSON, sourceVal)
 	if err != nil {
 		return 0, err
 	}
@@ -495,7 +581,7 @@ func setMessagePendingWritesByID(db *sql.DB, messageID int64, writes []PendingWr
 
 func LoadMessages(db *sql.DB, workspaceID string, conversationID int64) ([]Message, error) {
 	rows, err := db.Query(
-		`SELECT id, role, content, images, pending_writes, created_at FROM messages
+		`SELECT id, role, content, images, pending_writes, source, created_at FROM messages
 		 WHERE workspace_id = ? AND conversation_id = ? ORDER BY id ASC`,
 		workspaceID, conversationID)
 	if err != nil {
@@ -506,10 +592,11 @@ func LoadMessages(db *sql.DB, workspaceID string, conversationID int64) ([]Messa
 	out := []Message{}
 	for rows.Next() {
 		var m Message
-		var imagesJSON, pendingWritesJSON sql.NullString
-		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &imagesJSON, &pendingWritesJSON, &m.CreatedAt); err != nil {
+		var imagesJSON, pendingWritesJSON, source sql.NullString
+		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &imagesJSON, &pendingWritesJSON, &source, &m.CreatedAt); err != nil {
 			return nil, err
 		}
+		m.Source = source.String
 		if imagesJSON.Valid {
 			// Best-effort: a row that somehow has malformed JSON here just
 			// loses its images rather than failing the whole conversation
@@ -523,6 +610,49 @@ func LoadMessages(db *sql.DB, workspaceID string, conversationID int64) ([]Messa
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+// GetNotes returns the workspace's scratchpad content, or "" if nothing's
+// been saved yet.
+func GetNotes(db *sql.DB, workspaceID string) (string, error) {
+	var content string
+	err := db.QueryRow(`SELECT content FROM notes WHERE workspace_id = ?`, workspaceID).Scan(&content)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return content, nil
+}
+
+// SaveNotes overwrites the workspace's scratchpad content.
+func SaveNotes(db *sql.DB, workspaceID, content string) error {
+	_, err := db.Exec(
+		`INSERT INTO notes (workspace_id, content, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+		 ON CONFLICT(workspace_id) DO UPDATE SET content = excluded.content, updated_at = CURRENT_TIMESTAMP`,
+		workspaceID, content)
+	return err
+}
+
+// AppendNotes adds text as a new line onto the workspace's existing
+// scratchpad content — the terminal-friendly counterpart to SaveNotes'
+// overwrite, for a CLI appending one finding at a time (see
+// internal/chat/notes.go) without first having to fetch and resend the
+// whole document.
+func AppendNotes(db *sql.DB, workspaceID, text string) (string, error) {
+	existing, err := GetNotes(db, workspaceID)
+	if err != nil {
+		return "", err
+	}
+	next := text
+	if existing != "" {
+		next = existing + "\n" + text
+	}
+	if err := SaveNotes(db, workspaceID, next); err != nil {
+		return "", err
+	}
+	return next, nil
 }
 
 func SaveDocument(db *sql.DB, workspaceID, filename string) (int64, error) {
@@ -773,6 +903,14 @@ func SaveFileAccessSettings(db *sql.DB, s FileAccessSettings) error {
 // on/off switch, not a set of scoped permissions.
 type TerminalSettings struct {
 	Enabled bool `json:"enabled"`
+	// InjectLiveChatEnv, when true, sets OPENAI_BASE_URL (and a placeholder
+	// OPENAI_API_KEY) in every new terminal session's environment, pointed
+	// at this server's own /v1/chat/completions proxy (see
+	// internal/chat/live.go) — so a terminal-based AI CLI (Claude Code, a
+	// ChatGPT/Gemini CLI, etc.) run inside the built-in Terminal talks to
+	// fastllm's local model with no manual export, and that conversation
+	// shows up live in the Chat panel.
+	InjectLiveChatEnv bool `json:"injectLiveChatEnv"`
 }
 
 var DefaultTerminalSettings = TerminalSettings{}

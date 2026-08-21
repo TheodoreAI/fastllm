@@ -53,6 +53,8 @@ import {
   indexDocument,
   uploadFile,
   streamChat,
+  subscribeLiveChat,
+  setLiveTarget,
   quitServer,
   isWails,
   captureScreenshot,
@@ -206,6 +208,12 @@ export default function App() {
   const [skillError, setSkillError] = useState('')
   const [conversations, setConversations] = useState([])
   const [conversationId, setConversationId] = useState(null)
+  // Mirrors conversationId for the live-chat SSE subscription below (see
+  // useEffect near subscribeLiveChat) — that subscription is opened once
+  // for the app's whole lifetime, so its event handler needs the current
+  // conversationId at event-arrival time, not whatever was captured in
+  // the closure when the subscription started.
+  const conversationIdRef = useRef(null)
   const [conversationError, setConversationError] = useState('')
   // Collapsed to a slim strip only as a side effect of closing the
   // active chat (see handleCloseChat below), freeing up width for the
@@ -374,6 +382,89 @@ export default function App() {
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [setEditorSidebarCollapsed, setTerminalPaneCollapsed, setSidebarCollapsed])
+
+  useEffect(() => {
+    conversationIdRef.current = conversationId
+    // A null conversationId is the transient "New chat, nothing sent yet"
+    // state (see setConversationId call sites below) — there's no real
+    // conversation row to target yet, so leave the backend's existing
+    // live-bridge target alone rather than clearing it. Once a real id
+    // shows up (either from sending the first message, or from picking
+    // an existing conversation), redirect the bridge there.
+    if (conversationId) setLiveTarget(conversationId)
+  }, [conversationId])
+
+  // Renders an externally-driven conversation (a terminal-based AI CLI
+  // pointed at fastllm's /v1/chat/completions proxy instead of the local
+  // model server directly — see internal/chat/live.go) live in the Chat
+  // panel, the same way the composer's own streamChat call does, instead
+  // of only showing up after a reload. One subscription for the app's
+  // whole lifetime; subscribeLiveChat resolves/rejects per connection
+  // attempt, so a dropped connection (server restart, brief network hit)
+  // just gets retried after a short delay rather than leaving the panel
+  // silently disconnected.
+  useEffect(() => {
+    const controller = new AbortController()
+    let cancelled = false
+
+    async function connect() {
+      while (!cancelled) {
+        try {
+          await subscribeLiveChat(
+            {
+              onEvent: (evt) => {
+                if (evt.type === 'user_message' || evt.type === 'done') {
+                  refreshConversations()
+                }
+                const isActive = String(conversationIdRef.current) === String(evt.conversation_id)
+                if (!isActive) return
+                if (evt.type === 'user_message') {
+                  setMessages((prev) => [
+                    ...prev,
+                    { role: 'user', content: evt.text, images: [], liveTurnId: evt.turn_id, source: 'terminal' },
+                    { role: 'assistant', content: '', sources: [], reasoning: '', toolCalls: [], pendingWrites: [], buildChecks: [], testChecks: [], usage: null, liveTurnId: evt.turn_id, source: 'terminal' },
+                  ])
+                } else if (evt.type === 'token') {
+                  // Keyed by turn_id, not "the last message" — two turns
+                  // (e.g. a CLI's background call racing its main answer)
+                  // can be streaming into this same conversation at once,
+                  // and appending both to whichever message is last
+                  // interleaves their tokens into scrambled text.
+                  setMessages((prev) => {
+                    let idx = -1
+                    for (let i = prev.length - 1; i >= 0; i--) {
+                      if (prev[i].role === 'assistant' && prev[i].liveTurnId === evt.turn_id) {
+                        idx = i
+                        break
+                      }
+                    }
+                    if (idx === -1) return prev
+                    const next = [...prev]
+                    next[idx] = { ...next[idx], content: next[idx].content + evt.text }
+                    return next
+                  })
+                }
+              },
+            },
+            controller.signal
+          )
+        } catch (err) {
+          if (cancelled || err.name === 'AbortError') return
+        }
+        if (!cancelled) await new Promise((resolve) => setTimeout(resolve, 3000))
+      }
+    }
+    connect()
+
+    return () => {
+      cancelled = true
+      controller.abort()
+    }
+    // Intentionally empty deps — this subscribes once for the app's
+    // lifetime; conversationIdRef (kept in sync by the effect above) is
+    // how the handler stays current without resubscribing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Search and Git live on the main rail (see the Search/Git buttons
   // below) rather than as tabs inside EditorView's own sidebar. Mirrors
@@ -1361,6 +1452,17 @@ export default function App() {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M9 3h6M10 3v4.2a4 4 0 0 1-.7 2.3L5.8 15a3 3 0 0 0 2.5 4.7h7.4a3 3 0 0 0 2.5-4.7l-3.5-5.5a4 4 0 0 1-.7-2.3V3" />
             <path d="M7.5 14.5h9" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          className={editorPanel === 'notes' ? 'is-active' : ''}
+          title="Notes"
+          onClick={() => openEditorPanel('notes')}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M14 3H6.5A1.5 1.5 0 0 0 5 4.5v15A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V8Z" />
+            <path d="M14 3v4a1 1 0 0 0 1 1h4M9 12h6M9 16h6" />
           </svg>
         </button>
 

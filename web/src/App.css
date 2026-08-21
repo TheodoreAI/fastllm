@@ -3413,6 +3413,103 @@ body {
   margin: 0 2px;
 }
 
+.editor-notes-panel {
+  height: 100%;
+}
+
+.editor-notes-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 6px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid var(--border);
+}
+
+.editor-notes-header-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.editor-notes-header-title svg {
+  width: 15px;
+  height: 15px;
+  color: var(--text-dim);
+}
+
+.editor-notes-status {
+  font-size: 0.6875rem;
+  font-weight: 500;
+  min-height: 1em;
+  color: var(--text-faint);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.editor-notes-status-saving,
+.editor-notes-status-saved {
+  opacity: 1;
+}
+
+.editor-notes-status-saved {
+  color: var(--success, #4caf82);
+}
+
+.editor-notes-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent), transparent 70%);
+  border-left: 2px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent), transparent 94%);
+}
+
+.editor-notes-hint svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-top: 1px;
+  color: var(--accent);
+}
+
+.editor-notes-hint p {
+  min-width: 0;
+  margin: 0;
+  font-size: 0.7188rem;
+  line-height: 1.55;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.editor-notes-hint strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.editor-notes-hint .settings-inline-code {
+  color: var(--text);
+  word-break: break-all;
+}
+
+.editor-notes-textarea {
+  flex: 1;
+  resize: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text);
+  font-family: Menlo, Consolas, 'SF Mono', monospace;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  padding: 8px;
+}
+
 .editor-file-list,
 .editor-git-list,
 .editor-search-results {
@@ -4800,6 +4897,16 @@ body {
 .settings-hint-inline {
   font-size: 0.6875rem;
   color: var(--text-faint);
+}
+
+.settings-inline-code {
+  font-family: Menlo, Consolas, 'SF Mono', monospace;
+  font-size: 0.6875rem;
+  background: var(--bg-input);
+  border-radius: var(--radius-sm);
+  padding: 1px 5px;
+  color: var(--text);
+  user-select: text;
 }
 
 .settings-check-row {

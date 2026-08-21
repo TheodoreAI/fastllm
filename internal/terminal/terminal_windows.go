@@ -4,6 +4,7 @@ package terminal
 
 import (
 	"log"
+	"os"
 	"sync"
 	"unsafe"
 
@@ -92,7 +93,7 @@ func isElevated() (bool, error) {
 	return elevation != 0, nil
 }
 
-func start(cols, rows int, workDir string) (Session, error) {
+func start(cols, rows int, workDir string, extraEnv []string) (Session, error) {
 	elevated, err := isElevated()
 	if err != nil {
 		return nil, err
@@ -104,6 +105,14 @@ func start(cols, rows int, workDir string) (Session, error) {
 	opts := []conpty.ConPtyOption{conpty.ConPtyDimensions(cols, rows)}
 	if workDir != "" {
 		opts = append(opts, conpty.ConPtyWorkDir(workDir))
+	}
+	if len(extraEnv) > 0 {
+		// ConPtyEnv replaces the child's environment outright rather than
+		// extending the parent's the way exec.Cmd.Env's append-to-os.Environ()
+		// idiom (see terminal_unix.go) does — so this must seed it with
+		// os.Environ() itself first, or the spawned shell loses PATH and
+		// everything else it needs to function.
+		opts = append(opts, conpty.ConPtyEnv(append(os.Environ(), extraEnv...)))
 	}
 	cpty, err := conpty.Start("powershell.exe -NoLogo", opts...)
 	if err != nil {

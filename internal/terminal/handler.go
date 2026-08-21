@@ -46,7 +46,7 @@ type controlMessage struct {
 // directory. Read fresh on every connect (not passed once at startup)
 // since the opened folder can change live via Settings → File access
 // without a restart, same as the reader itself.
-func NewHandler(registry *Registry, gate *Gate, fileReader *files.Reader) http.HandlerFunc {
+func NewHandler(registry *Registry, gate *Gate, fileReader *files.Reader, baseURL *BaseURLHolder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !gate.Enabled() {
 			http.NotFound(w, r)
@@ -91,7 +91,47 @@ func NewHandler(registry *Registry, gate *Gate, fileReader *files.Reader) http.H
 			return
 		}
 
-		session, err := Start(defaultCols, defaultRows, fileReader.GetRoot())
+		var extraEnv []string
+		if url := baseURL.Get(); url != "" {
+			// FASTLLM_BASE_URL is fastllm's own API, not an
+			// OpenAI/Anthropic-compatible one — no CLI tool reads it for its
+			// own inference, so it's always safe to set regardless of the
+			// toggle below. It's how a CLI (or a human) reaches the shared
+			// notes scratchpad (internal/chat/notes.go) and can deliberately
+			// target the local model via POST $FASTLLM_BASE_URL/v1/messages
+			// without touching the OPENAI_*/ANTHROPIC_* vars below — see
+			// the warning on those for why that distinction matters.
+			extraEnv = append(extraEnv, "FASTLLM_BASE_URL="+url)
+			if gate.InjectEnv() {
+				// OPENAI_API_KEY/ANTHROPIC_API_KEY are placeholders, not real
+				// credentials — fastllm's proxies (internal/chat/live.go)
+				// don't check them, but most CLI tools refuse to start with
+				// the var unset or empty. Both pairs are set unconditionally
+				// since which one a given CLI tool reads depends on the
+				// tool, not on anything this server can detect.
+				//
+				// Setting ANTHROPIC_BASE_URL/ANTHROPIC_API_KEY doesn't just
+				// make the local model reachable — Claude Code itself reads
+				// those same vars to decide where ITS OWN reasoning comes
+				// from, so this reroutes Claude Code's entire brain through
+				// fastllm to whatever model FASTLLM_CHAT_MODEL points at,
+				// not just calls something curls to it explicitly. That's
+				// intentional for "run this CLI entirely backed by
+				// fastllm" workflows, but it's the opposite of what a
+				// skill like tune-local-model wants (a real, strong model
+				// investigating a weak local one as a subject) — that
+				// workflow should leave this toggle OFF and use
+				// FASTLLM_BASE_URL above instead, which this server never
+				// swaps in for a CLI's own inference.
+				extraEnv = append(extraEnv,
+					"OPENAI_BASE_URL="+url+"/v1",
+					"OPENAI_API_KEY=fastllm-local",
+					"ANTHROPIC_BASE_URL="+url,
+					"ANTHROPIC_API_KEY=fastllm-local",
+				)
+			}
+		}
+		session, err := Start(defaultCols, defaultRows, fileReader.GetRoot(), extraEnv)
 		if err != nil {
 			log.Printf("terminal: failed to start session: %v", err)
 			// A short, stable machine-readable reason rather than err's full
