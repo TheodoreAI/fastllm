@@ -192,6 +192,16 @@ func (r *Reader) ResolveForWrite(requested string) (string, error) {
 }
 
 func resolveWithinRoot(root, requested string) (string, error) {
+	// filepath.Join doesn't treat an absolute second argument specially —
+	// Join(root, "/tmp/x") produces "root/tmp/x", not "/tmp/x", so an
+	// absolute requested path would otherwise be silently re-rooted as if
+	// it were relative instead of rejected, defeating the "rejecting
+	// absolute paths" this function's callers document. Checked explicitly
+	// rather than relied on to fall out of the Join+Rel check below, which
+	// only catches ".." traversal.
+	if filepath.IsAbs(requested) {
+		return "", ErrOutsideRoot
+	}
 	joined := filepath.Join(root, requested)
 	rel, err := filepath.Rel(root, joined)
 	if err != nil || rel == ".." || (len(rel) >= 3 && rel[:3] == ".."+string(filepath.Separator)) {
