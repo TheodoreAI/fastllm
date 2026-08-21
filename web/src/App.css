@@ -5082,6 +5082,44 @@ body {
   font-size: 0.7813rem;
 }
 
+/* ---------- language server (lspExtensions.js hover tooltip) ---------- */
+
+/* CodeMirror's own baseTheme only supplies .cm-tooltip's background/
+   border (see @codemirror/view) — no padding, no width limit, no
+   typography — so a plain textContent dump reads as an unbounded wall
+   of text that can stretch wider than the editor pane. This box is
+   what .cm-lsp-hover's two children (.cm-lsp-hover-sig/-doc, built in
+   lspHoverExtensionFor) render inside. */
+.cm-lsp-hover {
+  max-width: 420px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.cm-lsp-hover-sig {
+  font-family: ui-monospace, 'SF Mono', Consolas, 'Cascadia Code', monospace;
+  font-size: 0.75rem;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.cm-lsp-hover-doc {
+  color: var(--text-dim);
+  white-space: pre-wrap;
+}
+
+/* The divider only makes sense between a signature and its doc — a doc
+   with no signature sibling (parseHoverMarkdown returned signature:
+   null) shouldn't get a floating rule above it. */
+.cm-lsp-hover-sig + .cm-lsp-hover-doc {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-strong);
+}
+
 /* ---------------------------------------------------------------------
    TweakBar (components/TweakBar.jsx) — dev-only design-token panel.
    Deliberately fixed dark colors rather than var(--…) tokens: the whole

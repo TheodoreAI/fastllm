@@ -5,7 +5,7 @@
 // needs its own closures over its own path, not one shared instance.
 import { linter } from '@codemirror/lint'
 import { autocompletion } from '@codemirror/autocomplete'
-import { hoverTooltip, keymap, EditorView as CMView } from '@codemirror/view'
+import { hoverTooltip, keymap, tooltips, EditorView as CMView } from '@codemirror/view'
 import { Prec } from '@codemirror/state'
 import { uriToPath } from './lsp'
 
@@ -157,11 +157,45 @@ export function lspCompletionExtensionFor(path, lspClientRef, flushLspChange, so
   return autocompletion({ override: [sourceCache.current[path]] })
 }
 
+// gopls's hover response shape depends on what contentFormat the client
+// declared (see internal/lsp/handler.go's initializeParams, which offers
+// both): sometimes a ```go fenced signature followed by a "---" rule and
+// the doc as markdown paragraphs, sometimes (observed with this
+// environment's gopls) plain text — just the signature as the first
+// line, a blank line, then the doc comment verbatim. Splitting the
+// signature out either way lets it render in its own monospace block
+// instead of being flattened into the doc paragraph's plain text — a
+// plain textContent dump of the whole string reads as one run-on
+// sentence with no visual distinction between "what this is" and "how
+// it's documented".
+function parseHoverMarkdown(text) {
+  const fence = text.match(/```go\r?\n([\s\S]*?)```/)
+  if (fence) {
+    const doc = text
+      .slice(fence.index + fence[0].length)
+      .replace(/^\s*---\s*/, '')
+      .trim()
+    return { signature: fence[1].trim(), doc }
+  }
+  const firstLineEnd = text.indexOf('\n')
+  const firstLine = (firstLineEnd === -1 ? text : text.slice(0, firstLineEnd)).trim()
+  if (/^(func|type|var|const|package)\b/.test(firstLine)) {
+    return { signature: firstLine, doc: text.slice(firstLineEnd + 1).trim() }
+  }
+  return { signature: null, doc: text.trim() }
+}
+
 // lspHoverExtensionFor shows gopls's textDocument/hover result (a
 // symbol's doc comment/signature) in a tooltip — hoverTooltip comes from
 // @codemirror/view, already a dependency, no new package needed.
 export function lspHoverExtensionFor(path, lspClientRef, flushLspChange) {
-  return hoverTooltip(async (view, pos) => {
+  return [
+    // The Editor pane's columns clip overflow for scrolling — without
+    // this, the tooltip renders as a child of that clipped DOM subtree
+    // and gets visually cut off at the column edge instead of floating
+    // over whatever's next to it, same as any other editor's hover card.
+    tooltips({ parent: document.body }),
+    hoverTooltip(async (view, pos) => {
     const client = lspClientRef.current
     if (!client) return null
     flushLspChange(path, view)
@@ -183,11 +217,25 @@ export function lspHoverExtensionFor(path, lspClientRef, flushLspChange) {
       create() {
         const dom = document.createElement('div')
         dom.className = 'cm-lsp-hover'
-        dom.textContent = text
+        const { signature, doc } = parseHoverMarkdown(text)
+        if (signature) {
+          const sig = document.createElement('div')
+          sig.className = 'cm-lsp-hover-sig'
+          sig.textContent = signature
+          dom.appendChild(sig)
+        }
+        if (doc) {
+          const docEl = document.createElement('div')
+          docEl.className = 'cm-lsp-hover-doc'
+          docEl.textContent = doc
+          dom.appendChild(docEl)
+        }
+        if (!signature && !doc) dom.textContent = text
         return { dom }
       },
     }
-  })
+    }),
+  ]
 }
 
 // lspDefinitionExtensionFor wires go-to-definition to F12 (VS Code muscle
