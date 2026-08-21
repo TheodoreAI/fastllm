@@ -94,13 +94,17 @@ func NewHandler(registry *Registry, gate *Gate, fileReader *files.Reader, baseUR
 		var extraEnv []string
 		if gate.InjectEnv() {
 			if url := baseURL.Get(); url != "" {
-				// OPENAI_API_KEY is a placeholder, not a real credential —
-				// fastllm's /v1/chat/completions proxy (internal/chat/live.go)
-				// doesn't check it, but most OpenAI-compatible CLI tools
-				// refuse to start with the var unset or empty.
+				// OPENAI_API_KEY/ANTHROPIC_API_KEY are placeholders, not real
+				// credentials — fastllm's proxies (internal/chat/live.go)
+				// don't check them, but most CLI tools refuse to start with
+				// the var unset or empty. Both pairs are set unconditionally
+				// since which one a given CLI tool reads depends on the
+				// tool, not on anything this server can detect.
 				extraEnv = []string{
 					"OPENAI_BASE_URL=" + url + "/v1",
 					"OPENAI_API_KEY=fastllm-local",
+					"ANTHROPIC_BASE_URL=" + url,
+					"ANTHROPIC_API_KEY=fastllm-local",
 				}
 			}
 		}

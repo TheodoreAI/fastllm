@@ -104,17 +104,27 @@ const liveTerminalTitle = "Live Terminal"
 
 // liveConversationID returns the id of the single, always-reused
 // conversation external chat-completion traffic (see
-// ExternalChatCompletions) gets appended to, creating it on first use.
-// Cached in-memory rather than looked up by title on every request —
-// simplest way to give one proxied "session" a stable home without a
-// dedicated DB column, at the cost of starting a fresh one each process
-// restart (acceptable: a terminal-driven CLI session doesn't outlive the
-// app run either).
+// ExternalChatCompletions/AnthropicMessages) gets appended to. Cached
+// in-memory after the first lookup per process run, but that lookup
+// checks the DB for an existing "Live Terminal" conversation before
+// creating a new one — without this, every process restart (a `wails
+// dev` reload, an app relaunch) would spawn a fresh duplicate instead of
+// picking the previous session's back up.
 func (h *Handler) liveConversationID() (int64, error) {
 	h.liveConvMu.Lock()
 	defer h.liveConvMu.Unlock()
 	if h.liveConvID != 0 {
 		return h.liveConvID, nil
+	}
+	existing, err := store.ListConversations(h.DB, defaultWorkspace)
+	if err != nil {
+		return 0, err
+	}
+	for _, c := range existing {
+		if c.Title == liveTerminalTitle {
+			h.liveConvID = c.ID
+			return c.ID, nil
+		}
 	}
 	id, err := store.CreateConversation(h.DB, defaultWorkspace, liveTerminalTitle)
 	if err != nil {
@@ -275,4 +285,189 @@ func (h *Handler) ExternalModels(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"object": "list", "data": data})
+}
+
+// anthropicContentBlock is only ever read for its "text" blocks here — a
+// real Messages API request can carry images/tool_use/tool_result blocks
+// too, but Claude Code (the one real-world client this exists for) sends
+// plain text turns for a normal chat, and anything else is silently
+// dropped rather than rejected, same tradeoff ExternalChatCompletions
+// makes for the OpenAI shape.
+type anthropicContentBlock struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+// anthropicMessage's Content is a `json.RawMessage` because the wire
+// format allows either a bare string or an array of content blocks for
+// the same field — see anthropicMessageText below for how it's resolved.
+type anthropicMessage struct {
+	Role    string          `json:"role"`
+	Content json.RawMessage `json:"content"`
+}
+
+type anthropicRequest struct {
+	Model     string             `json:"model"`
+	MaxTokens int                `json:"max_tokens"`
+	Messages  []anthropicMessage `json:"messages"`
+	Stream    bool               `json:"stream"`
+}
+
+// anthropicMessageText resolves a message's Content into plain text,
+// handling both wire shapes: a bare JSON string, or an array of content
+// blocks (concatenating every "text" block's Text field — the only block
+// type this minimal proxy understands).
+func anthropicMessageText(raw json.RawMessage) string {
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	var blocks []anthropicContentBlock
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, block := range blocks {
+		if block.Type == "text" {
+			b.WriteString(block.Text)
+		}
+	}
+	return b.String()
+}
+
+// AnthropicMessages is a minimal Anthropic Messages API-compatible
+// POST /v1/messages — unlike ExternalChatCompletions (the OpenAI-shaped
+// proxy CLI tools reading OPENAI_BASE_URL use), this is what Claude Code
+// itself needs: it only ever speaks the Anthropic wire format
+// (ANTHROPIC_BASE_URL), never OpenAI's. Same idea otherwise: forwards to
+// Router.StreamChat (so the model field can route to a cloud provider
+// exactly the same way ExternalChatCompletions does, not just the local
+// model), and saves + broadcasts to the same "Live Terminal" conversation
+// both proxies share, so either bridge shows up in the same place.
+func (h *Handler) AnthropicMessages(w http.ResponseWriter, r *http.Request) {
+	var req anthropicRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	var userText string
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if req.Messages[i].Role == "user" {
+			userText = anthropicMessageText(req.Messages[i].Content)
+			break
+		}
+	}
+	if strings.TrimSpace(userText) == "" {
+		http.Error(w, "no user message found", http.StatusBadRequest)
+		return
+	}
+
+	convID, err := h.liveConversationID()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if _, err := store.SaveMessage(h.DB, defaultWorkspace, convID, "user", userText, nil); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	h.Live.Publish(LiveEvent{ConversationID: convID, Type: "user_message", Text: userText})
+
+	llmMessages := make([]llm.Message, 0, len(req.Messages))
+	for _, m := range req.Messages {
+		llmMessages = append(llmMessages, llm.Message{Role: m.Role, Content: anthropicMessageText(m.Content)})
+	}
+
+	ctx := r.Context()
+	model := req.Model
+	if model == "" {
+		model = h.LLM.ChatModel()
+	}
+	msgID := "msg_" + newWriteID()
+
+	if !req.Stream {
+		var full strings.Builder
+		var usage llm.Usage
+		err := h.LLM.StreamChat(ctx, model, llmMessages, "", func(token string) {
+			full.WriteString(token)
+			h.Live.Publish(LiveEvent{ConversationID: convID, Type: "token", Text: token})
+		}, func(string) {}, func(u llm.Usage) { usage = u })
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if _, err := store.SaveAssistantMessage(h.DB, defaultWorkspace, convID, full.String(), nil); err != nil {
+			log.Printf("save external assistant message: %v", err)
+		}
+		h.Live.Publish(LiveEvent{ConversationID: convID, Type: "done"})
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id":            msgID,
+			"type":          "message",
+			"role":          "assistant",
+			"model":         model,
+			"content":       []map[string]string{{"type": "text", "text": full.String()}},
+			"stop_reason":   "end_turn",
+			"stop_sequence": nil,
+			"usage":         map[string]int{"input_tokens": usage.PromptTokens, "output_tokens": usage.CompletionTokens},
+		})
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	writeSSE := func(eventType string, payload any) {
+		data, _ := json.Marshal(payload)
+		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, data)
+		flusher.Flush()
+	}
+
+	writeSSE("message_start", map[string]any{
+		"type": "message_start",
+		"message": map[string]any{
+			"id": msgID, "type": "message", "role": "assistant", "content": []any{},
+			"model": model, "stop_reason": nil, "stop_sequence": nil,
+			"usage": map[string]int{"input_tokens": 0, "output_tokens": 0},
+		},
+	})
+	writeSSE("content_block_start", map[string]any{
+		"type": "content_block_start", "index": 0,
+		"content_block": map[string]string{"type": "text", "text": ""},
+	})
+
+	var full strings.Builder
+	var usage llm.Usage
+	err = h.LLM.StreamChat(ctx, model, llmMessages, "", func(token string) {
+		full.WriteString(token)
+		h.Live.Publish(LiveEvent{ConversationID: convID, Type: "token", Text: token})
+		writeSSE("content_block_delta", map[string]any{
+			"type": "content_block_delta", "index": 0,
+			"delta": map[string]string{"type": "text_delta", "text": token},
+		})
+	}, func(string) {}, func(u llm.Usage) { usage = u })
+	if err != nil {
+		// Best-effort, same reasoning as ExternalChatCompletions: still
+		// save and close out the stream with whatever partial answer was
+		// generated rather than leaving the client's stream half-open.
+		log.Printf("anthropic messages stream: %v", err)
+	}
+	if _, err := store.SaveAssistantMessage(h.DB, defaultWorkspace, convID, full.String(), nil); err != nil {
+		log.Printf("save external assistant message: %v", err)
+	}
+	h.Live.Publish(LiveEvent{ConversationID: convID, Type: "done"})
+
+	writeSSE("content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
+	writeSSE("message_delta", map[string]any{
+		"type":  "message_delta",
+		"delta": map[string]any{"stop_reason": "end_turn", "stop_sequence": nil},
+		"usage": map[string]int{"output_tokens": usage.CompletionTokens},
+	})
+	writeSSE("message_stop", map[string]any{"type": "message_stop"})
 }
