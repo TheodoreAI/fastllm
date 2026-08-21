@@ -2,6 +2,8 @@
 name: tune-local-model
 description: Experiment against the local model behind fastllm's live terminal bridge to find the best prompting workflow for its constraints, logging findings to fastllm's shared Notes scratchpad.
 disable-model-invocation: true
+arguments: max_experiments
+argument-hint: "[max_experiments]"
 ---
 
 You're running inside fastllm's built-in Terminal pane, with access to a
@@ -14,6 +16,10 @@ instructions, formatting code output correctly — given its constraints,
 and leave a durable record of what you learn. Don't spend experiments on
 general trivia (geography, history, etc.) — every prompt you send it
 should resemble something a programming assistant would actually be asked.
+
+**Experiment budget:** `$max_experiments` if given (e.g. `/tune-local-model
+5` runs at most 5); otherwise default to 10. Treat it as a hard cap, not a
+target — stop earlier if you've already got a clear picture.
 
 **Important — do not use `$ANTHROPIC_BASE_URL` for this.** If it's set,
 ignore it: that variable is how *your own* inference gets routed, and if
@@ -52,7 +58,23 @@ that.
    structured (JSON/diff/fenced-code-block) output, explicit formatting
    constraints, which languages it handles better or worse, how much
    surrounding code it can hold onto without losing track.
-4. As soon as you learn something concrete, append it immediately —
+4. **Include real file read/write/edit tasks, not just inline snippets.**
+   Use your own Read tool to pull a real chunk of code from the project
+   you're currently in, embed it in the prompt, and ask the local model
+   to do something with it — read/explain a real file, write a new file's
+   worth of content from a spec, or edit/patch a real snippet in place.
+   This is the more realistic case (the model reasoning over real
+   project code, not a toy example) and belongs in the mix alongside the
+   synthetic prompts from step 3, not as a replacement for them.
+
+   Never use your own Write/Edit tools to apply the local model's output
+   directly to real project files — that's untrusted, unreviewed output
+   from a model you're actively finding failure modes in. Instead, if you
+   want to inspect a full generated/edited file, write the local model's
+   raw output to a throwaway scratch file (e.g. under a `/tmp` path or
+   similar) with your own Write tool, and note in your finding whether it
+   would have been safe to apply as-is or not.
+5. As soon as you learn something concrete, append it immediately —
    don't wait until the end and try to remember everything:
    ```
    curl -s -X POST $FASTLLM_BASE_URL/api/notes/append -d "finding: ..."
@@ -60,12 +82,11 @@ that.
    Write findings as actionable rules ("keep instructions to one step at a
    time — it drops the second half of compound asks"), not narration of
    what you did.
-5. **Run at most 10 experiments total** (step 2 above, one prompt-and-
-   observe cycle each) — this is a hard cap, not a target to aim for if
-   you reach a clear picture sooner. Stop early once you can already
-   describe a reliable workflow. Either way, end by appending one final
-   summary note laying out the recommended prompting approach for using
-   this model on programming tasks.
+6. **Respect the experiment budget above** (one prompt-and-observe cycle
+   from step 2/4 each). Stop early once you can already describe a
+   reliable workflow. Either way, end by appending one final summary note
+   laying out the recommended prompting approach for using this model on
+   programming tasks — including file read/write/edit tasks specifically.
 
 Every request you send through `$FASTLLM_BASE_URL/v1/messages` also shows
 up live in fastllm's own Chat panel ("Live Terminal" conversation), so the

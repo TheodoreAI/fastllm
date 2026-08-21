@@ -54,6 +54,7 @@ import {
   uploadFile,
   streamChat,
   subscribeLiveChat,
+  setLiveTarget,
   quitServer,
   isWails,
   captureScreenshot,
@@ -384,6 +385,13 @@ export default function App() {
 
   useEffect(() => {
     conversationIdRef.current = conversationId
+    // A null conversationId is the transient "New chat, nothing sent yet"
+    // state (see setConversationId call sites below) — there's no real
+    // conversation row to target yet, so leave the backend's existing
+    // live-bridge target alone rather than clearing it. Once a real id
+    // shows up (either from sending the first message, or from picking
+    // an existing conversation), redirect the bridge there.
+    if (conversationId) setLiveTarget(conversationId)
   }, [conversationId])
 
   // Renders an externally-driven conversation (a terminal-based AI CLI

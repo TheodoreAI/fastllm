@@ -251,6 +251,7 @@ func Build(cfg Config) (*Built, error) {
 	// speaks, distinct from the OpenAI-shaped pair above.
 	mux.HandleFunc("POST /v1/messages", handler.AnthropicMessages)
 	mux.HandleFunc("GET /api/live/stream", handler.LiveStream)
+	mux.HandleFunc("PUT /api/live/target", handler.SetLiveTarget)
 
 	mux.Handle("/", http.FileServer(http.FS(web.FS())))
 

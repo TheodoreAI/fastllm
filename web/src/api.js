@@ -598,6 +598,19 @@ export async function streamChat({ message, model, skillId, conversationId, thin
 // case the caller is expected to retry — this resolves/rejects once per
 // connection attempt, same shape as a single streamChat call, so App.jsx's
 // retry loop can just call it again.
+// setLiveTarget tells the backend which conversation the terminal↔chat
+// bridge (see internal/chat/live.go) should write new traffic to —
+// called whenever the selected conversation changes, so opening and
+// staying on a different chat redirects the bridge there instead of the
+// default "Live Terminal" conversation.
+export function setLiveTarget(conversationId) {
+  return fetch('/api/live/target', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ conversation_id: conversationId }),
+  })
+}
+
 export async function subscribeLiveChat(callbacks, signal) {
   const origin = await apiOrigin()
   const res = await fetch(`${origin}/api/live/stream`, { signal })

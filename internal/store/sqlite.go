@@ -153,6 +153,23 @@ func CreateConversation(db *sql.DB, workspaceID, title string) (int64, error) {
 	return res.LastInsertId()
 }
 
+// ConversationExists reports whether id is still a real row — there's no
+// foreign-key enforcement between messages and conversations (see
+// DeleteConversation), so anything caching a conversation id across
+// requests (e.g. the live terminal bridge's liveConversationID) needs to
+// check this itself rather than assume a previously-valid id still is.
+func ConversationExists(db *sql.DB, workspaceID string, id int64) (bool, error) {
+	var exists int
+	err := db.QueryRow(`SELECT 1 FROM conversations WHERE workspace_id = ? AND id = ?`, workspaceID, id).Scan(&exists)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // ListConversations returns every conversation in the workspace, most
 // recently updated first.
 func ListConversations(db *sql.DB, workspaceID string) ([]Conversation, error) {

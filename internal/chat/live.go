@@ -112,20 +112,47 @@ func (h *Handler) LiveStream(w http.ResponseWriter, r *http.Request) {
 
 const liveTerminalTitle = "Live Terminal"
 
-// liveConversationID returns the id of the single, always-reused
-// conversation external chat-completion traffic (see
-// ExternalChatCompletions/AnthropicMessages) gets appended to. Cached
-// in-memory after the first lookup per process run, but that lookup
-// checks the DB for an existing "Live Terminal" conversation before
-// creating a new one — without this, every process restart (a `wails
-// dev` reload, an app relaunch) would spawn a fresh duplicate instead of
-// picking the previous session's back up.
+// liveConversationID returns the id of the conversation external
+// chat-completion traffic (see ExternalChatCompletions/AnthropicMessages)
+// gets appended to: liveTargetConvID if the frontend has set one (see
+// SetLiveTarget — normally whichever conversation is currently open in
+// the Chat panel), otherwise the single, always-reused "Live Terminal"
+// conversation, auto-created on first use.
+//
+// Both paths verify the cached id still exists before trusting it —
+// there's no foreign-key enforcement between messages and conversations,
+// so a human deleting either the explicitly-targeted conversation or
+// "Live Terminal" itself out from under this would otherwise silently
+// orphan every future message into a conversation_id nothing can list or
+// display again, with no error to signal it. A deleted target clears
+// itself and falls back to "Live Terminal" (auto-recreating it too, if
+// that's also gone) rather than erroring the whole request out.
 func (h *Handler) liveConversationID() (int64, error) {
 	h.liveConvMu.Lock()
 	defer h.liveConvMu.Unlock()
-	if h.liveConvID != 0 {
-		return h.liveConvID, nil
+
+	if h.liveTargetConvID != 0 {
+		ok, err := store.ConversationExists(h.DB, defaultWorkspace, h.liveTargetConvID)
+		if err != nil {
+			return 0, err
+		}
+		if ok {
+			return h.liveTargetConvID, nil
+		}
+		h.liveTargetConvID = 0
 	}
+
+	if h.liveConvID != 0 {
+		ok, err := store.ConversationExists(h.DB, defaultWorkspace, h.liveConvID)
+		if err != nil {
+			return 0, err
+		}
+		if ok {
+			return h.liveConvID, nil
+		}
+		h.liveConvID = 0
+	}
+
 	existing, err := store.ListConversations(h.DB, defaultWorkspace)
 	if err != nil {
 		return 0, err
@@ -142,6 +169,26 @@ func (h *Handler) liveConversationID() (int64, error) {
 	}
 	h.liveConvID = id
 	return id, nil
+}
+
+// SetLiveTarget overrides which conversation the bridge writes to — the
+// frontend calls this whenever the human selects a different conversation
+// in the Chat panel, so opening a fresh chat and leaving it selected
+// redirects any new terminal-driven traffic there instead of the default
+// "Live Terminal" conversation. A conversation_id of 0 (or omitting it)
+// clears the override, reverting to the "Live Terminal" fallback.
+func (h *Handler) SetLiveTarget(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ConversationID int64 `json:"conversation_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	h.liveConvMu.Lock()
+	h.liveTargetConvID = req.ConversationID
+	h.liveConvMu.Unlock()
+	w.WriteHeader(http.StatusNoContent)
 }
 
 type externalChatMessage struct {
