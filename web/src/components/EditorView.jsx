@@ -29,6 +29,15 @@ import {
 import { languageExtensionFor, languageNameFor } from '../editorLanguages'
 import { parseDiff } from '../diffFormat'
 import { aiCompletionExtension } from '../aiCompletion'
+import { LspClient } from '../lsp'
+import {
+  lspLintExtensionFor,
+  lspCompletionExtensionFor,
+  lspHoverExtensionFor,
+  lspDefinitionExtensionFor,
+  positionToOffset,
+} from '../lspExtensions'
+import { EditorSelection } from '@codemirror/state'
 import { useEditorSidebarWidth } from '../useEditorSidebarWidth'
 import FileTree from './FileTree'
 import GitPanel from './GitPanel'
@@ -37,6 +46,15 @@ import TestPanel from './TestPanel'
 import NotesPanel from './NotesPanel'
 import EditorPane from './EditorPane'
 import ConfirmDeleteModal from './ConfirmDeleteModal'
+
+// didChange debounce — mirrors aiCompletion.js's DEBOUNCE_MS, just scoped
+// per open .go path here (see lspChangeTimers) since several tabs can be
+// mid-edit independently.
+const LSP_CHANGE_DEBOUNCE_MS = 400
+
+function isGoFile(path) {
+  return path.endsWith('.go')
+}
 
 // Terminal used to live nested inside this component (a bottom-docked
 // panel under the file tabs) — it's now its own top-level pane in App.jsx,
@@ -117,6 +135,29 @@ const EditorView = forwardRef(function EditorView(
   // reason: forceLinting() needs the specific tab's CodeMirror view, not
   // whichever tab happened to mount most recently.
   const codeMirrorViewsByPath = useRef({})
+  // gopls diagnostics, keyed by path the same way lintDiagnosticsByPath
+  // is — a separate ref (not merged into lintDiagnosticsByPath) since the
+  // two sources have different shapes (line/character ranges here vs.
+  // byte offset/length for oxlint) and lspLintExtensionFor reads this one
+  // directly (see languageExtensionsFor below).
+  const lspDiagnosticsByPath = useRef({})
+  // didChange's version counter, per open .go file — LSP requires a
+  // monotonically increasing version per textDocument/didChange.
+  const lspVersionByPath = useRef({})
+  // Debounce timers for didChange, keyed by path — mirrors
+  // aiCompletion.js's DEBOUNCE_MS pattern, just per-path here since
+  // multiple .go tabs can be mid-edit independently.
+  const lspChangeTimers = useRef({})
+  // Stable per-path completion source functions for
+  // lspCompletionExtensionFor — see its doc comment: @codemirror/
+  // autocomplete correlates an in-flight query by the source function's
+  // own reference identity, so this cache is what keeps that reference
+  // stable across re-renders instead of a fresh closure every keystroke.
+  const lspCompletionSourceByPath = useRef({})
+  // One LspClient shared across every open .go tab — there is only ever
+  // one gopls process for the whole opened project (see internal/lsp),
+  // so this is a single ref, not per-path like the ones above.
+  const lspClientRef = useRef(null)
   const [saving, setSaving] = useState(false)
 
   const [query, setQuery] = useState('')
@@ -460,11 +501,40 @@ const EditorView = forwardRef(function EditorView(
       delete lintDiagnosticsByPath.current[path]
       const view = codeMirrorViewsByPath.current[path]
       if (view) forceLinting(view)
+      return data.content
     } catch (err) {
       setOpenTabs((prev) =>
         prev.map((t) => (t.path === path ? { ...t, fileStatus: `Couldn't open this file: ${err.message}` } : t))
       )
+      return undefined
     }
+  }
+
+  function handleLspDiagnostics(path, diagnostics) {
+    lspDiagnosticsByPath.current[path] = diagnostics
+    const view = codeMirrorViewsByPath.current[path]
+    if (view) forceLinting(view)
+  }
+
+  // Lazy-start trigger for the whole LSP feature: the backend's WS handler
+  // (internal/lsp/handler.go) is unconditionally eager once dialed — it's
+  // this call, made only the first time a .go tab is actually opened, that
+  // decides whether gopls ever gets spawned at all for this session. A
+  // 404 (no gopls on PATH) or any connect failure must never throw into
+  // the tab-open flow — a Go file with no language server behaves exactly
+  // like any other file.
+  async function ensureLspOpen(path, content) {
+    if (!lspClientRef.current) {
+      const client = new LspClient({ onDiagnostics: handleLspDiagnostics, root: fileAccessSettings.root })
+      try {
+        await client.connect()
+      } catch {
+        return
+      }
+      lspClientRef.current = client
+    }
+    lspVersionByPath.current[path] = 1
+    lspClientRef.current.didOpen(path, content)
   }
 
   // Opening a file that's already got a tab just activates that tab (same
@@ -479,7 +549,32 @@ const EditorView = forwardRef(function EditorView(
     }
     setOpenTabs((prev) => [...prev, { path, content: '', savedContent: '', fileStatus: 'Loading…' }])
     setActiveTabPath(path)
-    await loadFileIntoTab(path)
+    const content = await loadFileIntoTab(path)
+    if (content != null && isGoFile(path)) {
+      await ensureLspOpen(path, content)
+    }
+  }
+
+  // Opens (or activates) path, then scrolls the given gopls
+  // line/character position into view — the go-to-definition target for
+  // lspDefinitionExtensionFor (see languageExtensionsFor below). A
+  // same-file jump ends up calling this too; openFile's "already open"
+  // branch just activates the existing tab, so this still works.
+  async function jumpToDefinition(path, line, character) {
+    await openFile(path)
+    // The target tab's CodeMirror instance may not have mounted yet (a
+    // brand-new tab's onCreateEditor fires after openFile's awaited work
+    // above resolves) — poll briefly rather than assuming it's ready.
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const view = codeMirrorViewsByPath.current[path]
+      if (view) {
+        const offset = positionToOffset(view.state.doc, { line, character })
+        view.dispatch({ selection: EditorSelection.cursor(offset), scrollIntoView: true })
+        view.focus()
+        return
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
   }
 
   // No deps array: openFile is a plain function redefined every render (it
@@ -500,6 +595,7 @@ const EditorView = forwardRef(function EditorView(
     if (tab && tab.content !== tab.savedContent && !(await confirmDiscardChanges(path))) return
     delete lintDiagnosticsByPath.current[path]
     delete codeMirrorViewsByPath.current[path]
+    closeLspDocument(path)
     setOpenTabs((prev) => {
       const next = prev.filter((t) => t.path !== path)
       if (path === activeTabPath) {
@@ -509,13 +605,39 @@ const EditorView = forwardRef(function EditorView(
     })
   }
 
+  // Shared didClose/cleanup for one path — called from both closeTab and
+  // removeTabNoConfirm below, since both remove a tab, just with
+  // different confirmation behavior.
+  function closeLspDocument(path) {
+    if (lspChangeTimers.current[path]) clearTimeout(lspChangeTimers.current[path])
+    delete lspChangeTimers.current[path]
+    delete lspDiagnosticsByPath.current[path]
+    delete lspVersionByPath.current[path]
+    delete lspCompletionSourceByPath.current[path]
+    lspClientRef.current?.didClose(path)
+  }
+
   // Used where an operation invalidates every open file at once (folder
   // switch, branch switch) — callers are responsible for confirming with
   // anyDirty/confirmDiscardAllChanges first, since a per-tab confirm here
   // would mean answering one popup per open tab.
+  //
+  // Unlike closeTab/removeTabNoConfirm's per-path didClose, the whole LSP
+  // session is just closed outright here rather than looped over every
+  // open tab: gopls's workspace root is fixed at process spawn (like
+  // TerminalView's PTY cwd), so a folder switch makes the entire session
+  // stale regardless of which files were open. It reconnects lazily the
+  // next time a .go file is opened (see ensureLspOpen).
   function closeAllTabs() {
     lintDiagnosticsByPath.current = {}
     codeMirrorViewsByPath.current = {}
+    for (const timer of Object.values(lspChangeTimers.current)) clearTimeout(timer)
+    lspChangeTimers.current = {}
+    lspDiagnosticsByPath.current = {}
+    lspVersionByPath.current = {}
+    lspCompletionSourceByPath.current = {}
+    lspClientRef.current?.close()
+    lspClientRef.current = null
     setOpenTabs([])
     setActiveTabPath(null)
   }
@@ -527,6 +649,7 @@ const EditorView = forwardRef(function EditorView(
   function removeTabNoConfirm(path) {
     delete lintDiagnosticsByPath.current[path]
     delete codeMirrorViewsByPath.current[path]
+    closeLspDocument(path)
     setOpenTabs((prev) => {
       const next = prev.filter((t) => t.path !== path)
       if (path === activeTabPath) {
@@ -638,13 +761,30 @@ const EditorView = forwardRef(function EditorView(
     try {
       const res = await renameEditorFile(fromPath, toPath)
       if (!res.ok) throw new Error(await res.text())
-      if (openTabs.some((t) => t.path === fromPath)) {
+      const renamedTab = openTabs.find((t) => t.path === fromPath)
+      if (renamedTab) {
         lintDiagnosticsByPath.current[toPath] = lintDiagnosticsByPath.current[fromPath]
         delete lintDiagnosticsByPath.current[fromPath]
         codeMirrorViewsByPath.current[toPath] = codeMirrorViewsByPath.current[fromPath]
         delete codeMirrorViewsByPath.current[fromPath]
+        // gopls tracks documents by URI — a rename of an open file needs
+        // its own didClose(old)/didOpen(new), same as closing one tab and
+        // opening another, or gopls would keep reporting diagnostics
+        // against a path that no longer exists.
+        if (isGoFile(fromPath) && lspClientRef.current) {
+          lspClientRef.current.didClose(fromPath)
+        }
+        lspDiagnosticsByPath.current[toPath] = lspDiagnosticsByPath.current[fromPath]
+        delete lspDiagnosticsByPath.current[fromPath]
+        delete lspVersionByPath.current[fromPath]
+        delete lspCompletionSourceByPath.current[fromPath]
+        if (lspChangeTimers.current[fromPath]) clearTimeout(lspChangeTimers.current[fromPath])
+        delete lspChangeTimers.current[fromPath]
         setOpenTabs((prev) => prev.map((t) => (t.path === fromPath ? { ...t, path: toPath } : t)))
         if (activeTabPath === fromPath) setActiveTabPath(toPath)
+        if (isGoFile(toPath) && lspClientRef.current) {
+          ensureLspOpen(toPath, renamedTab.content)
+        }
       }
       refreshTree()
       refreshGitStatus()
@@ -891,7 +1031,52 @@ const EditorView = forwardRef(function EditorView(
   // canWrite the same way Save is — completion is pointless in a
   // read-only file access configuration.
   function languageExtensionsFor(path) {
-    return [...languageExtensionFor(path), ...oxlintExtensionFor(path), ...aiCompletionExtension(languageNameFor(path), canWrite)]
+    const base = [...languageExtensionFor(path), ...oxlintExtensionFor(path), ...aiCompletionExtension(languageNameFor(path), canWrite)]
+    if (!isGoFile(path) || !lspClientRef.current) return base
+    return [
+      ...base,
+      ...lspLintExtensionFor(path, lspDiagnosticsByPath),
+      lspCompletionExtensionFor(path, lspClientRef, flushLspChange, lspCompletionSourceByPath),
+      lspHoverExtensionFor(path, lspClientRef, flushLspChange),
+      ...lspDefinitionExtensionFor(path, lspClientRef, jumpToDefinition, flushLspChange),
+    ]
+  }
+
+  // didChange, debounced per path (see LSP_CHANGE_DEBOUNCE_MS) so typing
+  // doesn't send a WS message per keystroke — mirrors aiCompletion.js's
+  // own debounce for the same reason.
+  function handleTabContentChange(path, value) {
+    setOpenTabs((prev) => prev.map((x) => (x.path === path ? { ...x, content: value } : x)))
+    if (!isGoFile(path) || !lspClientRef.current) return
+    if (lspChangeTimers.current[path]) clearTimeout(lspChangeTimers.current[path])
+    lspChangeTimers.current[path] = setTimeout(() => {
+      sendLspChange(path, value)
+    }, LSP_CHANGE_DEBOUNCE_MS)
+  }
+
+  function sendLspChange(path, text) {
+    delete lspChangeTimers.current[path]
+    const version = (lspVersionByPath.current[path] ?? 1) + 1
+    lspVersionByPath.current[path] = version
+    lspClientRef.current?.didChange(path, text, version)
+  }
+
+  // Completion/hover/go-to-definition are all "answer this right now"
+  // requests, unlike didChange's debounced background sync — if a
+  // debounced edit is still pending when one of them fires (typing
+  // "strings." and immediately wanting completions, well inside the
+  // 400ms window), gopls would answer against whatever content it last
+  // received, not what's actually on screen (observed as gopls's own
+  // "column is beyond end of line" error during testing). Cancelling the
+  // pending timer and sending the current buffer synchronously first
+  // guarantees gopls is caught up before the request that needs the
+  // answer is sent — WS delivery order guarantees gopls processes the
+  // didChange notification before the following request (see
+  // internal/lsp/handler.go's Forward, called once per frame in order).
+  function flushLspChange(path, view) {
+    if (!isGoFile(path) || !lspClientRef.current) return
+    if (lspChangeTimers.current[path]) clearTimeout(lspChangeTimers.current[path])
+    sendLspChange(path, view.state.doc.toString())
   }
   const staged = gitStatus.filter((s) => s.staged)
   const unstaged = gitStatus.filter((s) => s.unstaged)
@@ -1052,9 +1237,7 @@ const EditorView = forwardRef(function EditorView(
         theme={theme}
         languageExtensionsFor={languageExtensionsFor}
         onEditorKeyDown={handleEditorKeyDown}
-        onTabContentChange={(path, value) =>
-          setOpenTabs((prev) => prev.map((x) => (x.path === path ? { ...x, content: value } : x)))
-        }
+        onTabContentChange={handleTabContentChange}
         codeMirrorViewsByPath={codeMirrorViewsByPath}
         diffLines={diffLines}
         onCloseDiff={() => setDiffPath(null)}

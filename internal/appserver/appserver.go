@@ -18,6 +18,7 @@ import (
 	"fastllm/internal/chat"
 	"fastllm/internal/files"
 	"fastllm/internal/llm"
+	"fastllm/internal/lsp"
 	"fastllm/internal/store"
 	"fastllm/internal/terminal"
 	"fastllm/internal/vector"
@@ -91,7 +92,11 @@ type Built struct {
 	Mux              *http.ServeMux
 	DB               *sql.DB
 	TerminalRegistry *terminal.Registry
-	Handler          *chat.Handler
+	// LSPRegistry is nil if gopls wasn't found on PATH at startup (see
+	// lsp.Available) — CloseAll is nil-receiver-safe, so shutdown paths
+	// can call it unconditionally either way.
+	LSPRegistry *lsp.Registry
+	Handler     *chat.Handler
 	// TerminalBaseURL must be set (via .Set("http://127.0.0.1:<port>")) by
 	// the entrypoint once it knows its own actual bound loopback address —
 	// see terminal.BaseURLHolder's doc comment for why Build can't do this
@@ -240,6 +245,21 @@ func Build(cfg Config) (*Built, error) {
 	terminalBaseURL := terminal.NewBaseURLHolder()
 	mux.HandleFunc("GET /api/terminal/ws", terminal.NewHandler(terminalRegistry, terminalGate, fileReader, terminalBaseURL))
 
+	// No settings toggle for this one, unlike terminalGate above — LSP has
+	// no destructive capability a user would ever want to keep off, so
+	// "is gopls installed" is the only gate needed. When it's missing the
+	// route simply isn't registered, rather than being registered and
+	// 404ing at request time the way the terminal route does for its own
+	// (live-toggleable) gate.
+	var lspRegistry *lsp.Registry
+	if lsp.Available() {
+		lspRegistry = lsp.NewRegistry()
+		mux.HandleFunc("GET /api/editor/lsp/ws", lsp.NewHandler(lspRegistry, fileReader))
+		log.Printf("gopls found — /api/editor/lsp/ws will provide Go diagnostics, completion, hover, and go-to-definition")
+	} else {
+		log.Printf("lsp: gopls not found on PATH — Go language features (diagnostics, completion, hover, go-to-definition) disabled")
+	}
+
 	// OpenAI-compatible proxy an external tool (e.g. a terminal-based AI
 	// CLI, run inside the built-in Terminal pane) can point its API base
 	// URL at instead of the local model server directly — see
@@ -256,5 +276,5 @@ func Build(cfg Config) (*Built, error) {
 
 	mux.Handle("/", http.FileServer(http.FS(web.FS())))
 
-	return &Built{Mux: mux, DB: db, TerminalRegistry: terminalRegistry, Handler: handler, TerminalBaseURL: terminalBaseURL}, nil
+	return &Built{Mux: mux, DB: db, TerminalRegistry: terminalRegistry, LSPRegistry: lspRegistry, Handler: handler, TerminalBaseURL: terminalBaseURL}, nil
 }
