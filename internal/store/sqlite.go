@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS messages (
 	role TEXT NOT NULL,
 	content TEXT NOT NULL,
 	images TEXT,
+	source TEXT,
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -87,7 +88,15 @@ type Message struct {
 	Content       string            `json:"content"`
 	Images        []string          `json:"images,omitempty"`         // data URIs — see SaveMessage/LoadMessages
 	PendingWrites []PendingWriteRow `json:"pending_writes,omitempty"` // see SaveMessage/LoadMessages and SetMessagePendingWrites
-	CreatedAt     string            `json:"created_at"`
+	// Source is "" for a message the human typed into the composer, or
+	// "terminal" for one that arrived via the live terminal↔chat bridge
+	// (see internal/chat/live.go) — a "Live Terminal" conversation can mix
+	// both, since nothing stops a human from also typing directly into
+	// that same conversation. The frontend uses this to label a "user"
+	// role message with something other than the machine's own username
+	// when it wasn't actually the human who typed it.
+	Source    string `json:"source,omitempty"`
+	CreatedAt string `json:"created_at"`
 }
 
 // PendingWriteRow is a model-proposed file write, as persisted alongside
@@ -218,6 +227,9 @@ func Open(path string) (*sql.DB, error) {
 	if err := addMessagesPendingWritesColumn(db); err != nil {
 		return nil, fmt.Errorf("store: migrate: %w", err)
 	}
+	if err := addMessagesSourceColumn(db); err != nil {
+		return nil, fmt.Errorf("store: migrate: %w", err)
+	}
 	if err := seedDefaultSkills(db); err != nil {
 		return nil, fmt.Errorf("store: seed skills: %w", err)
 	}
@@ -320,6 +332,18 @@ func addMessagesImagesColumn(db *sql.DB) error {
 // same upgrade-path pattern as addConversationIDColumn/addMessagesImagesColumn.
 func addMessagesPendingWritesColumn(db *sql.DB) error {
 	_, err := db.Exec(`ALTER TABLE messages ADD COLUMN pending_writes TEXT`)
+	if err != nil && strings.Contains(err.Error(), "duplicate column name") {
+		return nil
+	}
+	return err
+}
+
+// addMessagesSourceColumn adds the source column to a messages table
+// created before it existed — same upgrade-path pattern as
+// addConversationIDColumn/addMessagesImagesColumn. NULL (the default for
+// every pre-existing row) means "the composer" — see SaveMessageWithSource.
+func addMessagesSourceColumn(db *sql.DB) error {
+	_, err := db.Exec(`ALTER TABLE messages ADD COLUMN source TEXT`)
 	if err != nil && strings.Contains(err.Error(), "duplicate column name") {
 		return nil
 	}
@@ -452,6 +476,16 @@ func migrateGeneralAssistantPrompt(db *sql.DB) error {
 // SaveAssistantMessage (to attach pending writes below) and available to
 // any other caller that wants it, though most just discard it with _.
 func SaveMessage(db *sql.DB, workspaceID string, conversationID int64, role, content string, images []string) (int64, error) {
+	return SaveMessageWithSource(db, workspaceID, conversationID, role, content, images, "")
+}
+
+// SaveMessageWithSource is SaveMessage plus an explicit Source (see
+// Message.Source) — used by the live terminal↔chat bridge
+// (internal/chat/live.go) to mark its messages as not human-typed, so the
+// Chat panel doesn't label them with the machine's own username. Every
+// other caller goes through the plain SaveMessage above, which always
+// stores "" (the composer).
+func SaveMessageWithSource(db *sql.DB, workspaceID string, conversationID int64, role, content string, images []string, source string) (int64, error) {
 	var imagesJSON any
 	if len(images) > 0 {
 		enc, err := json.Marshal(images)
@@ -460,9 +494,13 @@ func SaveMessage(db *sql.DB, workspaceID string, conversationID int64, role, con
 		}
 		imagesJSON = string(enc)
 	}
+	var sourceVal any
+	if source != "" {
+		sourceVal = source
+	}
 	res, err := db.Exec(
-		`INSERT INTO messages (workspace_id, conversation_id, role, content, images) VALUES (?, ?, ?, ?, ?)`,
-		workspaceID, conversationID, role, content, imagesJSON)
+		`INSERT INTO messages (workspace_id, conversation_id, role, content, images, source) VALUES (?, ?, ?, ?, ?, ?)`,
+		workspaceID, conversationID, role, content, imagesJSON, sourceVal)
 	if err != nil {
 		return 0, err
 	}
@@ -515,7 +553,7 @@ func setMessagePendingWritesByID(db *sql.DB, messageID int64, writes []PendingWr
 
 func LoadMessages(db *sql.DB, workspaceID string, conversationID int64) ([]Message, error) {
 	rows, err := db.Query(
-		`SELECT id, role, content, images, pending_writes, created_at FROM messages
+		`SELECT id, role, content, images, pending_writes, source, created_at FROM messages
 		 WHERE workspace_id = ? AND conversation_id = ? ORDER BY id ASC`,
 		workspaceID, conversationID)
 	if err != nil {
@@ -526,10 +564,11 @@ func LoadMessages(db *sql.DB, workspaceID string, conversationID int64) ([]Messa
 	out := []Message{}
 	for rows.Next() {
 		var m Message
-		var imagesJSON, pendingWritesJSON sql.NullString
-		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &imagesJSON, &pendingWritesJSON, &m.CreatedAt); err != nil {
+		var imagesJSON, pendingWritesJSON, source sql.NullString
+		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &imagesJSON, &pendingWritesJSON, &source, &m.CreatedAt); err != nil {
 			return nil, err
 		}
+		m.Source = source.String
 		if imagesJSON.Valid {
 			// Best-effort: a row that somehow has malformed JSON here just
 			// loses its images rather than failing the whole conversation

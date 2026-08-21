@@ -190,7 +190,7 @@ func (h *Handler) ExternalChatCompletions(w http.ResponseWriter, r *http.Request
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if _, err := store.SaveMessage(h.DB, defaultWorkspace, convID, "user", userText, nil); err != nil {
+	if _, err := store.SaveMessageWithSource(h.DB, defaultWorkspace, convID, "user", userText, nil, "terminal"); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -218,7 +218,7 @@ func (h *Handler) ExternalChatCompletions(w http.ResponseWriter, r *http.Request
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		if _, err := store.SaveAssistantMessage(h.DB, defaultWorkspace, convID, full.String(), nil); err != nil {
+		if _, err := store.SaveMessageWithSource(h.DB, defaultWorkspace, convID, "assistant", full.String(), nil, "terminal"); err != nil {
 			log.Printf("save external assistant message: %v", err)
 		}
 		h.Live.Publish(LiveEvent{ConversationID: convID, Type: "done", TurnID: turnID})
@@ -249,7 +249,7 @@ func (h *Handler) ExternalChatCompletions(w http.ResponseWriter, r *http.Request
 		// stream (see Chat above).
 		log.Printf("external chat stream: %v", err)
 	}
-	if _, err := store.SaveAssistantMessage(h.DB, defaultWorkspace, convID, full.String(), nil); err != nil {
+	if _, err := store.SaveMessageWithSource(h.DB, defaultWorkspace, convID, "assistant", full.String(), nil, "terminal"); err != nil {
 		log.Printf("save external assistant message: %v", err)
 	}
 	h.Live.Publish(LiveEvent{ConversationID: convID, Type: "done", TurnID: turnID})
@@ -378,7 +378,7 @@ func (h *Handler) AnthropicMessages(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if _, err := store.SaveMessage(h.DB, defaultWorkspace, convID, "user", userText, nil); err != nil {
+	if _, err := store.SaveMessageWithSource(h.DB, defaultWorkspace, convID, "user", userText, nil, "terminal"); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -407,7 +407,7 @@ func (h *Handler) AnthropicMessages(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		if _, err := store.SaveAssistantMessage(h.DB, defaultWorkspace, convID, full.String(), nil); err != nil {
+		if _, err := store.SaveMessageWithSource(h.DB, defaultWorkspace, convID, "assistant", full.String(), nil, "terminal"); err != nil {
 			log.Printf("save external assistant message: %v", err)
 		}
 		h.Live.Publish(LiveEvent{ConversationID: convID, Type: "done", TurnID: msgID})
@@ -469,7 +469,7 @@ func (h *Handler) AnthropicMessages(w http.ResponseWriter, r *http.Request) {
 		// generated rather than leaving the client's stream half-open.
 		log.Printf("anthropic messages stream: %v", err)
 	}
-	if _, err := store.SaveAssistantMessage(h.DB, defaultWorkspace, convID, full.String(), nil); err != nil {
+	if _, err := store.SaveMessageWithSource(h.DB, defaultWorkspace, convID, "assistant", full.String(), nil, "terminal"); err != nil {
 		log.Printf("save external assistant message: %v", err)
 	}
 	h.Live.Publish(LiveEvent{ConversationID: convID, Type: "done", TurnID: msgID})
