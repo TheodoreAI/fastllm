@@ -266,7 +266,9 @@ export default function ChatPanel({
             (!m.toolCalls || m.toolCalls.length === 0)
           return (
           <div key={i} className={`message ${m.role} ${m.isError ? 'is-error' : ''}`}>
-            <span className="role">{m.role === 'user' ? userDisplayName || 'user' : m.role}</span>
+            <span className="role">
+              {m.role === 'user' ? (m.source === 'terminal' ? 'CLI' : userDisplayName || 'user') : m.role}
+            </span>
             {isAwaitingResponse && (
               <div className="typing-indicator" role="status" aria-label="Waiting for model response">
                 <span></span><span></span><span></span>

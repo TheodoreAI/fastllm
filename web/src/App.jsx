@@ -413,8 +413,8 @@ export default function App() {
                 if (evt.type === 'user_message') {
                   setMessages((prev) => [
                     ...prev,
-                    { role: 'user', content: evt.text, images: [], liveTurnId: evt.turn_id },
-                    { role: 'assistant', content: '', sources: [], reasoning: '', toolCalls: [], pendingWrites: [], buildChecks: [], usage: null, liveTurnId: evt.turn_id },
+                    { role: 'user', content: evt.text, images: [], liveTurnId: evt.turn_id, source: 'terminal' },
+                    { role: 'assistant', content: '', sources: [], reasoning: '', toolCalls: [], pendingWrites: [], buildChecks: [], usage: null, liveTurnId: evt.turn_id, source: 'terminal' },
                   ])
                 } else if (evt.type === 'token') {
                   // Keyed by turn_id, not "the last message" — two turns
