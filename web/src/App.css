@@ -1451,7 +1451,7 @@ body {
 
 .draggable-section {
   position: relative;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius);
   transition: background 0.1s ease;
 }
 
@@ -1503,6 +1503,7 @@ body {
 }
 
 .draggable-section-title {
+  margin: 0 6px;
   font-size: 0.6875rem;
   font-weight: 600;
   letter-spacing: 0.4px;
@@ -3212,7 +3213,21 @@ body {
   flex-direction: column;
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border);
+  border-left: 1px solid var(--border);
+  border-radius: var(--radius);
   overflow: hidden;
+}
+
+/* Only when Editor shares the left column with a stacked mate (see
+   App.jsx's editorSharesLeftColumn) does the sidebar sit outside any
+   DraggableSection of its own, across a real gap (.editor-sidebar-divider)
+   from the pane stack — so its right corners need their own rounding to
+   match, mirroring every other divider gap in the app. When Editor is
+   alone, the sidebar lives inside the same DraggableSection as the main
+   content and that section's own rounded+clipped box already handles it. */
+.editor-sidebar-row .editor-sidebar {
+  border-top-right-radius: var(--radius);
+  border-bottom-right-radius: var(--radius);
 }
 
 .editor-sidebar-divider {
@@ -4114,10 +4129,27 @@ body {
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: 4px 6px 0;
+  padding: 4px 6px;
   overflow-x: auto;
   border-bottom: 1px solid var(--border);
   background: var(--bg-panel);
+  flex: 0 0 auto;
+}
+
+.editor-tabs-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  padding-left: 8px;
+  flex: 0 0 auto;
+}
+
+.editor-file-subheader {
+  display: flex;
+  align-items: center;
+  padding: 3px 12px;
+  background: transparent;
   flex: 0 0 auto;
 }
 
@@ -4191,9 +4223,9 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.8125rem;
+  font-size: 0.75rem;
   font-family: ui-monospace, 'SF Mono', Consolas, 'Cascadia Code', monospace;
-  color: var(--text);
+  color: var(--text-dim);
 }
 
 .editor-file-status {

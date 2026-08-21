@@ -59,26 +59,30 @@ export default function EditorPane({
               </div>
             )
           })}
+          {!diffPath && (
+            <div className="editor-tabs-actions">
+              {fileStatus && <span className="editor-file-status">{fileStatus}</span>}
+              {!canWrite && (
+                <span className="editor-readonly-badge" title="File writes are disabled in Settings → File access">
+                  Read-only
+                </span>
+              )}
+              <button
+                type="button"
+                className={`editor-save-button${saving ? ' is-saving' : ''}`}
+                onClick={onSave}
+                disabled={!canWrite || !dirty || saving}
+                title={canWrite ? '' : 'File writes are disabled in Settings → File access'}
+              >
+                {saving ? 'Saving…' : dirty ? 'Save' : 'Saved'}
+              </button>
+            </div>
+          )}
         </div>
       )}
       {openTabs.length > 0 && !diffPath && (
-        <div className="editor-file-header">
+        <div className="editor-file-subheader">
           <span className="editor-file-path">{openPath}</span>
-          {fileStatus && <span className="editor-file-status">{fileStatus}</span>}
-          {!canWrite && (
-            <span className="editor-readonly-badge" title="File writes are disabled in Settings → File access">
-              Read-only
-            </span>
-          )}
-          <button
-            type="button"
-            className={`editor-save-button${saving ? ' is-saving' : ''}`}
-            onClick={onSave}
-            disabled={!canWrite || !dirty || saving}
-            title={canWrite ? '' : 'File writes are disabled in Settings → File access'}
-          >
-            {saving ? 'Saving…' : dirty ? 'Save' : 'Saved'}
-          </button>
         </div>
       )}
       {/* Every open tab keeps its own CodeMirror instance mounted (just
