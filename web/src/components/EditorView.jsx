@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { linter, lintGutter, forceLinting } from '@codemirror/lint'
 import {
   fetchEditorTree,
@@ -29,21 +30,36 @@ import { languageExtensionFor, languageNameFor } from '../editorLanguages'
 import { parseDiff } from '../diffFormat'
 import { aiCompletionExtension } from '../aiCompletion'
 import { useEditorSidebarWidth } from '../useEditorSidebarWidth'
-import { useTerminalPanelHeight } from '../useTerminalPanelHeight'
 import FileTree from './FileTree'
 import GitPanel from './GitPanel'
 import SearchPanel from './SearchPanel'
 import EditorPane from './EditorPane'
-import TerminalView from './TerminalView'
 import ConfirmDeleteModal from './ConfirmDeleteModal'
 
+// Terminal used to live nested inside this component (a bottom-docked
+// panel under the file tabs) — it's now its own top-level pane in App.jsx,
+// reorderable alongside Editor and Chat (see usePaneSlots), so none of its
+// state/handlers live here anymore.
+//
+// Mounted exactly once, unconditionally, regardless of where Editor sits
+// in App.jsx's pane grid — its own DOM output is entirely two portals
+// (see the return below) rather than a normal inline render, so this
+// component's state (open tabs, git status, the SSE git-watch
+// subscription) survives Editor being dragged between slots or collapsed
+// instead of remounting and losing it. `sidebarContainer` and
+// `mainContainer` are DOM nodes App.jsx hands down (they can be the same
+// node, when Editor is off alone in a slot with no column-mate, or two
+// different nodes — the sidebar spanning the full height of a shared left
+// column next to Terminal, mirroring a conventional IDE's file explorer —
+// see App.jsx's renderPanes for which). Both are null for one initial
+// render (App.jsx hasn't measured a DOM node to portal into yet), so nothing
+// is portaled that render — not a bug, just a one-frame gap before content
+// appears.
 export default function EditorView({
   fileAccessSettings,
   onFileAccessSettingsChange,
   theme,
   terminalEnabled,
-  visible,
-  paneCollapsed,
   openFolderSignal,
   onOpenSettings,
   panel,
@@ -52,8 +68,8 @@ export default function EditorView({
   onOpenPathChange,
   sidebarCollapsed,
   onSidebarCollapsedChange,
-  terminalCollapsed,
-  onTerminalCollapsedChange,
+  sidebarContainer,
+  mainContainer,
 }) {
   const [tree, setTree] = useState([])
   const [treeStatus, setTreeStatus] = useState('')
@@ -130,77 +146,28 @@ export default function EditorView({
   const [folderError, setFolderError] = useState('')
   const setSidebarCollapsed = onSidebarCollapsedChange
   const [sidebarWidth, setSidebarWidth] = useEditorSidebarWidth()
-  const [terminalPanelHeight, setTerminalPanelHeight] = useTerminalPanelHeight()
-  const setTerminalCollapsed = onTerminalCollapsedChange
-  const mainColumnRef = useRef(null)
   const sidebarRef = useRef(null)
-  // EditorView is always mounted (just hidden) so Chat<->Editor switches
-  // don't lose state — but that means the terminal shouldn't mount along
-  // with it, or every app load would spawn a PowerShell session even for
-  // someone who never opens the Editor tab. Tracks whether this view has
-  // ever actually been made visible, so the first terminal tab only
-  // mounts — and spawns a real shell — the first time the user navigates
-  // here.
-  const [everVisible, setEverVisible] = useState(false)
-  useEffect(() => {
-    if (visible) setEverVisible(true)
-  }, [visible])
-
-  // Each terminal tab is an independently mounted <TerminalView>, its own
-  // xterm instance and WebSocket/PTY session server-side (see
-  // internal/terminal/registry.go — already tracks any number of
-  // sessions and tears every one of them down together on app shutdown,
-  // so multiple tabs needed no backend changes). All tabs stay mounted
-  // (display:none when inactive) so switching tabs never loses
-  // scrollback or kills the underlying shell, mirroring the
-  // always-mounted convention used for the Chat/Editor panes themselves.
-  const [terminalTabs, setTerminalTabs] = useState(() => [1])
-  const [activeTerminalTab, setActiveTerminalTab] = useState(1)
-  const nextTerminalIdRef = useRef(2)
-
-  function addTerminalTab() {
-    const id = nextTerminalIdRef.current++
-    setTerminalTabs((prev) => [...prev, id])
-    setActiveTerminalTab(id)
-  }
-
-  function closeTerminalTab(id) {
-    setTerminalTabs((prev) => {
-      const next = prev.filter((t) => t !== id)
-      // Closing the last tab still leaves at least one behind — a
-      // terminal panel with zero tabs and no way to get one back short
-      // of reloading the whole app would be a dead end, not a real
-      // "closed" state.
-      if (next.length === 0) {
-        const freshId = nextTerminalIdRef.current++
-        setActiveTerminalTab(freshId)
-        return [freshId]
-      }
-      if (id === activeTerminalTab) {
-        setActiveTerminalTab(next[next.length - 1])
-      }
-      return next
-    })
-  }
 
   const enabled = !!fileAccessSettings?.read_enabled
   const canWrite = !!fileAccessSettings?.write_enabled
   const dirty = content !== savedContent
 
-  // The three toggles a fresh install needs before the Editor/Terminal
-  // tab does anything useful (file access, an actual folder, and the
-  // terminal) are independent settings with no enforced order — nothing
-  // stops picking a folder before turning on file access, or opening the
-  // terminal panel before enabling it. Surfaced as a checklist in the
-  // empty-file-tree state (see editor-empty-state below) rather than a
-  // blocking first-run wizard: it's just the same "select a file"
-  // placeholder every other empty state already shows, made useful for
-  // exactly as long as setup is actually incomplete, then it goes back to
-  // being the plain placeholder — no new persisted "onboarding done" flag
-  // to invent or reset.
+  // The three toggles a fresh install needs before the Editor/Terminal tab
+  // does anything useful — ordered to match their real dependency, not
+  // just listed alphabetically-by-feature: Settings' own "Allow reading
+  // files" checkbox is disabled until a root is set (see SettingsPanel's
+  // fileAccessRootEmpty), so picking a folder always has to come before
+  // file access can actually be turned on. Terminal has no such
+  // dependency on the other two, so it stays last. Surfaced as a
+  // checklist in the empty-file-tree state (see editor-empty-state below)
+  // rather than a blocking first-run wizard: it's just the same "select a
+  // file" placeholder every other empty state already shows, made useful
+  // for exactly as long as setup is actually incomplete, then it goes
+  // back to being the plain placeholder — no new persisted "onboarding
+  // done" flag to invent or reset.
   const setupSteps = [
-    { key: 'fileAccess', label: 'Allow file access', done: enabled, action: () => onOpenSettings?.('fileAccess') },
     { key: 'folder', label: 'Open a folder', done: !!fileAccessSettings?.root, action: handleOpenFolder },
+    { key: 'fileAccess', label: 'Allow file access', done: enabled, action: () => onOpenSettings?.('fileAccess') },
     { key: 'terminal', label: 'Enable the terminal', done: !!terminalEnabled, action: () => onOpenSettings?.('terminal') },
   ]
   const setupComplete = setupSteps.every((step) => step.done)
@@ -440,14 +407,15 @@ export default function EditorView({
   // File → Open Folder… menu item), and a counter re-fires this effect on
   // every click even if the user picks the same signal value twice in a
   // row (a boolean toggled true/false wouldn't change on every other
-  // click). Skips the mount-time run (undefined/0) so opening the app
-  // doesn't immediately pop the folder dialog.
-  const isFirstOpenFolderSignal = useRef(true)
+  // click). App.jsx initializes it to null specifically so "never
+  // requested" is a real, distinguishable value here — comparing against
+  // null (rather than a ref that has to remember "was this the first
+  // render") stays correct across React StrictMode's dev-only double
+  // mount/unmount and Vite HMR, neither of which should re-arm a ref-based
+  // guard but both of which have, in practice, popped this dialog on
+  // launch when the guard was a ref.
   useEffect(() => {
-    if (isFirstOpenFolderSignal.current) {
-      isFirstOpenFolderSignal.current = false
-      return
-    }
+    if (openFolderSignal == null) return
     handleOpenFolder()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openFolderSignal])
@@ -904,39 +872,11 @@ export default function EditorView({
   const staged = gitStatus.filter((s) => s.staged)
   const unstaged = gitStatus.filter((s) => s.unstaged)
 
-  // Drags the terminal panel's top divider to resize it vertically.
-  // Tracks the cursor against the main column's own bottom edge (rather
-  // than delta movement) so a fast drag can't desync from the cursor.
-  // Clamped so the panel can't be dragged to nothing or to swallow the
-  // whole column.
-  function handleTerminalDragStart(e) {
-    e.preventDefault()
-    const container = mainColumnRef.current
-    if (!container) return
-
-    const previousUserSelect = document.body.style.userSelect
-    document.body.style.userSelect = 'none'
-
-    function handleMove(moveEvent) {
-      const rect = container.getBoundingClientRect()
-      const height = rect.bottom - moveEvent.clientY
-      setTerminalPanelHeight(Math.min(rect.height - 120, Math.max(120, height)))
-    }
-    function handleUp() {
-      window.removeEventListener('mousemove', handleMove)
-      window.removeEventListener('mouseup', handleUp)
-      document.body.style.userSelect = previousUserSelect
-    }
-    window.addEventListener('mousemove', handleMove)
-    window.addEventListener('mouseup', handleUp)
-  }
-
   // Drags the sidebar's right-edge divider to resize the Files/Search/Git
   // panel horizontally. Tracks the cursor against the sidebar's own left
   // edge (rather than delta movement) so a fast drag can't desync from
-  // the cursor — same approach as handleTerminalDragStart above, just on
-  // the horizontal axis. Clamped so the panel can't be dragged to nothing
-  // or to swallow the whole editor.
+  // the cursor. Clamped so the panel can't be dragged to nothing or to
+  // swallow the whole editor.
   function handleSidebarDragStart(e) {
     e.preventDefault()
     const el = sidebarRef.current
@@ -959,17 +899,8 @@ export default function EditorView({
     window.addEventListener('mouseup', handleUp)
   }
 
-  if (!enabled) {
-    return (
-      <div className="editor-view editor-view-empty">
-        {setupChecklist}
-      </div>
-    )
-  }
-
-  return (
-    <div className="editor-view">
-      {!paneCollapsed && !sidebarCollapsed && (
+  const sidebar = !sidebarCollapsed && (
+    <>
       <aside
         ref={sidebarRef}
         className="editor-sidebar"
@@ -1059,142 +990,52 @@ export default function EditorView({
           />
         )}
       </aside>
-      )}
 
-      {!paneCollapsed && !sidebarCollapsed && (
-        <div className="editor-sidebar-divider" onMouseDown={handleSidebarDragStart} />
-      )}
+      <div className="editor-sidebar-divider" onMouseDown={handleSidebarDragStart} />
+    </>
+  )
 
-      <main className="editor-main" ref={mainColumnRef}>
-        {/* editor-main-content itself is flex:1 (see App.css), which is
-            what keeps the terminal pinned to the bottom of this column —
-            without something to fill that space here, the fixed-height
-            terminal-panel below would end up flex-start'd to the TOP of
-            the column instead, with the empty area beneath it rather than
-            above. A bare filler div does the same job EditorPane's own
-            flex:1 content already did. */}
-        {!paneCollapsed ? (
-          <EditorPane
-            openTabs={openTabs}
-            activeTabPath={activeTabPath}
-            diffPath={diffPath}
-            onSelectTab={(path) => {
-              setDiffPath(null)
-              setActiveTabPath(path)
-            }}
-            onCloseTab={closeTab}
-            openPath={openPath}
-            fileStatus={fileStatus}
-            canWrite={canWrite}
-            dirty={dirty}
-            saving={saving}
-            onSave={handleSave}
-            theme={theme}
-            languageExtensionsFor={languageExtensionsFor}
-            onEditorKeyDown={handleEditorKeyDown}
-            onTabContentChange={(path, value) =>
-              setOpenTabs((prev) => prev.map((x) => (x.path === path ? { ...x, content: value } : x)))
-            }
-            codeMirrorViewsByPath={codeMirrorViewsByPath}
-            diffLines={diffLines}
-            onCloseDiff={() => setDiffPath(null)}
-            setupComplete={setupComplete}
-            setupChecklist={setupChecklist}
-          />
-        ) : (
-          <div className="editor-main-content" />
-        )}
+  const main = !enabled ? (
+    <div className="editor-view-empty editor-main">{setupChecklist}</div>
+  ) : (
+    <main className="editor-main">
+      <EditorPane
+        openTabs={openTabs}
+        activeTabPath={activeTabPath}
+        diffPath={diffPath}
+        onSelectTab={(path) => {
+          setDiffPath(null)
+          setActiveTabPath(path)
+        }}
+        onCloseTab={closeTab}
+        openPath={openPath}
+        fileStatus={fileStatus}
+        canWrite={canWrite}
+        dirty={dirty}
+        saving={saving}
+        onSave={handleSave}
+        theme={theme}
+        languageExtensionsFor={languageExtensionsFor}
+        onEditorKeyDown={handleEditorKeyDown}
+        onTabContentChange={(path, value) =>
+          setOpenTabs((prev) => prev.map((x) => (x.path === path ? { ...x, content: value } : x)))
+        }
+        codeMirrorViewsByPath={codeMirrorViewsByPath}
+        diffLines={diffLines}
+        onCloseDiff={() => setDiffPath(null)}
+        setupComplete={setupComplete}
+        setupChecklist={setupChecklist}
+      />
+    </main>
+  )
 
-        {/* Always rendered (not just when draggable) so the gap between
-            the editor content and the terminal panel stays consistent —
-            just not draggable when there's nothing above it to resize
-            against (paneCollapsed) or nothing below it to resize
-            (terminalCollapsed). */}
-        <div
-          className="terminal-panel-divider"
-          onMouseDown={!paneCollapsed && !terminalCollapsed ? handleTerminalDragStart : undefined}
-          style={!paneCollapsed && !terminalCollapsed ? undefined : { cursor: 'default' }}
-        />
-
-        {/* Terminal stays visible and usable independent of the file
-            editor/sidebar above — collapsing the editor pane (paneCollapsed,
-            see App.jsx's editorPaneCollapsed) must not also take the
-            terminal down with it, since the two are unrelated tools that
-            happen to share this column. Keeps its usual fixed
-            terminalPanelHeight regardless of paneCollapsed, rather than
-            growing to fill the freed-up space — the height the user
-            dragged it to shouldn't change just because something else in
-            the same column got hidden. */}
-        <div
-          className={`terminal-panel ${terminalCollapsed ? 'is-collapsed' : ''}`}
-          style={{ flex: terminalCollapsed ? '0 0 auto' : `0 0 ${terminalPanelHeight}px` }}
-        >
-          <div className="terminal-panel-header">
-            {terminalEnabled && !terminalCollapsed ? (
-              <div className="terminal-tabs">
-                {terminalTabs.map((id, index) => (
-                  <div
-                    key={id}
-                    className={`terminal-tab ${id === activeTerminalTab ? 'is-active' : ''}`}
-                  >
-                    <button
-                      type="button"
-                      className="terminal-tab-label"
-                      onClick={() => setActiveTerminalTab(id)}
-                    >
-                      Terminal {index + 1}
-                    </button>
-                    <button
-                      type="button"
-                      className="terminal-tab-close"
-                      title="Close terminal"
-                      onClick={() => closeTerminalTab(id)}
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ))}
-                <button
-                  type="button"
-                  className="terminal-tab-add"
-                  title="New terminal"
-                  onClick={addTerminalTab}
-                >
-                  +
-                </button>
-              </div>
-            ) : (
-              <span className="terminal-panel-title">Terminal</span>
-            )}
-            <button
-              type="button"
-              className="terminal-panel-collapse-toggle"
-              title={terminalCollapsed ? 'Expand terminal' : 'Collapse terminal'}
-              onClick={() => setTerminalCollapsed((c) => !c)}
-            >
-              {terminalCollapsed ? '▲' : '▼'}
-            </button>
-          </div>
-          <div
-            className="terminal-panel-body"
-            style={{ display: terminalCollapsed ? 'none' : undefined }}
-          >
-            {terminalEnabled ? (
-              everVisible &&
-              terminalTabs.map((id) => (
-                <div key={id} style={{ display: id === activeTerminalTab ? 'contents' : 'none' }}>
-                  <TerminalView theme={theme} folderRoot={fileAccessSettings?.root} />
-                </div>
-              ))
-            ) : (
-              <div className="terminal-disabled-state">
-                <p>Terminal is disabled. Enable it in Settings → Terminal.</p>
-              </div>
-            )}
-          </div>
-        </div>
-      </main>
-
+  return (
+    <>
+      {/* No sidebar at all while file access is off — there's nothing to
+          browse yet, and the checklist that explains why takes over the
+          main portal instead (see `main` above). */}
+      {enabled && sidebarContainer && createPortal(sidebar, sidebarContainer)}
+      {mainContainer && createPortal(main, mainContainer)}
       {pendingConfirm && (
         <ConfirmDeleteModal
           heading={pendingConfirm.heading}
@@ -1204,6 +1045,6 @@ export default function EditorView({
           onConfirm={() => resolvePendingConfirm(true)}
         />
       )}
-    </div>
+    </>
   )
 }

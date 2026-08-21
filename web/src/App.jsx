@@ -6,6 +6,7 @@ import SkillPanel from './components/SkillPanel'
 import KnowledgeBasePanel from './components/KnowledgeBasePanel'
 import ChatPanel from './components/ChatPanel'
 import EditorView from './components/EditorView'
+import TerminalPane from './components/TerminalPane'
 import ConfirmDeleteModal from './components/ConfirmDeleteModal'
 import SettingsPanel from './components/SettingsPanel'
 import ScreenshotPreviewModal from './components/ScreenshotPreviewModal'
@@ -19,9 +20,10 @@ import { useFontScale } from './useFontScale'
 import { useSectionOrder } from './useSectionOrder'
 import { useSidebarCollapsed } from './useSidebarCollapsed'
 import { useEditorSidebarCollapsed } from './useEditorSidebarCollapsed'
-import { useTerminalCollapsed } from './useTerminalCollapsed'
 import { useEditorPaneCollapsed } from './useEditorPaneCollapsed'
-import { useSplitWidth } from './useSplitWidth'
+import { useTerminalPaneCollapsed } from './useTerminalPaneCollapsed'
+import { usePaneSlots } from './usePaneSlots'
+import { usePaneGridSizes } from './usePaneGridSizes'
 import { useConnectionStatus } from './useConnectionStatus'
 import { useModel } from './useModel'
 import { useSkillId } from './useSkillId'
@@ -139,6 +141,13 @@ function isExcludedFilename(filename) {
 
 const DEFAULT_SECTION_ORDER = ['conversations', 'model', 'skills', 'knowledge']
 
+// The fixed grid this app now uses for Editor/Terminal/Chat: top-left and
+// bottom-left stacked on the left, one full-height slot on the right — see
+// usePaneSlots and App.jsx's renderPanes.
+const DEFAULT_SLOT_ASSIGNMENT = { 'top-left': 'editor', 'bottom-left': 'terminal', right: 'chat' }
+
+const PANE_LABELS = { editor: 'Editor', terminal: 'Terminal', chat: 'Chat' }
+
 const SECTION_LABELS = {
   conversations: 'Conversations',
   model: 'Model',
@@ -235,14 +244,68 @@ export default function App() {
   const [sectionOrder, moveSection] = useSectionOrder(DEFAULT_SECTION_ORDER)
   const [sidebarCollapsed, setSidebarCollapsed] = useSidebarCollapsed()
   const [editorSidebarCollapsed, setEditorSidebarCollapsed] = useEditorSidebarCollapsed()
-  const [terminalCollapsed, setTerminalCollapsed] = useTerminalCollapsed()
   const [editorPaneCollapsed, setEditorPaneCollapsed] = useEditorPaneCollapsed()
+  const [terminalPaneCollapsed, setTerminalPaneCollapsed] = useTerminalPaneCollapsed()
   const [tweakBarOpen, setTweakBarOpen] = useState(false)
-  const [openFolderSignal, setOpenFolderSignal] = useState(0)
+  // Bump counter telling EditorView to open the native folder picker —
+  // null (not 0) means "never requested yet", so EditorView's effect can
+  // tell "app just started" apart from "the counter really did change"
+  // by comparing against null instead of relying on a ref that has to
+  // remember whether this is the first render (fragile under React
+  // StrictMode's dev-only double-invoke and under Vite HMR, both of which
+  // can re-run an effect without a fresh ref).
+  const [openFolderSignal, setOpenFolderSignal] = useState(null)
   const [editorPanel, setEditorPanel] = useEditorPanel()
   const [gitChangeCount, setGitChangeCount] = useState(0)
-  const [splitWidth, setSplitWidth] = useSplitWidth()
-  const splitContainerRef = useRef(null)
+  // Which pane sits in which of the Editor/Terminal/Chat grid's three fixed
+  // slots, and each split's size — see usePaneSlots/usePaneGridSizes' own
+  // doc comments. Reassignable the same way the right sidebar's sections
+  // are reordered (DraggableSection), just by swapping instead of splicing.
+  const [paneSlots, swapPanes] = usePaneSlots(DEFAULT_SLOT_ASSIGNMENT)
+  const [paneGridSizes, setLeftWidth, setTopHeight, setBottomHeight] = usePaneGridSizes()
+  // DOM targets EditorView portals its sidebar/main content into — see
+  // renderPanes below and EditorView's own doc comment. State (not refs)
+  // because a portal target has to be there BY RENDER TIME for
+  // createPortal to use it; a ref wouldn't trigger EditorView's own
+  // re-render once the node actually mounts.
+  const [editorSidebarContainer, setEditorSidebarContainer] = useState(null)
+  const [editorMainContainer, setEditorMainContainer] = useState(null)
+  // Each terminal tab is an independently mounted <TerminalView>, its own
+  // xterm instance and WebSocket/PTY session server-side (see
+  // internal/terminal/registry.go). Lives here rather than inside
+  // TerminalPane since that pane can unmount/remount as it's reordered —
+  // this state needs to survive that. All tabs stay mounted (display:none
+  // when inactive) so switching tabs never loses scrollback or kills the
+  // underlying shell.
+  const [terminalTabs, setTerminalTabs] = useState(() => [1])
+  const [activeTerminalTab, setActiveTerminalTab] = useState(1)
+  const nextTerminalIdRef = useRef(2)
+
+  function addTerminalTab() {
+    const id = nextTerminalIdRef.current++
+    setTerminalTabs((prev) => [...prev, id])
+    setActiveTerminalTab(id)
+  }
+
+  function closeTerminalTab(id) {
+    setTerminalTabs((prev) => {
+      const next = prev.filter((t) => t !== id)
+      // Closing the last tab still leaves at least one behind — a
+      // terminal pane with zero tabs and no way to get one back short of
+      // reloading the whole app would be a dead end, not a real "closed"
+      // state.
+      if (next.length === 0) {
+        const freshId = nextTerminalIdRef.current++
+        setActiveTerminalTab(freshId)
+        return [freshId]
+      }
+      if (id === activeTerminalTab) {
+        setActiveTerminalTab(next[next.length - 1])
+      }
+      return next
+    })
+  }
+
   const bottomRef = useRef(null)
   const fileInputRef = useRef(null)
   const folderInputRef = useRef(null)
@@ -270,14 +333,15 @@ export default function App() {
 
 
   // VS Code-style global panel shortcuts: Ctrl+B toggles the Files
-  // sidebar, Ctrl+J toggles the terminal — both panels are always part
-  // of the (permanently split) layout, so this is a plain toggle with no
-  // view to switch into first. Ctrl+Shift+M toggles the right-hand
-  // model-settings panel; plain Ctrl+M was avoided as a pairing with
-  // Ctrl+B/Ctrl+J since VS Code itself reserves unshifted Ctrl+M for
-  // focus-tabbing, and Ctrl+C (as literally requested) was ruled out
-  // because it's the OS copy shortcut used throughout chat, the code
-  // editor, and the terminal.
+  // sidebar, Ctrl+J toggles the terminal pane's presence in the
+  // Editor/Terminal/Chat row (see usePaneSlots) — both panels are always
+  // part of the (permanently split) layout, so this is a plain toggle
+  // with no view to switch into first. Ctrl+Shift+M toggles the
+  // right-hand model-settings panel; plain Ctrl+M was avoided as a
+  // pairing with Ctrl+B/Ctrl+J since VS Code itself reserves unshifted
+  // Ctrl+M for focus-tabbing, and Ctrl+C (as literally requested) was
+  // ruled out because it's the OS copy shortcut used throughout chat, the
+  // code editor, and the terminal.
   useEffect(() => {
     function handleKeyDown(e) {
       if (!(e.ctrlKey || e.metaKey)) return
@@ -287,7 +351,7 @@ export default function App() {
         setEditorSidebarCollapsed((c) => !c)
       } else if (key === 'j' && !e.shiftKey) {
         e.preventDefault()
-        setTerminalCollapsed((c) => !c)
+        setTerminalPaneCollapsed((c) => !c)
       } else if (key === 'm' && e.shiftKey) {
         e.preventDefault()
         setSidebarCollapsed((c) => !c)
@@ -300,7 +364,7 @@ export default function App() {
         // isWails() gating — there's no folder-open concept in the
         // browser build this would otherwise shadow.
         e.preventDefault()
-        setOpenFolderSignal((n) => n + 1)
+        setOpenFolderSignal((n) => (n ?? 0) + 1)
       } else if (key === 'q' && !e.shiftKey && isWails()) {
         // Matches TopBar's File → Exit, same reasoning as Ctrl+O above.
         e.preventDefault()
@@ -309,7 +373,7 @@ export default function App() {
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [setEditorSidebarCollapsed, setTerminalCollapsed, setSidebarCollapsed])
+  }, [setEditorSidebarCollapsed, setTerminalPaneCollapsed, setSidebarCollapsed])
 
   // Search and Git live on the main rail (see the Search/Git buttons
   // below) rather than as tabs inside EditorView's own sidebar. Mirrors
@@ -319,9 +383,9 @@ export default function App() {
   // selects that panel and makes sure the sidebar is actually expanded to
   // show it, rather than leaving it collapsed from an earlier
   // Ctrl+B/manual collapse. Also un-collapses the whole editor pane
-  // (EditorView's paneCollapsed — see toggleEditorPaneCollapsed below) if
-  // that's what's hiding it — Search/Git/Files should always be reachable
-  // from their own rail buttons regardless of that toggle's state, same as
+  // (editorPaneCollapsed — see toggleEditorPaneCollapsed below) if that's
+  // what's hiding it — Search/Git/Files should always be reachable from
+  // their own rail buttons regardless of that toggle's state, same as
   // clicking one while the sidebar itself was manually collapsed already
   // does.
   function openEditorPanel(panel) {
@@ -354,14 +418,19 @@ export default function App() {
     setEditorPaneCollapsed(false)
   }
 
-  // Collapses the file editor/sidebar (not just the Files/Search/Git
-  // sub-panel — see toggleFilesPanel above for that, and not the terminal,
-  // which EditorView keeps independently visible via its own paneCollapsed
-  // handling — the two are deliberately decoupled). This toggle (a
-  // view-rail button — see its render below) is the only way back in,
-  // same as handleCloseChat's X button is the only way back into chat.
+  // Collapses the whole Editor pane (file tree/tabs, not the terminal —
+  // that's its own separate pane now, see usePaneSlots/toggleTerminalPane
+  // below). This toggle (a view-rail button — see its render below) is
+  // the only way back in, same as handleCloseChat's X button is the only
+  // way back into chat.
   function toggleEditorPaneCollapsed() {
     setEditorPaneCollapsed((collapsed) => !collapsed)
+  }
+
+  // Same idea for the Terminal pane — also bound to Ctrl+J (see the
+  // keydown handler above).
+  function toggleTerminalPane() {
+    setTerminalPaneCollapsed((collapsed) => !collapsed)
   }
 
   useEffect(() => {
@@ -428,27 +497,76 @@ export default function App() {
     abortControllerRef.current?.abort()
   }
 
-  // Drags the Chat|Editor split divider. Tracks mouse position directly
-  // against the split container's own bounding box rather than delta
-  // movement, so a fast drag can't desync from the cursor. Clamped to
-  // 20-80% so neither pane can be dragged down to nothing.
-  function handleSplitDragStart(e) {
+  // Drags the vertical divider between the left column (top-left +
+  // bottom-left slots) and the right (full-height) slot — see
+  // usePaneGridSizes. Delta-based off the cursor's starting position, same
+  // reasoning as the row-divider handler below.
+  function handleColumnDividerDragStart(e) {
     e.preventDefault()
-    const container = splitContainerRef.current
-    if (!container) return
+    const startX = e.clientX
+    const startWidth = paneGridSizes.leftWidth
 
     // Belt-and-suspenders alongside preventDefault: without this, a fast
     // drag can still start a text-selection drag across the rest of the
-    // page (the mousedown target is a thin 5px divider, easy to graze
-    // rather than hit squarely) — force it off for the duration of the
-    // drag, then restore whatever the page's own default was.
+    // page (the mousedown target is a thin divider, easy to graze rather
+    // than hit squarely) — force it off for the duration of the drag, then
+    // restore whatever the page's own default was.
     const previousUserSelect = document.body.style.userSelect
     document.body.style.userSelect = 'none'
 
     function handleMove(moveEvent) {
-      const rect = container.getBoundingClientRect()
-      const fraction = (moveEvent.clientX - rect.left) / rect.width
-      setSplitWidth(Math.min(0.8, Math.max(0.2, fraction)))
+      const delta = moveEvent.clientX - startX
+      setLeftWidth(Math.max(220, startWidth + delta))
+    }
+    function handleUp() {
+      window.removeEventListener('mousemove', handleMove)
+      window.removeEventListener('mouseup', handleUp)
+      document.body.style.userSelect = previousUserSelect
+    }
+    window.addEventListener('mousemove', handleMove)
+    window.addEventListener('mouseup', handleUp)
+  }
+
+  // Drags the horizontal divider between the top-left and bottom-left
+  // slots, within the left column — see usePaneGridSizes.
+  function handleRowDividerDragStart(e) {
+    e.preventDefault()
+    const startY = e.clientY
+    const startHeight = paneGridSizes.topHeight
+
+    const previousUserSelect = document.body.style.userSelect
+    document.body.style.userSelect = 'none'
+
+    function handleMove(moveEvent) {
+      const delta = moveEvent.clientY - startY
+      setTopHeight(Math.max(160, startHeight + delta))
+    }
+    function handleUp() {
+      window.removeEventListener('mousemove', handleMove)
+      window.removeEventListener('mouseup', handleUp)
+      document.body.style.userSelect = previousUserSelect
+    }
+    window.addEventListener('mousemove', handleMove)
+    window.addEventListener('mouseup', handleUp)
+  }
+
+  // Drags the handle above the bottom-left slot when it's alone in the
+  // left column (its sibling collapsed — see renderPanes) and anchored to
+  // the bottom, with blank space filling the rest of the column above it.
+  // Inverted from handleRowDividerDragStart: the pane sits below this
+  // handle rather than above it, so dragging up (negative clientY delta)
+  // is what grows it.
+  function handleBottomHandleDragStart(e) {
+    e.preventDefault()
+    const startY = e.clientY
+    const startHeight = paneGridSizes.bottomHeight
+
+    const previousUserSelect = document.body.style.userSelect
+    document.body.style.userSelect = 'none'
+
+    function handleMove(moveEvent) {
+      const delta = startY - moveEvent.clientY
+      setBottomHeight(Math.max(160, startHeight + delta))
     }
     function handleUp() {
       window.removeEventListener('mousemove', handleMove)
@@ -972,11 +1090,195 @@ export default function App() {
     )
   }
 
+  // The Editor/Terminal/Chat grid: a fixed shape — top-left and
+  // bottom-left stacked in a left column, one full-height slot on the
+  // right (see usePaneSlots/usePaneGridSizes) — with each of the three
+  // panes independently collapsible (editorPaneCollapsed/
+  // terminalPaneCollapsed/chatCollapsed). Dragging a pane's title bar onto
+  // another slot swaps their assignments (DraggableSection, same mechanism
+  // the right sidebar's sections use) — the grid's shape itself never
+  // changes, only which pane sits where. Collapsing the only pane on one
+  // side of a divider removes that divider and lets its sibling fill the
+  // freed space.
+  function renderPanes() {
+    // Editor isn't in here — unlike Terminal/Chat, it doesn't render its
+    // content inline into whichever slot it's assigned. Its sidebar and
+    // main-content portal into DOM targets this function hands out below
+    // (editorMainContainer always; editorSidebarContainer either inside
+    // Editor's own slot or spanning the shared left column — see the
+    // editorSharesLeftColumn branch), so the always-mounted <EditorView/>
+    // near the bottom of this component's return can keep running
+    // regardless of where those targets currently point.
+    const nonEditorContent = {
+      terminal: (
+        <TerminalPane
+          theme={theme}
+          folderRoot={fileAccessSettings?.root}
+          terminalEnabled={terminalSettings.enabled}
+          terminalTabs={terminalTabs}
+          activeTerminalTab={activeTerminalTab}
+          onSelectTab={setActiveTerminalTab}
+          onAddTab={addTerminalTab}
+          onCloseTab={closeTerminalTab}
+        />
+      ),
+      chat: (
+        <ChatPanel
+          messages={messages}
+          messagesLoading={messagesLoading}
+          conversationId={conversationId}
+          conversationTitle={conversations.find((c) => String(c.id) === String(conversationId))?.title}
+          onCloseChat={handleCloseChat}
+          onNewChat={startNewChat}
+          bottomRef={bottomRef}
+          input={input}
+          onInputChange={setInput}
+          streaming={streaming}
+          onSendMessage={sendMessage}
+          onStop={stopStreaming}
+          userDisplayName={settings?.username}
+          onRequestApproveWrite={requestApproveWrite}
+          onRejectWrite={handleRejectWrite}
+          pendingImages={pendingImages}
+          composerImageError={composerImageError}
+          onComposerPaste={handleComposerPaste}
+          onRemovePendingImage={removePendingImage}
+          visionSupported={visionSupported}
+          activeEditorFile={activeEditorFile}
+        />
+      ),
+    }
+    const collapsedByKey = { editor: editorPaneCollapsed, terminal: terminalPaneCollapsed, chat: chatCollapsed }
+
+    const topKey = paneSlots['top-left']
+    const bottomKey = paneSlots['bottom-left']
+    const rightKey = paneSlots['right']
+    const topVisible = !collapsedByKey[topKey]
+    const bottomVisible = !collapsedByKey[bottomKey]
+    const rightVisible = !collapsedByKey[rightKey]
+    const leftVisible = topVisible || bottomVisible
+
+    // Editor's file sidebar spans the whole left column — next to both
+    // its own tabs AND Terminal (or whatever's sharing the column with
+    // it) — only when it actually HAS a visible column-mate there,
+    // mirroring a conventional IDE's file explorer. Editor alone in a
+    // slot (its mate collapsed, or Editor dragged into the full-height
+    // right slot) just renders sidebar+main together inline, same as
+    // before.
+    const editorSharesLeftColumn = (topKey === 'editor' && bottomVisible) || (bottomKey === 'editor' && topVisible)
+
+    const editorMainPortal = <div className="portal-target" ref={setEditorMainContainer} />
+
+    function slotPane(key, flex) {
+      let content = nonEditorContent[key]
+      if (key === 'editor') {
+        // Sharing the column: just the main-content portal — the sidebar
+        // portal lives outside this DraggableSection entirely (see the
+        // editorSharesLeftColumn branch below). Alone in its own slot:
+        // sidebar+main need a row wrapper here, since DraggableSection's
+        // own content area is a column (title bar stacked over content) —
+        // .editor-view used to be that row; now it's inlined, since
+        // there's nothing left to put the sidebar's OTHER placement in.
+        content = editorSharesLeftColumn ? (
+          editorMainPortal
+        ) : (
+          <div className="editor-inline-row">
+            <div className="editor-sidebar-portal" ref={setEditorSidebarContainer} />
+            {editorMainPortal}
+          </div>
+        )
+      }
+      return (
+        <DraggableSection
+          key={key}
+          sectionKey={key}
+          index={key}
+          onReorder={swapPanes}
+          className="is-pane-column"
+          style={{ flex, minWidth: 220, minHeight: 160 }}
+          label={PANE_LABELS[key]}
+          onCollapse={key === 'terminal' ? () => setTerminalPaneCollapsed(true) : undefined}
+        >
+          {content}
+        </DraggableSection>
+      )
+    }
+
+    // When both slots are visible, they split the column per topHeight
+    // (drag the divider between them). When only one is visible, it
+    // normally stretches to fill the whole column — except Terminal
+    // specifically (see App.jsx's history: "when we collapse the editor
+    // the terminal should not grow to take the space"), which keeps its
+    // own fixed height instead (see usePaneGridSizes) with a blank spacer
+    // filling the rest and a drag handle on its free edge so it can still
+    // be resized manually. Editor (or any other pane) alone still fills
+    // the column normally — the fixed-size treatment is Terminal-only.
+    const leftColumnNodes = []
+    if (topVisible && bottomVisible) {
+      leftColumnNodes.push(slotPane(topKey, `0 1 ${paneGridSizes.topHeight}px`))
+      leftColumnNodes.push(
+        <div key="row-divider" className="split-divider split-divider-row" onMouseDown={handleRowDividerDragStart} />
+      )
+      leftColumnNodes.push(slotPane(bottomKey, '1 1 0%'))
+    } else if (topVisible && topKey === 'terminal') {
+      leftColumnNodes.push(slotPane(topKey, `0 1 ${paneGridSizes.topHeight}px`))
+      leftColumnNodes.push(
+        <div key="row-divider" className="split-divider split-divider-row" onMouseDown={handleRowDividerDragStart} />
+      )
+      leftColumnNodes.push(<div key="row-spacer" className="pane-column-spacer" />)
+    } else if (topVisible) {
+      leftColumnNodes.push(slotPane(topKey, '1 1 0%'))
+    } else if (bottomVisible && bottomKey === 'terminal') {
+      leftColumnNodes.push(<div key="row-spacer" className="pane-column-spacer" />)
+      leftColumnNodes.push(
+        <div key="row-divider" className="split-divider split-divider-row" onMouseDown={handleBottomHandleDragStart} />
+      )
+      leftColumnNodes.push(slotPane(bottomKey, `0 1 ${paneGridSizes.bottomHeight}px`))
+    } else if (bottomVisible) {
+      leftColumnNodes.push(slotPane(bottomKey, '1 1 0%'))
+    }
+
+    const rows = []
+    if (leftVisible) {
+      const stack = (
+        <div
+          key={editorSharesLeftColumn ? undefined : 'left-column'}
+          className="pane-column"
+          style={{ flex: editorSharesLeftColumn || !rightVisible ? '1 1 0%' : `0 1 ${paneGridSizes.leftWidth}px`, minWidth: 220 }}
+        >
+          {leftColumnNodes}
+        </div>
+      )
+      rows.push(
+        editorSharesLeftColumn ? (
+          <div
+            key="left-column"
+            className="editor-sidebar-row"
+            style={{ flex: rightVisible ? `0 1 ${paneGridSizes.leftWidth}px` : '1 1 0%', minWidth: 220 }}
+          >
+            <div className="editor-sidebar-portal" ref={setEditorSidebarContainer} />
+            {stack}
+          </div>
+        ) : (
+          stack
+        )
+      )
+    }
+    if (leftVisible && rightVisible) {
+      rows.push(<div key="column-divider" className="split-divider" onMouseDown={handleColumnDividerDragStart} />)
+    }
+    if (rightVisible) {
+      rows.push(slotPane(rightKey, '1 1 0%'))
+    }
+
+    return <div className="split-container">{rows}</div>
+  }
+
   return (
     <div className="app">
       {isWails() && (
         <TopBar
-          onOpenFolder={() => setOpenFolderSignal((n) => n + 1)}
+          onOpenFolder={() => setOpenFolderSignal((n) => (n ?? 0) + 1)}
           onQuit={() => setQuitConfirmOpen(true)}
           onAbout={() => handleOpenSettings('about')}
         />
@@ -1083,8 +1385,11 @@ export default function App() {
             <circle cx="17" cy="18" r="2" fill="currentColor" stroke="none" />
           </svg>
         </button>
-        <button type="button" title="Settings" onClick={() => handleOpenSettings()}>
-          ⚙
+        <button type="button" className="view-rail-settings" title="Settings" onClick={() => handleOpenSettings()}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />
+          </svg>
         </button>
         {!isWails() && (
           <button type="button" title="Quit fastllm" onClick={() => setQuitConfirmOpen(true)}>
@@ -1094,76 +1399,7 @@ export default function App() {
       </nav>
 
       <div className="main-row">
-      <div className="split-container" ref={splitContainerRef}>
-      {/* editorPaneCollapsed hides the file editor/sidebar (see EditorView's
-          paneCollapsed prop) but not the terminal — the two are decoupled,
-          so this column stays rendered and full width even when the editor
-          itself is collapsed, rather than the whole column disappearing
-          the way it used to. `visible` (terminal's first-mount gate) can
-          stay permanently true now that this is never display:none — it
-          only ever mattered for skipping the terminal's first mount before
-          the Editor tab had been opened at all. */}
-      <div
-        className="editor-pane"
-        style={{ flex: chatCollapsed ? '1 1 auto' : `0 0 ${splitWidth * 100}%` }}
-      >
-        <EditorView
-          fileAccessSettings={fileAccessSettings}
-          onFileAccessSettingsChange={setFileAccessSettings}
-          theme={theme}
-          terminalEnabled={terminalSettings.enabled}
-          visible
-          paneCollapsed={editorPaneCollapsed}
-          openFolderSignal={openFolderSignal}
-          onOpenSettings={handleOpenSettings}
-          panel={editorPanel}
-          onPanelChange={setEditorPanel}
-          onGitChangeCountChange={setGitChangeCount}
-          onOpenPathChange={setActiveEditorFile}
-          sidebarCollapsed={editorSidebarCollapsed}
-          onSidebarCollapsedChange={setEditorSidebarCollapsed}
-          terminalCollapsed={terminalCollapsed}
-          onTerminalCollapsedChange={setTerminalCollapsed}
-        />
-      </div>
-
-      {/* Kept regardless of editorPaneCollapsed — the editor-pane column
-          still has its own width (holding the terminal, if nothing else)
-          even with the file editor/sidebar hidden, so the gap and the
-          drag-to-resize handle both still apply. Only chatCollapsed hides
-          it, since there's nothing on the other side to divide from then. */}
-      {!chatCollapsed && (
-        <div className="split-divider" onMouseDown={handleSplitDragStart} />
-      )}
-
-      {!chatCollapsed && (
-        <div className="body">
-          <ChatPanel
-            messages={messages}
-            messagesLoading={messagesLoading}
-            conversationId={conversationId}
-            conversationTitle={conversations.find((c) => String(c.id) === String(conversationId))?.title}
-            onCloseChat={handleCloseChat}
-            onNewChat={startNewChat}
-            bottomRef={bottomRef}
-            input={input}
-            onInputChange={setInput}
-            streaming={streaming}
-            onSendMessage={sendMessage}
-            onStop={stopStreaming}
-            userDisplayName={settings?.username}
-            onRequestApproveWrite={requestApproveWrite}
-            onRejectWrite={handleRejectWrite}
-            pendingImages={pendingImages}
-            composerImageError={composerImageError}
-            onComposerPaste={handleComposerPaste}
-            onRemovePendingImage={removePendingImage}
-            visionSupported={visionSupported}
-            activeEditorFile={activeEditorFile}
-          />
-        </div>
-      )}
-      </div>
+      {renderPanes()}
 
       <aside className={`sidebar ${sidebarCollapsed ? 'is-collapsed' : ''}`}>
         <button
@@ -1308,6 +1544,25 @@ export default function App() {
           onClose={() => setSettingsOpen(false)}
         />
       )}
+
+      {/* Always mounted, regardless of where renderPanes() currently points
+          its portal targets — see EditorView's own doc comment on why. */}
+      <EditorView
+        fileAccessSettings={fileAccessSettings}
+        onFileAccessSettingsChange={setFileAccessSettings}
+        theme={theme}
+        terminalEnabled={terminalSettings.enabled}
+        openFolderSignal={openFolderSignal}
+        onOpenSettings={handleOpenSettings}
+        panel={editorPanel}
+        onPanelChange={setEditorPanel}
+        onGitChangeCountChange={setGitChangeCount}
+        onOpenPathChange={setActiveEditorFile}
+        sidebarCollapsed={editorSidebarCollapsed}
+        onSidebarCollapsedChange={setEditorSidebarCollapsed}
+        sidebarContainer={editorSidebarContainer}
+        mainContainer={editorMainContainer}
+      />
 
       <TweakBar open={tweakBarOpen} onToggle={() => setTweakBarOpen(true)} />
 

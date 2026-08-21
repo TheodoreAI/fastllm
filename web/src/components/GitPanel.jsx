@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react'
+
 // The Git sub-panel of the editor sidebar: branch switcher, stage/unstage,
 // commit, and push — a numbered stepper (Branch → Stage changes → Commit →
 // Push). Purely presentational: all state and API calls live in
@@ -39,6 +41,37 @@ export default function GitPanel({
   onPush,
   onPushSetUpstream,
 }) {
+  // Sticky stepper progress: once a step's condition is met it stays lit,
+  // even after the state that triggered it clears (e.g. staged.length
+  // drops to 0 right after a commit) — otherwise the stepper regresses to
+  // "not done" between commit and push, which reads as if the commit
+  // didn't count. A successful push closes the loop, so it resets the
+  // whole stepper back to step 1 for the next round of changes (after a
+  // beat, so "4" still gets its moment lit up).
+  const currentBranch = branches.find((b) => b.current)?.name
+  const [maxStep, setMaxStep] = useState(1)
+
+  useEffect(() => {
+    setMaxStep(1)
+  }, [currentBranch])
+
+  useEffect(() => {
+    if (gitStatus.length === 0) {
+      setMaxStep(1)
+    } else if (staged.length > 0) {
+      setMaxStep((m) => Math.max(m, 3))
+    } else {
+      setMaxStep(2)
+    }
+  }, [gitStatus.length, staged.length])
+
+  useEffect(() => {
+    if (!pushStatus) return
+    setMaxStep(4)
+    const timer = setTimeout(() => setMaxStep(1), 1200)
+    return () => clearTimeout(timer)
+  }, [pushStatus])
+
   if (branches.length === 0) {
     return (
       <div className="editor-panel-body">
@@ -101,7 +134,7 @@ export default function GitPanel({
 
       <div className="git-step">
         <div className="git-step-rail">
-          <div className={`git-step-dot ${gitStatus.length > 0 ? 'on' : 'off'}`}>2</div>
+          <div className={`git-step-dot ${maxStep >= 2 ? 'on' : 'off'}`}>2</div>
           <div className="git-step-rail-line" />
         </div>
         <div className="git-step-body">
@@ -187,7 +220,7 @@ export default function GitPanel({
 
       <div className="git-step">
         <div className="git-step-rail">
-          <div className={`git-step-dot ${staged.length > 0 ? 'on' : 'off'}`}>3</div>
+          <div className={`git-step-dot ${maxStep >= 3 ? 'on' : 'off'}`}>3</div>
           <div className="git-step-rail-line" />
         </div>
         <div className="git-step-body">
@@ -211,7 +244,7 @@ export default function GitPanel({
 
       <div className="git-step">
         <div className="git-step-rail">
-          <div className="git-step-dot off">4</div>
+          <div className={`git-step-dot ${maxStep >= 4 ? 'on' : 'off'}`}>4</div>
         </div>
         <div className="git-step-body">
           <div className="git-step-title">Push</div>

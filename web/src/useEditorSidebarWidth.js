@@ -9,10 +9,10 @@ function initialWidth() {
 }
 
 // Manages the editor's file-tree sidebar (Files/Search/Git) width in
-// pixels, persisted to localStorage — mirrors useTerminalPanelHeight's
-// pattern (pixels rather than a fraction, since a file tree's usefulness
-// is tied to how many characters of a filename fit, not a proportion of
-// the window).
+// pixels, persisted to localStorage — mirrors usePaneGridSizes' pattern
+// (pixels rather than a fraction, since a file tree's usefulness is tied
+// to how many characters of a filename fit, not a proportion of the
+// window).
 export function useEditorSidebarWidth() {
   const [width, setWidth] = useState(initialWidth)
 
