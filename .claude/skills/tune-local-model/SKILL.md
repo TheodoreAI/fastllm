@@ -4,6 +4,7 @@ description: Experiment against the local model behind fastllm's live terminal b
 disable-model-invocation: true
 arguments: max_experiments
 argument-hint: "[max_experiments]"
+context: fork
 ---
 
 You're running inside fastllm's built-in Terminal pane, with access to a
