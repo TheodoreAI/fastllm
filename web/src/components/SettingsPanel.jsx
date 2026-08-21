@@ -476,7 +476,7 @@ export default function SettingsPanel({
             <span>Point local AI CLIs at fastllm</span>
           </label>
           <p className="settings-hint">
-            Sets OPENAI_BASE_URL in every new terminal session, so a terminal-based AI tool (Claude Code, a ChatGPT or Gemini CLI, etc.) talks to fastllm's local model with no manual setup — and that conversation shows up live in a "Live Terminal" chat here. Current value: <code className="settings-inline-code">{liveChatURL || '…'}</code>
+            Sets OPENAI_BASE_URL and ANTHROPIC_BASE_URL in every new terminal session, so a terminal-based AI tool (Claude Code, a ChatGPT or Gemini CLI, etc.) talks to fastllm with no manual setup — and that conversation shows up live in a "Live Terminal" chat here. Current value: <code className="settings-inline-code">{liveChatURL || '…'}</code>
           </p>
           <button type="submit" className="btn-primary">Save terminal access</button>
           {terminalStatus && (

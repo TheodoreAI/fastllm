@@ -244,6 +244,9 @@ func Build(cfg Config) (*Built, error) {
 	// up live instead of only after a reload.
 	mux.HandleFunc("POST /v1/chat/completions", handler.ExternalChatCompletions)
 	mux.HandleFunc("GET /v1/models", handler.ExternalModels)
+	// Anthropic wire format (ANTHROPIC_BASE_URL) — what Claude Code itself
+	// speaks, distinct from the OpenAI-shaped pair above.
+	mux.HandleFunc("POST /v1/messages", handler.AnthropicMessages)
 	mux.HandleFunc("GET /api/live/stream", handler.LiveStream)
 
 	mux.Handle("/", http.FileServer(http.FS(web.FS())))
