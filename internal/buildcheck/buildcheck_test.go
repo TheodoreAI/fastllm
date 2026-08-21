@@ -111,6 +111,88 @@ func TestRunRejectsOverlayPathEscape(t *testing.T) {
 	}
 }
 
+func TestRunTestsPassesOnValidProject(t *testing.T) {
+	dir := newTestModule(t)
+	mustWrite(t, filepath.Join(dir, "main_test.go"), "package main\n\nimport \"testing\"\n\nfunc TestOK(t *testing.T) {}\n")
+
+	result, err := RunTests(context.Background(), dir, nil)
+	if err != nil {
+		t.Fatalf("RunTests returned error: %v", err)
+	}
+	if !result.Passed {
+		t.Fatalf("expected tests to pass, got output: %s", result.Output)
+	}
+}
+
+func TestRunTestsFailsOnFailingTest(t *testing.T) {
+	dir := newTestModule(t)
+	mustWrite(t, filepath.Join(dir, "main_test.go"), "package main\n\nimport \"testing\"\n\nfunc TestFails(t *testing.T) { t.Fatal(\"boom\") }\n")
+
+	result, err := RunTests(context.Background(), dir, nil)
+	if err != nil {
+		t.Fatalf("RunTests returned error: %v", err)
+	}
+	if result.Passed {
+		t.Fatal("expected tests to fail")
+	}
+	if result.Output == "" {
+		t.Fatal("expected non-empty output describing the failure")
+	}
+}
+
+func TestRunTestsOverlayFixesFailingTest(t *testing.T) {
+	dir := newTestModule(t)
+	mustWrite(t, filepath.Join(dir, "add.go"), "package main\n\nfunc add(a, b int) int { return a - b }\n")
+	mustWrite(t, filepath.Join(dir, "add_test.go"), "package main\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n\tif add(2, 3) != 5 {\n\t\tt.Fatal(\"wrong\")\n\t}\n}\n")
+
+	result, err := RunTests(context.Background(), dir, []Overlay{
+		{Path: "add.go", Content: "package main\n\nfunc add(a, b int) int { return a + b }\n"},
+	})
+	if err != nil {
+		t.Fatalf("RunTests returned error: %v", err)
+	}
+	if !result.Passed {
+		t.Fatalf("expected overlay to fix the failing test, got output: %s", result.Output)
+	}
+
+	onDisk, err := os.ReadFile(filepath.Join(dir, "add.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(onDisk) != "package main\n\nfunc add(a, b int) int { return a - b }\n" {
+		t.Fatal("RunTests must not modify the real project directory")
+	}
+}
+
+func TestRunTestsRejectsMissingGoModule(t *testing.T) {
+	dir := t.TempDir() // no go.mod
+	_, err := RunTests(context.Background(), dir, nil)
+	if err != ErrNoGoModule {
+		t.Fatalf("expected ErrNoGoModule, got %v", err)
+	}
+}
+
+func TestRunTestsInPlaceRunsAgainstRealRoot(t *testing.T) {
+	dir := newTestModule(t)
+	mustWrite(t, filepath.Join(dir, "main_test.go"), "package main\n\nimport \"testing\"\n\nfunc TestOK(t *testing.T) {}\n")
+
+	result, err := RunTestsInPlace(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("RunTestsInPlace returned error: %v", err)
+	}
+	if !result.Passed {
+		t.Fatalf("expected tests to pass, got output: %s", result.Output)
+	}
+}
+
+func TestRunTestsInPlaceRejectsMissingGoModule(t *testing.T) {
+	dir := t.TempDir() // no go.mod
+	_, err := RunTestsInPlace(context.Background(), dir)
+	if err != ErrNoGoModule {
+		t.Fatalf("expected ErrNoGoModule, got %v", err)
+	}
+}
+
 func TestRunSkipsGitDirectory(t *testing.T) {
 	dir := newTestModule(t)
 	// A .git directory with a file that isn't valid to copy as a normal

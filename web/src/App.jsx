@@ -675,7 +675,7 @@ export default function App() {
     setPendingImages([])
     setComposerImageError('')
     setStreaming(true)
-    setMessages((prev) => [...prev, { role: 'user', content: text, images }, { role: 'assistant', content: '', sources: [], reasoning: '', toolCalls: [], pendingWrites: [], buildChecks: [], usage: null }])
+    setMessages((prev) => [...prev, { role: 'user', content: text, images }, { role: 'assistant', content: '', sources: [], reasoning: '', toolCalls: [], pendingWrites: [], buildChecks: [], testChecks: [], usage: null }])
 
     const controller = new AbortController()
     abortControllerRef.current = controller
@@ -751,6 +751,17 @@ export default function App() {
               next[next.length - 1] = {
                 ...last,
                 buildChecks: [...(last.buildChecks || []), check],
+              }
+              return next
+            })
+          },
+          onTestCheck: (check) => {
+            setMessages((prev) => {
+              const next = [...prev]
+              const last = next[next.length - 1]
+              next[next.length - 1] = {
+                ...last,
+                testChecks: [...(last.testChecks || []), check],
               }
               return next
             })
@@ -1340,6 +1351,17 @@ export default function App() {
             <path d="M6 8.5v7M8 6h4a4 4 0 0 1 4 4v0" />
           </svg>
           {gitChangeCount > 0 && <span className="view-rail-badge">{gitChangeCount}</span>}
+        </button>
+        <button
+          type="button"
+          className={editorPanel === 'tests' ? 'is-active' : ''}
+          title="Tests"
+          onClick={() => openEditorPanel('tests')}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M9 3h6M10 3v4.2a4 4 0 0 1-.7 2.3L5.8 15a3 3 0 0 0 2.5 4.7h7.4a3 3 0 0 0 2.5-4.7l-3.5-5.5a4 4 0 0 1-.7-2.3V3" />
+            <path d="M7.5 14.5h9" />
+          </svg>
         </button>
 
         <div className="view-rail-spacer" />

@@ -209,6 +209,7 @@ func Build(cfg Config) (*Built, error) {
 	mux.HandleFunc("GET /api/editor/git/status", handler.EditorGitStatus)
 	mux.HandleFunc("GET /api/editor/git/watch", handler.EditorGitWatch)
 	mux.HandleFunc("POST /api/editor/complete", handler.EditorComplete)
+	mux.HandleFunc("POST /api/editor/test", handler.EditorRunTests)
 	mux.HandleFunc("GET /api/editor/git/diff", handler.EditorGitDiff)
 	mux.HandleFunc("POST /api/editor/git/stage", handler.EditorGitStage)
 	mux.HandleFunc("POST /api/editor/git/unstage", handler.EditorGitUnstage)

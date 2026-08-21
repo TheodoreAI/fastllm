@@ -33,6 +33,7 @@ import { useEditorSidebarWidth } from '../useEditorSidebarWidth'
 import FileTree from './FileTree'
 import GitPanel from './GitPanel'
 import SearchPanel from './SearchPanel'
+import TestPanel from './TestPanel'
 import EditorPane from './EditorPane'
 import ConfirmDeleteModal from './ConfirmDeleteModal'
 
@@ -925,7 +926,7 @@ export default function EditorView({
                 Search or Git was actually the one showing below it. */}
             <div className="editor-panel-tabs">
               <span className="editor-panel-tab-label">
-                {panel === 'search' ? 'Search' : panel === 'git' ? 'Git' : 'Files'}
+                {panel === 'search' ? 'Search' : panel === 'git' ? 'Git' : panel === 'tests' ? 'Tests' : 'Files'}
               </span>
             </div>
 
@@ -989,6 +990,8 @@ export default function EditorView({
             onPushSetUpstream={handlePushSetUpstream}
           />
         )}
+
+        {panel === 'tests' && <TestPanel />}
       </aside>
 
       <div className="editor-sidebar-divider" onMouseDown={handleSidebarDragStart} />

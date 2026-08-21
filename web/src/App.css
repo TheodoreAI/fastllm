@@ -2646,6 +2646,50 @@ body {
   overflow-y: auto;
 }
 
+.editor-test-run {
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-size: 0.75rem;
+  cursor: pointer;
+  align-self: flex-start;
+}
+
+.editor-test-run:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.editor-test-result-status {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.editor-test-result.is-ok .editor-test-result-status {
+  color: var(--success);
+}
+
+.editor-test-result.is-error .editor-test-result-status {
+  color: var(--danger);
+}
+
+.editor-test-output {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  font-family: ui-monospace, 'SF Mono', Consolas, 'Cascadia Code', monospace;
+  font-size: 0.85em;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
 .pending-writes {
   margin: 0 0 10px;
   display: flex;
