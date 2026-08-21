@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import ConversationList from './components/ConversationList'
 import ModelPicker from './components/ModelPicker'
@@ -8,6 +8,7 @@ import ChatPanel from './components/ChatPanel'
 import EditorView from './components/EditorView'
 import TerminalPane from './components/TerminalPane'
 import ConfirmDeleteModal from './components/ConfirmDeleteModal'
+import CommandPalette from './components/CommandPalette'
 import SettingsPanel from './components/SettingsPanel'
 import ScreenshotPreviewModal from './components/ScreenshotPreviewModal'
 import DraggableSection from './components/DraggableSection'
@@ -61,6 +62,7 @@ import {
   approveWrite,
   rejectWrite,
 } from './api'
+import { buildCommands } from './commands'
 
 // Files we accept for upload: plain-text-like formats (indexed as-is,
 // client never needs to read their bytes) plus PDF (extracted server-side).
@@ -263,6 +265,15 @@ export default function App() {
   // StrictMode's dev-only double-invoke and under Vite HMR, both of which
   // can re-run an effect without a fresh ref).
   const [openFolderSignal, setOpenFolderSignal] = useState(null)
+  // Ref into EditorView so QuickOpen (Ctrl/Cmd+P) can open a file into a
+  // tab without lifting all of EditorView's tab state up here — same
+  // "reach into the always-mounted component" need as openFolderSignal
+  // above, just for a function call instead of a boolean signal.
+  const editorViewRef = useRef(null)
+  const [editorTree, setEditorTree] = useState([])
+  // null | 'files' | 'commands' — which mode CommandPalette is showing, or
+  // closed entirely.
+  const [paletteMode, setPaletteMode] = useState(null)
   const [editorPanel, setEditorPanel] = useEditorPanel()
   const [gitChangeCount, setGitChangeCount] = useState(0)
   // Which pane sits in which of the Editor/Terminal/Chat grid's three fixed
@@ -340,48 +351,48 @@ export default function App() {
   }, [])
 
 
-  // VS Code-style global panel shortcuts: Ctrl+B toggles the Files
-  // sidebar, Ctrl+J toggles the terminal pane's presence in the
-  // Editor/Terminal/Chat row (see usePaneSlots) — both panels are always
-  // part of the (permanently split) layout, so this is a plain toggle
-  // with no view to switch into first. Ctrl+Shift+M toggles the
-  // right-hand model-settings panel; plain Ctrl+M was avoided as a
-  // pairing with Ctrl+B/Ctrl+J since VS Code itself reserves unshifted
-  // Ctrl+M for focus-tabbing, and Ctrl+C (as literally requested) was
-  // ruled out because it's the OS copy shortcut used throughout chat, the
-  // code editor, and the terminal.
+  // VS Code-style global panel shortcuts (Ctrl+B: Files sidebar, Ctrl+J:
+  // terminal pane, Ctrl+Shift+M: model-settings panel — plain Ctrl+M was
+  // avoided since VS Code itself reserves it for focus-tabbing, and Ctrl+C
+  // was ruled out as the OS copy shortcut used throughout chat/editor/
+  // terminal) plus Open Folder/Quit are all defined once in commands.js,
+  // not here — this handler just looks up whichever command matches the
+  // event and runs it, so the Command Palette (built from the same list)
+  // can never drift from what the raw shortcut actually does.
+  const commands = useMemo(
+    () =>
+      buildCommands({
+        setEditorSidebarCollapsed,
+        setTerminalPaneCollapsed,
+        setSidebarCollapsed,
+        setOpenFolderSignal,
+        setQuitConfirmOpen,
+        isWails,
+      }),
+    [setEditorSidebarCollapsed, setTerminalPaneCollapsed, setSidebarCollapsed]
+  )
+
   useEffect(() => {
     function handleKeyDown(e) {
       if (!(e.ctrlKey || e.metaKey)) return
       const key = e.key.toLowerCase()
-      if (key === 'b' && !e.shiftKey) {
+      // Ctrl/Cmd+P and Ctrl/Cmd+Shift+P open CommandPalette itself, so they
+      // stay special-cased here rather than living in the command list
+      // they open.
+      if (key === 'p') {
         e.preventDefault()
-        setEditorSidebarCollapsed((c) => !c)
-      } else if (key === 'j' && !e.shiftKey) {
+        setPaletteMode(e.shiftKey ? 'commands' : 'files')
+        return
+      }
+      const cmd = commands.find((c) => c.key === key && c.shift === e.shiftKey)
+      if (cmd) {
         e.preventDefault()
-        setTerminalPaneCollapsed((c) => !c)
-      } else if (key === 'm' && e.shiftKey) {
-        e.preventDefault()
-        setSidebarCollapsed((c) => !c)
-      } else if (key === 'o' && !e.shiftKey && isWails()) {
-        // Matches TopBar's File → Open Folder… — Ctrl+O had a real native
-        // accelerator when that menu item was a Win32 HMENU entry (see
-        // TopBar.jsx's doc comment for why it's an in-app component now);
-        // a plain <button> gets no OS-level shortcut for free, so this
-        // keeps the binding working. Desktop-only, matching TopBar's own
-        // isWails() gating — there's no folder-open concept in the
-        // browser build this would otherwise shadow.
-        e.preventDefault()
-        setOpenFolderSignal((n) => (n ?? 0) + 1)
-      } else if (key === 'q' && !e.shiftKey && isWails()) {
-        // Matches TopBar's File → Exit, same reasoning as Ctrl+O above.
-        e.preventDefault()
-        setQuitConfirmOpen(true)
+        cmd.run()
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [setEditorSidebarCollapsed, setTerminalPaneCollapsed, setSidebarCollapsed])
+  }, [commands])
 
   useEffect(() => {
     conversationIdRef.current = conversationId
@@ -1672,6 +1683,7 @@ export default function App() {
       {/* Always mounted, regardless of where renderPanes() currently points
           its portal targets — see EditorView's own doc comment on why. */}
       <EditorView
+        ref={editorViewRef}
         fileAccessSettings={fileAccessSettings}
         onFileAccessSettingsChange={setFileAccessSettings}
         theme={theme}
@@ -1682,11 +1694,22 @@ export default function App() {
         onPanelChange={setEditorPanel}
         onGitChangeCountChange={setGitChangeCount}
         onOpenPathChange={setActiveEditorFile}
+        onTreeChange={setEditorTree}
         sidebarCollapsed={editorSidebarCollapsed}
         onSidebarCollapsedChange={setEditorSidebarCollapsed}
         sidebarContainer={editorSidebarContainer}
         mainContainer={editorMainContainer}
       />
+
+      {paletteMode && (
+        <CommandPalette
+          mode={paletteMode}
+          files={editorTree.map((e) => e.path)}
+          commands={commands}
+          onOpenFile={(path) => editorViewRef.current?.openFile(path)}
+          onClose={() => setPaletteMode(null)}
+        />
+      )}
 
       <TweakBar open={tweakBarOpen} onToggle={() => setTweakBarOpen(true)} />
 

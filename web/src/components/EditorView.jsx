@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { linter, lintGutter, forceLinting } from '@codemirror/lint'
 import {
@@ -57,22 +57,34 @@ import ConfirmDeleteModal from './ConfirmDeleteModal'
 // render (App.jsx hasn't measured a DOM node to portal into yet), so nothing
 // is portaled that render — not a bug, just a one-frame gap before content
 // appears.
-export default function EditorView({
-  fileAccessSettings,
-  onFileAccessSettingsChange,
-  theme,
-  terminalEnabled,
-  openFolderSignal,
-  onOpenSettings,
-  panel,
-  onPanelChange,
-  onGitChangeCountChange,
-  onOpenPathChange,
-  sidebarCollapsed,
-  onSidebarCollapsedChange,
-  sidebarContainer,
-  mainContainer,
-}) {
+//
+// Wrapped in forwardRef so App.jsx's QuickOpen (Ctrl/Cmd+P) can call
+// openFile directly — App.jsx has no other way to reach into this
+// always-mounted-but-often-hidden component's tab state, same reasoning as
+// openFolderSignal above for the folder picker. onTreeChange bubbles the
+// current file list up the same way onOpenPathChange/onGitChangeCountChange
+// already bubble other internal state, so App.jsx doesn't need its own
+// separate /api/editor/tree fetch.
+const EditorView = forwardRef(function EditorView(
+  {
+    fileAccessSettings,
+    onFileAccessSettingsChange,
+    theme,
+    terminalEnabled,
+    openFolderSignal,
+    onOpenSettings,
+    panel,
+    onPanelChange,
+    onGitChangeCountChange,
+    onOpenPathChange,
+    onTreeChange,
+    sidebarCollapsed,
+    onSidebarCollapsedChange,
+    sidebarContainer,
+    mainContainer,
+  },
+  ref
+) {
   const [tree, setTree] = useState([])
   const [treeStatus, setTreeStatus] = useState('')
   // Every currently open file is its own tab, each with its own buffer —
@@ -308,6 +320,10 @@ export default function EditorView({
     onOpenPathChange?.(openPath)
   }, [openPath, onOpenPathChange])
 
+  useEffect(() => {
+    onTreeChange?.(tree)
+  }, [tree, onTreeChange])
+
   function refreshTree() {
     setTreeStatus('Loading…')
     fetchEditorTree().then((entries) => {
@@ -465,6 +481,12 @@ export default function EditorView({
     setActiveTabPath(path)
     await loadFileIntoTab(path)
   }
+
+  // No deps array: openFile is a plain function redefined every render (it
+  // closes over openTabs), so there's nothing stable to list — this just
+  // means the exposed handle always calls the latest openFile, which is
+  // exactly what's wanted here.
+  useImperativeHandle(ref, () => ({ openFile }))
 
   // Re-fetches an already-open tab's content from disk, overwriting
   // whatever's in the buffer — used after a discard, where the in-memory
@@ -1060,4 +1082,6 @@ export default function EditorView({
       )}
     </>
   )
-}
+})
+
+export default EditorView
