@@ -186,6 +186,26 @@ func Open(path string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Two writers landing on the same instant (e.g. the OpenAI- and
+	// Anthropic-shaped live proxies in internal/chat/live.go both saving a
+	// user message at once) otherwise fail immediately with "database is
+	// locked" under SQLite's default rollback-journal mode. WAL lets
+	// readers proceed without blocking on a writer; busy_timeout makes a
+	// second writer block and retry for up to 5s instead of erroring out
+	// on the first collision. Both are per-connection settings in
+	// modernc.org/sqlite, not per-file — setting them via one db.Exec
+	// only reaches whichever pooled connection happens to run it, so
+	// SetMaxOpenConns(1) pins the pool to that single connection instead
+	// of letting database/sql silently open untouched ones for concurrent
+	// callers. SQLite only supports one writer at a time regardless, so
+	// this costs nothing but the (already-serialized) write throughput.
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`PRAGMA journal_mode=WAL;`); err != nil {
+		return nil, fmt.Errorf("store: enable WAL journal mode: %w", err)
+	}
+	if _, err := db.Exec(`PRAGMA busy_timeout=5000;`); err != nil {
+		return nil, fmt.Errorf("store: set busy_timeout: %w", err)
+	}
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("store: migrate: %w", err)
 	}
