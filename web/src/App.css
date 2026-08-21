@@ -3369,6 +3369,30 @@ body {
   margin: 0 2px;
 }
 
+.editor-notes-panel {
+  height: 100%;
+}
+
+.editor-notes-textarea {
+  flex: 1;
+  resize: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text);
+  font-family: Menlo, Consolas, 'SF Mono', monospace;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  padding: 8px;
+}
+
+.editor-notes-status {
+  color: var(--text-faint);
+  font-size: 0.6875rem;
+  min-height: 1em;
+  text-align: right;
+}
+
 .editor-file-list,
 .editor-git-list,
 .editor-search-results {

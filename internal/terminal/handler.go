@@ -105,6 +105,13 @@ func NewHandler(registry *Registry, gate *Gate, fileReader *files.Reader, baseUR
 					"OPENAI_API_KEY=fastllm-local",
 					"ANTHROPIC_BASE_URL=" + url,
 					"ANTHROPIC_API_KEY=fastllm-local",
+					// FASTLLM_BASE_URL is fastllm's own API, not an
+					// OpenAI/Anthropic-compatible one — for a CLI (or the
+					// human) to read/append the shared notes scratchpad
+					// (internal/chat/notes.go) via e.g.
+					// `curl -X POST $FASTLLM_BASE_URL/api/notes/append -d "..."`
+					// while experimenting against the local model.
+					"FASTLLM_BASE_URL=" + url,
 				}
 			}
 		}

@@ -1424,6 +1424,17 @@ export default function App() {
           </svg>
           {gitChangeCount > 0 && <span className="view-rail-badge">{gitChangeCount}</span>}
         </button>
+        <button
+          type="button"
+          className={editorPanel === 'notes' ? 'is-active' : ''}
+          title="Notes"
+          onClick={() => openEditorPanel('notes')}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M14 3H6.5A1.5 1.5 0 0 0 5 4.5v15A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V8Z" />
+            <path d="M14 3v4a1 1 0 0 0 1 1h4M9 12h6M9 16h6" />
+          </svg>
+        </button>
 
         <div className="view-rail-spacer" />
 
