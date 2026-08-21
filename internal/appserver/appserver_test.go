@@ -1,0 +1,150 @@
+package appserver
+
+import (
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestConfigFromEnvDefaults(t *testing.T) {
+	for _, key := range []string{
+		"FASTLLM_DB", "LLM_BASE_URL", "LLM_API_KEY", "LLM_CHAT_MODEL", "LLM_EMBED_MODEL",
+		"FASTLLM_FILES_ROOT", "FASTLLM_FILES_WRITE", "FASTLLM_TERMINAL_ENABLED",
+	} {
+		t.Setenv(key, "")
+		os.Unsetenv(key) // t.Setenv("") still leaves the var *set* to "" — Unsetenv is what getenv's os.Getenv check needs to see the fallback
+	}
+
+	cfg, err := ConfigFromEnv()
+	if err != nil {
+		t.Fatalf("ConfigFromEnv returned error: %v", err)
+	}
+	if cfg.DBPath != "fastllm.db" {
+		t.Errorf("DBPath = %q, want default %q", cfg.DBPath, "fastllm.db")
+	}
+	if cfg.LLMBaseURL != "http://localhost:11434/v1" {
+		t.Errorf("LLMBaseURL = %q, want the Ollama default", cfg.LLMBaseURL)
+	}
+	if cfg.LLMChatModel != "llama3.1" {
+		t.Errorf("LLMChatModel = %q, want default %q", cfg.LLMChatModel, "llama3.1")
+	}
+	if cfg.LLMEmbedModel != "nomic-embed-text" {
+		t.Errorf("LLMEmbedModel = %q, want default %q", cfg.LLMEmbedModel, "nomic-embed-text")
+	}
+	if cfg.FilesWrite {
+		t.Error("FilesWrite should default to false when FASTLLM_FILES_WRITE is unset")
+	}
+	if cfg.TerminalEnabled {
+		t.Error("TerminalEnabled should default to false when FASTLLM_TERMINAL_ENABLED is unset")
+	}
+}
+
+func TestConfigFromEnvOverrides(t *testing.T) {
+	t.Setenv("FASTLLM_DB", "/tmp/custom.db")
+	t.Setenv("LLM_BASE_URL", "http://example.com/v1")
+	t.Setenv("LLM_CHAT_MODEL", "custom-model")
+	t.Setenv("FASTLLM_FILES_ROOT", "/some/project")
+	t.Setenv("FASTLLM_FILES_WRITE", "1")
+	t.Setenv("FASTLLM_TERMINAL_ENABLED", "1")
+
+	cfg, err := ConfigFromEnv()
+	if err != nil {
+		t.Fatalf("ConfigFromEnv returned error: %v", err)
+	}
+	if cfg.DBPath != "/tmp/custom.db" {
+		t.Errorf("DBPath = %q, want the env override", cfg.DBPath)
+	}
+	if cfg.LLMBaseURL != "http://example.com/v1" {
+		t.Errorf("LLMBaseURL = %q, want the env override", cfg.LLMBaseURL)
+	}
+	if cfg.LLMChatModel != "custom-model" {
+		t.Errorf("LLMChatModel = %q, want the env override", cfg.LLMChatModel)
+	}
+	if cfg.FilesRoot != "/some/project" {
+		t.Errorf("FilesRoot = %q, want the env override", cfg.FilesRoot)
+	}
+	if !cfg.FilesWrite {
+		t.Error("FilesWrite should be true when FASTLLM_FILES_WRITE is set to any non-empty value")
+	}
+	if !cfg.TerminalEnabled {
+		t.Error("TerminalEnabled should be true when FASTLLM_TERMINAL_ENABLED is set to any non-empty value")
+	}
+}
+
+func TestDesktopDBPathCreatesAndReturnsUnderUserConfigDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	// os.UserConfigDir() on Linux prefers XDG_CONFIG_HOME over $HOME/.config
+	// when set — clear it so this test's HOME override is what actually
+	// takes effect regardless of the host running it.
+	t.Setenv("XDG_CONFIG_HOME", "")
+	os.Unsetenv("XDG_CONFIG_HOME")
+
+	path, err := DesktopDBPath()
+	if err != nil {
+		t.Fatalf("DesktopDBPath returned error: %v", err)
+	}
+	if filepath.Base(path) != "fastllm.db" {
+		t.Errorf("path = %q, want it to end in fastllm.db", path)
+	}
+	if info, err := os.Stat(filepath.Dir(path)); err != nil || !info.IsDir() {
+		t.Errorf("DesktopDBPath should have created its parent directory: %v", err)
+	}
+}
+
+// TestBuildRegistersRoutesAndReturnsUsableHandles is a smoke test: Build
+// does a lot of setup (DB, vector store, LLM client, file/terminal
+// settings) with nothing here to unit-test individually without a real
+// Ollama/cloud backend, but it should never panic on a fresh in-memory DB,
+// and the mux it hands back should actually route requests — catching the
+// class of bug where a new endpoint gets implemented as a Handler method
+// but the mux.HandleFunc registration is forgotten (or typo'd).
+func TestBuildRegistersRoutesAndReturnsUsableHandles(t *testing.T) {
+	cfg := Config{
+		DBPath:       ":memory:",
+		LLMBaseURL:   "http://127.0.0.1:0/v1", // never dialed during Build itself
+		LLMChatModel: "test-model",
+		// Left false, /api/terminal/ws's own handler deliberately 404s
+		// (not 403) to look identical to an unregistered route when the
+		// terminal feature is off — see terminal.NewHandler's doc comment.
+		// That's indistinguishable from "route not registered" from here,
+		// so this test needs it enabled to actually exercise routing.
+		TerminalEnabled: true,
+	}
+	built, err := Build(cfg)
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+	defer built.DB.Close()
+
+	if built.Mux == nil {
+		t.Fatal("Built.Mux is nil")
+	}
+	if built.Handler == nil {
+		t.Fatal("Built.Handler is nil")
+	}
+	if built.TerminalRegistry == nil {
+		t.Fatal("Built.TerminalRegistry is nil")
+	}
+	if built.TerminalBaseURL == nil {
+		t.Fatal("Built.TerminalBaseURL is nil")
+	}
+
+	for _, route := range []struct {
+		method, path string
+	}{
+		{"GET", "/api/conversations"},
+		{"GET", "/api/models"},
+		{"GET", "/api/notes"},
+		{"POST", "/api/editor/test"},
+		{"GET", "/api/terminal/ws"},
+	} {
+		req := httptest.NewRequest(route.method, route.path, nil)
+		rec := httptest.NewRecorder()
+		built.Mux.ServeHTTP(rec, req)
+		if rec.Code == 404 {
+			t.Errorf("%s %s: got 404 — route not registered on the mux", route.method, route.path)
+		}
+	}
+}
