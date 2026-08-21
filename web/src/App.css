@@ -1070,6 +1070,14 @@ body {
   height: var(--view-rail-icon-size);
 }
 
+/* Sized a bit larger than the rest of the rail's icons — a plain gear
+   outline at the shared --view-rail-icon-size read too faint/small next
+   to its neighbors. */
+.view-rail-settings svg {
+  width: calc(var(--view-rail-icon-size) + 6px);
+  height: calc(var(--view-rail-icon-size) + 6px);
+}
+
 .view-rail button:hover {
   background: rgba(128, 128, 128, 0.18);
   color: var(--text);
