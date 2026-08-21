@@ -408,6 +408,15 @@ export function pushSetUpstreamGit() {
   return fetch('/api/editor/git/push-set-upstream', { method: 'POST' })
 }
 
+// Runs "go test ./..." against the real project root (see
+// internal/chat.Handler.EditorRunTests) — an explicit human action on
+// already-saved files, not a preview of unapproved model writes. Returns
+// the raw response; the caller checks res.ok and reads {passed, output}
+// or the error body itself, same pattern as pushGit above.
+export function runEditorTests() {
+  return fetch('/api/editor/test', { method: 'POST' })
+}
+
 export function fetchGitBranches() {
   return fetch('/api/editor/git/branches')
     .then((r) => okJson(r, 'fetchGitBranches'))
@@ -557,6 +566,8 @@ export async function streamChat({ message, model, skillId, conversationId, thin
           callbacks.onPendingWrite?.(payload)
         } else if (eventType === 'build_check') {
           callbacks.onBuildCheck?.(payload)
+        } else if (eventType === 'test_check') {
+          callbacks.onTestCheck?.(payload)
         } else if (eventType === 'error') {
           callbacks.onError?.(payload.error || 'The model backend returned an error.')
         } else if (payload.token) {

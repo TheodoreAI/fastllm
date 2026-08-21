@@ -202,6 +202,26 @@ var runBuildTool = llm.Tool{
 	},
 }
 
+// runTestTool lets the model run the project's existing test suite,
+// optionally with its proposed (not yet approved) writes applied — unlike
+// run_build, this is offered as soon as the project is a Go module, with
+// or without a pending write, since running the existing suite as-is is
+// still useful on its own (e.g. checking it's green before proposing a
+// change at all). Runs against a throwaway copy of the project with any
+// pending writes overlaid; never touches the real sandbox root (see
+// internal/buildcheck).
+var runTestTool = llm.Tool{
+	Type: "function",
+	Function: llm.ToolFunction{
+		Name:        "run_test",
+		Description: "Run \"go test ./...\" against the project, with any of your proposed (not yet approved) file writes applied on top. Only available for Go projects. Returns the test output. Does not affect real files.",
+		Parameters: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
+	},
+}
+
 // PendingWrite is a model-proposed file write awaiting human approval.
 // Held in memory only — never touches disk until Approve is called, and
 // is discarded (not persisted) on server restart.
@@ -373,8 +393,9 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	if h.Files.Enabled() && llm.SupportsToolsForModel(effectiveModel) {
 		var reads []fileRead
 		var buildChecks []buildCheckReport
+		var testChecks []testCheckReport
 		var budgetExhausted bool
-		reads, writes, buildChecks, budgetExhausted = h.runFileTools(ctx, req.Model, &messages, normalizeThinkLevel(req.ThinkLevel), convID)
+		reads, writes, buildChecks, testChecks, budgetExhausted = h.runFileTools(ctx, req.Model, &messages, normalizeThinkLevel(req.ThinkLevel), convID)
 		for _, fr := range reads {
 			payload, _ := json.Marshal(fr)
 			fmt.Fprintf(w, "event: tool_call\ndata: %s\n\n", payload)
@@ -388,6 +409,11 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 		for _, bc := range buildChecks {
 			payload, _ := json.Marshal(bc)
 			fmt.Fprintf(w, "event: build_check\ndata: %s\n\n", payload)
+			flusher.Flush()
+		}
+		for _, tc := range testChecks {
+			payload, _ := json.Marshal(tc)
+			fmt.Fprintf(w, "event: test_check\ndata: %s\n\n", payload)
 			flusher.Flush()
 		}
 		// The tool loop hit its round cap mid-work — nudge the model to
@@ -560,6 +586,15 @@ type buildCheckReport struct {
 	Output string `json:"output"`
 }
 
+// testCheckReport reports one run_test call the model made, for display
+// in the UI — same shape as buildCheckReport, kept as a separate type
+// since the two are independent tool calls with their own UI events
+// (build_check vs. test_check) rather than interchangeable.
+type testCheckReport struct {
+	Passed bool   `json:"passed"`
+	Output string `json:"output"`
+}
+
 // truncationRatio is how much shorter (as a fraction of current line
 // count) a proposed write's content can be before it's treated as
 // probable truncation rather than an intentional shrink — e.g. 0.5 means
@@ -667,7 +702,7 @@ func checkWriteFreshness(lastRead map[string]string, path, currentContent string
 // it runs against a throwaway copy of the project with this turn's
 // pending writes overlaid (see internal/buildcheck), never the real
 // sandbox, so it's safe to offer without a separate approval step.
-func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]llm.Message, thinkLevel string, conversationID int64) ([]fileRead, []*PendingWrite, []buildCheckReport, bool) {
+func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]llm.Message, thinkLevel string, conversationID int64) ([]fileRead, []*PendingWrite, []buildCheckReport, []testCheckReport, bool) {
 	// Snapshot once so every check below (which tools to advertise, whether
 	// writes are allowed, which root a proposed write is validated/diffed
 	// against) agrees with itself for this whole turn, even if a
@@ -679,6 +714,7 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 	var reads []fileRead
 	var pending []*PendingWrite
 	var buildChecks []buildCheckReport
+	var testChecks []testCheckReport
 	// pendingByPath tracks the latest proposed content per path this turn
 	// (a later write_file/edit_file call for the same path supersedes an
 	// earlier one), used to build the run_build overlay.
@@ -698,10 +734,17 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 				tools = append(tools, runBuildTool)
 			}
 		}
+		if hasGoModule {
+			// Unlike run_build, offered regardless of pending writes or
+			// writesEnabled — running the project's existing test suite
+			// as-is (e.g. "is it currently green?") is useful on its own,
+			// not just as a check on an unapproved change.
+			tools = append(tools, runTestTool)
+		}
 
 		reply, err := h.LLM.Chat(ctx, model, *messages, tools, thinkLevel)
 		if err != nil || len(reply.ToolCalls) == 0 {
-			return reads, pending, buildChecks, false
+			return reads, pending, buildChecks, testChecks, false
 		}
 
 		*messages = append(*messages, reply)
@@ -910,6 +953,30 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 			results[call.ID] = text
 		}
 
+		for _, call := range reply.ToolCalls {
+			if call.Function.Name != "run_test" {
+				continue
+			}
+			var overlays []buildcheck.Overlay
+			for path, content := range pendingByPath {
+				overlays = append(overlays, buildcheck.Overlay{Path: path, Content: content})
+			}
+			result, err := buildcheck.RunTests(ctx, root, overlays)
+			var text string
+			switch {
+			case err != nil:
+				text = "Error running tests: " + err.Error()
+				testChecks = append(testChecks, testCheckReport{Passed: false, Output: text})
+			case result.Passed:
+				text = "Tests passed.\n\n" + result.Output
+				testChecks = append(testChecks, testCheckReport{Passed: true, Output: result.Output})
+			default:
+				text = "Tests failed:\n\n" + result.Output
+				testChecks = append(testChecks, testCheckReport{Passed: false, Output: result.Output})
+			}
+			results[call.ID] = text
+		}
+
 		// Emit tool-result messages in the model's original call order —
 		// required so each "tool" message's position corresponds to the
 		// assistant message's tool_calls order that most backends expect.
@@ -928,7 +995,7 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 	// after e.g. a failed build check. Report this so the caller can
 	// inject a summarize-what-happened instruction before the final
 	// streamed answer.
-	return reads, pending, buildChecks, true
+	return reads, pending, buildChecks, testChecks, true
 }
 
 // listFilesMaxEntries caps how many paths listFiles hands back in one

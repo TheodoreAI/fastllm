@@ -304,6 +304,21 @@ export default function ChatPanel({
                 ))}
               </ul>
             )}
+            {m.testChecks && m.testChecks.length > 0 && (
+              <ul className="tool-calls build-checks">
+                {m.testChecks.map((check, ti) => (
+                  <li key={ti} className={check.passed ? 'is-ok' : 'is-error'}>
+                    <details>
+                      <summary>
+                        {check.passed ? <CheckCircleIcon className="inline-icon" /> : <XCircleIcon className="inline-icon" />}
+                        {check.passed ? 'Test check passed' : 'Test check failed'}
+                      </summary>
+                      <pre className="build-check-output">{check.output || '(no output)'}</pre>
+                    </details>
+                  </li>
+                ))}
+              </ul>
+            )}
             {m.images && m.images.length > 0 && (
               <div className="message-images">
                 {m.images.map((src, ii) => (

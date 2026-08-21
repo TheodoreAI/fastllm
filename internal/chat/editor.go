@@ -20,10 +20,11 @@ import (
 	"strings"
 	"time"
 
+	"fastllm/internal/buildcheck"
 	"fastllm/internal/gitrepo"
 	"fastllm/internal/lint"
-	"fastllm/internal/store"
 	"fastllm/internal/llm"
+	"fastllm/internal/store"
 )
 
 // editorTreeEntry is one file in the editor's file tree, relative to the
@@ -700,6 +701,29 @@ func (h *Handler) EditorGitCreateBranch(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// EditorRunTests runs "go test ./..." against the real sandbox root — not
+// a scratch copy, since this is an explicit human action on the human's
+// own already-saved files, not a preview of an unapproved model write
+// (contrast with the model's run_test tool in handler.go, which does use
+// a scratch copy via buildcheck.RunTests since it's checking unreviewed
+// content). Only available for Go projects.
+func (h *Handler) EditorRunTests(w http.ResponseWriter, r *http.Request) {
+	root, ok := h.editorRoot(w)
+	if !ok {
+		return
+	}
+	result, err := buildcheck.RunTestsInPlace(r.Context(), root)
+	if err != nil {
+		if errors.Is(err, buildcheck.ErrNoGoModule) {
+			http.Error(w, "the configured project folder isn't a Go module (no go.mod found)", http.StatusConflict)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"passed": result.Passed, "output": result.Output})
 }
 
 // editorRoot resolves the sandbox root for editor/git endpoints,

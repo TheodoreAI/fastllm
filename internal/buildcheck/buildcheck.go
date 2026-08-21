@@ -22,6 +22,12 @@ import (
 // check doesn't stall the whole chat turn.
 const Timeout = 60 * time.Second
 
+// TestTimeout is Timeout's counterpart for "go test ./..." — tests
+// legitimately take longer than a compile check (setup/teardown, actual
+// test bodies running), so this gets a larger budget rather than sharing
+// Timeout and risking a slow-but-passing suite being cut off mid-run.
+const TestTimeout = 180 * time.Second
+
 // MaxOutputBytes caps how much build output is fed back to the model —
 // it only needs enough to see the first error(s), not a full flood.
 const MaxOutputBytes = 8 * 1024
@@ -60,38 +66,86 @@ type Result struct {
 // should check for that (or catch ErrNoGoModule) before offering the
 // run_build tool to the model at all.
 func Run(ctx context.Context, root string, overlays []Overlay) (Result, error) {
-	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
-		return Result{}, ErrNoGoModule
-	}
-
-	scratch, err := os.MkdirTemp("", "fastllm-buildcheck-*")
+	scratch, err := scratchCopy(root, overlays)
 	if err != nil {
 		return Result{}, err
 	}
 	defer os.RemoveAll(scratch)
+	return runGoCommand(ctx, scratch, Timeout, "build", "./...")
+}
+
+// RunTests is Run's counterpart for "go test ./...": same scratch-copy-
+// and-overlay mechanism (never touches the real sandbox root), so the
+// model can check its proposed, not-yet-approved writes against the test
+// suite the same way it can check they compile.
+func RunTests(ctx context.Context, root string, overlays []Overlay) (Result, error) {
+	scratch, err := scratchCopy(root, overlays)
+	if err != nil {
+		return Result{}, err
+	}
+	defer os.RemoveAll(scratch)
+	return runGoCommand(ctx, scratch, TestTimeout, "test", "./...")
+}
+
+// RunTestsInPlace runs "go test ./..." directly against root — no scratch
+// copy, no overlays. Meant for a human explicitly asking to run tests
+// against their own already-saved files (see the editor's Test panel),
+// where there's nothing unapproved to isolate: the human is the approval
+// step, the same reasoning internal/chat/editor.go's other Editor* methods
+// already apply to reads/writes/git actions on the real sandbox root.
+func RunTestsInPlace(ctx context.Context, root string) (Result, error) {
+	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
+		return Result{}, ErrNoGoModule
+	}
+	return runGoCommand(ctx, root, TestTimeout, "test", "./...")
+}
+
+// scratchCopy copies root into a fresh temp directory and applies
+// overlays on top of it, returning the temp directory's path. The caller
+// is responsible for removing it (os.RemoveAll) once done.
+func scratchCopy(root string, overlays []Overlay) (string, error) {
+	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
+		return "", ErrNoGoModule
+	}
+
+	scratch, err := os.MkdirTemp("", "fastllm-buildcheck-*")
+	if err != nil {
+		return "", err
+	}
 
 	if err := copyTree(root, scratch); err != nil {
-		return Result{}, err
+		os.RemoveAll(scratch)
+		return "", err
 	}
 
 	for _, ov := range overlays {
 		dest, err := resolveOverlayPath(scratch, ov.Path)
 		if err != nil {
-			return Result{}, err
+			os.RemoveAll(scratch)
+			return "", err
 		}
 		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-			return Result{}, err
+			os.RemoveAll(scratch)
+			return "", err
 		}
 		if err := os.WriteFile(dest, []byte(ov.Content), 0o644); err != nil {
-			return Result{}, err
+			os.RemoveAll(scratch)
+			return "", err
 		}
 	}
+	return scratch, nil
+}
 
-	runCtx, cancel := context.WithTimeout(ctx, Timeout)
+// runGoCommand runs "go <args...>" in dir under timeout, capping captured
+// output at MaxOutputBytes — the shared tail end of Run/RunTests/
+// RunTestsInPlace, all of which differ only in which directory they point
+// at and which go subcommand/timeout they use.
+func runGoCommand(ctx context.Context, dir string, timeout time.Duration, args ...string) (Result, error) {
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(runCtx, "go", "build", "./...")
-	cmd.Dir = scratch
+	cmd := exec.CommandContext(runCtx, "go", args...)
+	cmd.Dir = dir
 	output, runErr := cmd.CombinedOutput()
 
 	text := string(output)
@@ -100,7 +154,7 @@ func Run(ctx context.Context, root string, overlays []Overlay) (Result, error) {
 	}
 
 	if runCtx.Err() != nil {
-		return Result{Passed: false, Output: "build check timed out after " + Timeout.String()}, nil
+		return Result{Passed: false, Output: "timed out after " + timeout.String()}, nil
 	}
 	if runErr != nil {
 		if text == "" {

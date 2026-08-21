@@ -204,7 +204,7 @@ func TestRunFileToolsSearchFiles(t *testing.T) {
 	h := New(nil, router, nil, files.New(dir, false), nil)
 
 	messages := []llm.Message{{Role: "user", Content: "where is needle defined?"}}
-	reads, pending, _, _ := h.runFileTools(context.Background(), "test-model", &messages, "", 0)
+	reads, pending, _, _, _ := h.runFileTools(context.Background(), "test-model", &messages, "", 0)
 
 	if round != 2 {
 		t.Fatalf("got %d requests to the fake LLM server, want 2 (one tool call round, one final answer round)", round)
@@ -214,6 +214,104 @@ func TestRunFileToolsSearchFiles(t *testing.T) {
 	}
 	if len(reads) != 0 {
 		t.Errorf("got %d file reads recorded, want 0 — search_files isn't read_file", len(reads))
+	}
+}
+
+// TestRunFileToolsRunTest exercises run_test through the actual tool
+// round-trip in runFileTools, mirroring TestRunFileToolsSearchFiles above
+// — catches wiring mistakes (tool not advertised, switch case not
+// dispatching, result not reaching testChecks) a unit test on
+// buildcheck.RunTests alone would miss.
+func TestRunFileToolsRunTest(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module testmod\n\ngo 1.25.0\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n\nfunc main() {}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main_test.go"), []byte("package main\n\nimport \"testing\"\n\nfunc TestOK(t *testing.T) {}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	round := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		round++
+		w.Header().Set("Content-Type", "application/json")
+
+		if round == 1 {
+			var req struct {
+				Tools []llm.Tool `json:"tools"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			found := false
+			for _, tool := range req.Tools {
+				if tool.Function.Name == "run_test" {
+					found = true
+				}
+			}
+			if !found {
+				t.Error("run_test was not advertised in the tools sent to the model")
+			}
+
+			resp := map[string]any{
+				"choices": []map[string]any{{
+					"message": map[string]any{
+						"role":    "assistant",
+						"content": "",
+						"tool_calls": []map[string]any{{
+							"id":   "call_1",
+							"type": "function",
+							"function": map[string]string{
+								"name":      "run_test",
+								"arguments": `{}`,
+							},
+						}},
+					},
+				}},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		var req struct {
+			Messages []llm.Message `json:"messages"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		last := req.Messages[len(req.Messages)-1]
+		if last.Role != "tool" {
+			t.Fatalf("round 2 request's last message role = %q, want %q", last.Role, "tool")
+		}
+		if !strings.Contains(last.Content, "Tests passed") {
+			t.Errorf("tool result content %q doesn't report the tests passing", last.Content)
+		}
+
+		resp := map[string]any{
+			"choices": []map[string]any{{
+				"message": map[string]any{
+					"role":    "assistant",
+					"content": "tests pass",
+				},
+			}},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	router := llm.NewRouter(llm.New(server.URL, "", "test-model", ""), llm.CloudProviderConfig{})
+	h := New(nil, router, nil, files.New(dir, false), nil)
+
+	messages := []llm.Message{{Role: "user", Content: "are the tests passing?"}}
+	_, _, _, testChecks, _ := h.runFileTools(context.Background(), "test-model", &messages, "", 0)
+
+	if round != 2 {
+		t.Fatalf("got %d requests to the fake LLM server, want 2 (one tool call round, one final answer round)", round)
+	}
+	if len(testChecks) != 1 {
+		t.Fatalf("got %d test checks recorded, want 1", len(testChecks))
+	}
+	if !testChecks[0].Passed {
+		t.Errorf("testChecks[0].Passed = false, want true — output: %s", testChecks[0].Output)
 	}
 }
 
