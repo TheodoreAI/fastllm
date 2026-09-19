@@ -402,11 +402,12 @@ export default function App() {
             setMessages((prev) => {
               const last = prev[prev.length - 1]
               if (!last || last.role !== 'assistant') return prev
+              if (last.finalResult) return prev
               return [
                 ...prev.slice(0, -1),
                 {
                   ...last,
-                  error: err.message,
+                  error: err?.message || 'Agent task failed.',
                   isError: true,
                   currentTurn: null,
                 },
@@ -420,9 +421,10 @@ export default function App() {
           setMessages((prev) => {
             const last = prev[prev.length - 1]
             if (!last || last.role !== 'assistant') return prev
+            if (last.finalResult) return prev
             return [
               ...prev.slice(0, -1),
-              { ...last, error: err.message, isError: true, currentTurn: null },
+              { ...last, error: err?.message || 'Agent task failed.', isError: true, currentTurn: null },
             ]
           })
         }
