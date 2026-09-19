@@ -1,0 +1,4 @@
+- decided_at: 2026-09-19T21:24:47+00:00
+  event: initial
+  value: Use reeflective/readline behind an interactiveInput abstraction with scanner fallback
+  reason: Provides cross-platform history, arrows, Ctrl-R, multiline input, and programmable completion while preserving piped-input tests

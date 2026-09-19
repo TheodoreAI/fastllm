@@ -96,29 +96,22 @@ func RunCLI(args []string) int {
 		apiKey = getenv("LLM_API_KEY", "")
 	}
 
-	// Auto-route Muse Glimmer or OSU cluster models to the cluster tunnel (port 8010)
-	isOSU := strings.HasPrefix(model, "osu:") || strings.HasPrefix(model, "cluster:") ||
-		model == "muse-glimmer" || model == "muse-glimmer-30b" || model == "meta-models/Muse-Glimmer-30B"
+	// Route cluster-style model names at whatever endpoint this machine has
+	// configured for the "selfhosted" provider. There is deliberately no built-in
+	// address: a forwarded port is meaningful only on the machine that forwarded it.
+	selfHostedEndpoint := settings.FindByProvider("selfhosted")
+	isSelfHosted := strings.HasPrefix(model, "selfhosted:") || strings.HasPrefix(model, "cluster:") ||
+		(selfHostedEndpoint != nil && selfHostedEndpoint.ID == model)
 
-	if isOSU {
-		if strings.TrimSpace(*urlFlag) == "" && os.Getenv("LLM_BASE_URL") == "" {
-			if env := os.Getenv("OSU_LLM_BASE_URL"); env != "" {
-				baseURL = env
-			} else {
-				baseURL = "http://127.0.0.1:8010/v1"
-			}
+	if isSelfHosted {
+		provider := config.ResolveProvider(settings, "selfhosted")
+		if strings.TrimSpace(*urlFlag) == "" && os.Getenv("LLM_BASE_URL") == "" && provider.BaseURL != "" {
+			baseURL = provider.BaseURL
 		}
 		if apiKey == "" {
-			if env := os.Getenv("OSU_LLM_API_KEY"); env != "" {
-				apiKey = env
-			} else if home, err := os.UserHomeDir(); err == nil {
-				keyFile := filepath.Join(home, ".osu-llm", "vllm-api-key")
-				if data, err := os.ReadFile(keyFile); err == nil {
-					apiKey = strings.TrimSpace(string(data))
-				}
-			}
+			apiKey = provider.APIKey
 		}
-		model = strings.TrimPrefix(strings.TrimPrefix(model, "osu:"), "cluster:")
+		model = strings.TrimPrefix(strings.TrimPrefix(model, "selfhosted:"), "cluster:")
 	}
 
 	client := llm.New(baseURL, apiKey, model, "")

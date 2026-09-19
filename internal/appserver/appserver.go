@@ -9,8 +9,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"fastllm/internal/chat"
+	"fastllm/internal/config"
 	"fastllm/internal/files"
 	"fastllm/internal/llm"
 	"fastllm/internal/store"
@@ -68,6 +70,11 @@ func Build(cfg Config) (*Built, error) {
 		log.Printf("load cloud provider settings: %v", err)
 		cloudSettings = store.DefaultCloudProviderSettings
 	}
+	// Resolve the self-hosted endpoint once, here at the composition root, so no
+	// lower layer has to guess a host or read a key path of its own.
+	userSettings, _, _ := config.LoadSettings("")
+	selfHostedDefaults := config.ResolveProvider(userSettings, "selfhosted")
+
 	llmRouter := llm.NewRouter(llmClient, llm.CloudProviderConfig{
 		AnthropicAPIKey:     cloudSettings.AnthropicAPIKey,
 		OpenAIAPIKey:        cloudSettings.OpenAIAPIKey,
@@ -75,8 +82,9 @@ func Build(cfg Config) (*Built, error) {
 		NvidiaAPIKey:        cloudSettings.NvidiaAPIKey,
 		CloudflareAPIKey:    cloudSettings.CloudflareAPIKey,
 		CloudflareAccountID: cloudSettings.CloudflareAccountID,
-		OSUBaseURL:          cloudSettings.OSUBaseURL,
-		OSUAPIKey:           cloudSettings.OSUAPIKey,
+		SelfHostedBaseURL:   firstNonEmpty(cloudSettings.SelfHostedBaseURL, selfHostedDefaults.BaseURL),
+		SelfHostedAPIKey:    firstNonEmpty(cloudSettings.SelfHostedAPIKey, selfHostedDefaults.APIKey),
+		SelfHostedModel:     selfHostedDefaults.Model,
 	})
 
 	if err := store.SeedFileAccessSettingsFromEnv(db, cfg.FilesRoot, cfg.FilesWrite); err != nil {
@@ -99,6 +107,7 @@ func Build(cfg Config) (*Built, error) {
 	}
 
 	handler := chat.New(db, llmRouter, fileReader)
+	handler.SelfHostedDefaults = selfHostedDefaults
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/chat", handler.Chat)
@@ -142,4 +151,15 @@ func DesktopDBPath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, "fastllm.db"), nil
+}
+
+// firstNonEmpty returns the first non-blank value, letting an explicit setting in
+// the database override the endpoint resolved from user config.
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }

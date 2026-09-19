@@ -1,0 +1,3 @@
+value: Retry transient model failures up to 3 attempts with exponential backoff; reject malformed tool JSON after fenced-JSON normalization
+reason: Improves resilience without retrying deterministic or user-canceled failures
+decided_at: 2026-09-19T21:24:47+00:00

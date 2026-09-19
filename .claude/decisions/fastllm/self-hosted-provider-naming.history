@@ -1,0 +1,4 @@
+- decided_at: 2026-09-19T22:59:29+00:00
+  event: initial
+  value: Provider is called 'selfhosted' in Go identifiers, config tags, prefixes and user-facing strings; SQLite columns and HTTP JSON keys stay osu_* for storage/wire compatibility
+  reason: Renaming the wire and storage keys would need a DB migration and a frontend change for no functional gain; the visible surface is what leaked one site's naming into the project. Model-specific behaviour (name matching for tool/vision capability, alias collapsing, channel-format detection) moved to provider-level or config-level rules so no model name is compiled in.

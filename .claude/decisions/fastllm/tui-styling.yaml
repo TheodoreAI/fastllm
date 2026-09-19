@@ -1,0 +1,3 @@
+value: Native zero-overhead modern ANSI/Unicode styling engine with Windows VT support, rounded cards, colored diffs, and structured tool blocks
+reason: Zero new external dependencies, preserves fast streaming REPL responsiveness, provides clean monochrome/accent aesthetics matching web UI without emojis
+decided_at: 2026-09-19T16:50:03+00:00

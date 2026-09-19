@@ -62,7 +62,7 @@ func CalculateCost(model string, promptTokens, completionTokens int) float64 {
 	}
 
 	if !matched {
-		// Local models (Ollama, vLLM, OSU cluster, Llama, Qwen, etc.) are free
+		// Locally served models (Ollama, vLLM, and other self-hosted servers) are free
 		return 0.0
 	}
 

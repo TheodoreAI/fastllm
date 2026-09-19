@@ -1,8 +1,8 @@
 fastllm.exe
 fastllm.exe~
-fastllm
+/fastllm
 fastllm-cli.exe
-fastllm-cli
+/fastllm-cli
 .fastllm.launched
 fastllm.db
 fastllm.db-shm
@@ -27,3 +27,9 @@ fastllm_terminal_test.exe
 cmd/desktop/build/bin/
 web/wailsjs/
 web/package.json.md5
+
+
+# Local fastllm config. CandidateConfigPaths checks ./.fastllm/config.json
+# before the one in $HOME, so a project-local config is what the TUI writes
+# to — keep it out of the repo rather than trusting it to stay secret-free.
+.fastllm/

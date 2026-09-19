@@ -1,0 +1,4 @@
+- decided_at: 2026-09-19T22:42:14+00:00
+  event: initial
+  value: Endpoints are tagged in config with "provider": "<name>" and resolved by config.ResolveProvider (env first, then the tagged entry); no host address or key path is compiled into the binary
+  reason: Three layers (harness CLI, llm router, chat handler) each carried a duplicate fallback chain ending in 127.0.0.1:8010 and ~/.osu-llm/vllm-api-key, shipping one developer's machine to every user. Tagging by provider lets code find the endpoint without knowing where it lives; an unconfigured machine resolves to zero values and callers report 'not configured' instead of dialing a meaningless port.

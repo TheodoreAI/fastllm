@@ -1,0 +1,3 @@
+value: Integrated Shell Mode (/shell, /sh) and inline execution (!cmd, $ cmd) with live terminal IO, plus /c conversation and screen clearing
+reason: Allows running interactive host commands directly inside the TUI without leaving the REPL, and keeps terminal UI uncluttered
+decided_at: 2026-09-19T17:01:29+00:00

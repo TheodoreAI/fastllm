@@ -126,6 +126,10 @@ type Client struct {
 	ChatModel  string
 	EmbedModel string
 	HTTPClient *http.Client
+	// ChannelFraming enables demuxing of the channel-routed completion format
+	// (to=self / to=user). It is an endpoint property set by the composition
+	// root from user config, never inferred from a model name.
+	ChannelFraming bool
 	// SendThink controls whether StreamChat/Chat include the "think"
 	// field on outgoing requests — Ollama's own extension for picking a
 	// reasoning effort level, not part of the OpenAI chat-completions
@@ -407,12 +411,6 @@ var CloudflareModels = []string{
 	"anthropic/claude-haiku-4.5",
 }
 
-// OSUModels lists the primary models served from the OSU cluster via vLLM.
-var OSUModels = []string{
-	"muse-glimmer",
-}
-
-
 type tagsResponse struct {
 	Models []struct {
 		Name         string   `json:"name"`
@@ -596,16 +594,13 @@ var toolCapableModelPrefixes = []string{
 // same hand-verified way as NvidiaModels.
 func SupportsToolsForModel(model string) bool {
 	if bare, provider, ok := stripProviderPrefix(model); ok {
-		if provider == "osu" {
+		if provider == "selfhosted" {
 			return true
 		}
 		if provider == "cloudflare" {
 			return NeedsResponsesAPI("cloudflare", bare) || NeedsAnthropicAPI(bare) || cloudflareToolCapableModels[bare]
 		}
 		return provider == "gemini" || provider == "openai" || provider == "nvidia" || provider == "anthropic"
-	}
-	if strings.Contains(strings.ToLower(model), "muse-glimmer") || strings.Contains(strings.ToLower(model), "muse_glimmer") {
-		return true
 	}
 	return SupportsTools(model)
 }
@@ -694,15 +689,12 @@ var nvidiaVisionModels = map[string]bool{
 func SupportsVisionForModel(model string) bool {
 	if bare, provider, ok := stripProviderPrefix(model); ok {
 		switch provider {
-		case "anthropic", "openai", "gemini", "osu":
+		case "anthropic", "openai", "gemini", "selfhosted":
 			return true
 		case "nvidia":
 			return nvidiaVisionModels[bare]
 		}
 		return false
-	}
-	if strings.Contains(strings.ToLower(model), "muse-glimmer") || strings.Contains(strings.ToLower(model), "muse_glimmer") {
-		return true
 	}
 	for _, prefix := range visionCapableModelPrefixes {
 		if strings.HasPrefix(model, prefix) {
@@ -820,8 +812,8 @@ func (c *Client) StreamChat(ctx context.Context, model string, messages []Messag
 	// providers actually send these.
 	rateLimit := parseRateLimitHeaders(resp.Header)
 
-	museFilter := newMuseStreamFilter(onToken, onReasoning)
-	isMuse := IsMuseModel(model) || IsMuseModel(c.ChatModel)
+	channelFilter := newChannelStreamFilter(onToken, onReasoning)
+	useChannelFilter := c.ChannelFraming
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -840,8 +832,8 @@ func (c *Client) StreamChat(ctx context.Context, model string, messages []Messag
 		}
 		if len(chunk.Choices) > 0 {
 			if chunk.Choices[0].Delta.Content != "" {
-				if isMuse {
-					museFilter.Feed(chunk.Choices[0].Delta.Content)
+				if useChannelFilter {
+					channelFilter.Feed(chunk.Choices[0].Delta.Content)
 				} else {
 					onToken(chunk.Choices[0].Delta.Content)
 				}
@@ -859,8 +851,8 @@ func (c *Client) StreamChat(ctx context.Context, model string, messages []Messag
 			})
 		}
 	}
-	if isMuse {
-		museFilter.Flush()
+	if useChannelFilter {
+		channelFilter.Flush()
 	}
 	return scanner.Err()
 }
@@ -927,8 +919,8 @@ func (c *Client) Chat(ctx context.Context, model string, messages []Message, too
 	}
 
 	reply := cr.Choices[0].Message
-	if IsMuseModel(model) || IsMuseModel(c.ChatModel) || strings.Contains(reply.Content, "to=user") || strings.Contains(reply.Content, "to=self") {
-		cleaned, _ := CleanMuseContent(reply.Content)
+	if c.ChannelFraming || HasChannelMarkers(reply.Content) {
+		cleaned, _ := SplitChannelContent(reply.Content)
 		reply.Content = cleaned
 	}
 

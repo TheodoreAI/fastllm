@@ -619,10 +619,14 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 						Name: newID,
 						URL:  newURL,
 					})
-					if err := config.SaveSettings(configPath, settings); err != nil {
+					relocated, err := config.SaveSettings(configPath, settings)
+					if err != nil {
 						fmt.Println(ColorRed(fmt.Sprintf("  %s Error saving to %s: %v", SymCross, configPath, err)))
 					} else {
 						fmt.Println(ColorGreen(fmt.Sprintf("  %s Added model %q (%s) to %s", SymCheck, newID, newURL, configPath)))
+						if len(relocated) > 0 {
+							fmt.Println(ColorYellow(fmt.Sprintf("  %s API keys for %s were moved out of %s into ~/.fastllm/keys/ and are now referenced by api_key_file.", SymDot, strings.Join(relocated, ", "), filepath.Base(configPath))))
+						}
 					}
 					continue
 				}

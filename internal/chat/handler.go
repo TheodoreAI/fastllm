@@ -25,6 +25,7 @@ import (
 	"sync"
 
 	"fastllm/internal/buildcheck"
+	"fastllm/internal/config"
 	"fastllm/internal/files"
 	"fastllm/internal/folderpicker"
 	"fastllm/internal/gitrepo"
@@ -179,6 +180,8 @@ type Handler struct {
 	Files         *files.Reader
 	FolderChooser func(ctx context.Context) (string, error)
 	Live          *LiveBroadcaster
+	// SelfHostedDefaults is the self-hosted endpoint resolved from user config at startup.
+	SelfHostedDefaults config.ProviderEndpointDefaults
 
 	liveConvMu       sync.Mutex
 	liveConvID       int64
@@ -200,7 +203,6 @@ func newWriteID() string {
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
 }
-
 
 type chatRequest struct {
 	Message        string   `json:"message"`
@@ -826,7 +828,7 @@ func (h *Handler) GetCloudProviderSettings(w http.ResponseWriter, r *http.Reques
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, toCloudProviderSettingsResponse(settings))
+	writeJSON(w, h.toCloudProviderSettingsResponse(settings))
 }
 
 type cloudProviderSettingsResponse struct {
@@ -835,31 +837,26 @@ type cloudProviderSettingsResponse struct {
 	GeminiConfigured     bool   `json:"gemini_configured"`
 	NvidiaConfigured     bool   `json:"nvidia_configured"`
 	CloudflareConfigured bool   `json:"cloudflare_configured"`
-	OSUConfigured        bool   `json:"osu_configured"`
-	OSUBaseURL           string `json:"osu_base_url,omitempty"`
+	SelfHostedConfigured bool   `json:"osu_configured"`
+	SelfHostedBaseURL    string `json:"osu_base_url,omitempty"`
 }
 
-func toCloudProviderSettingsResponse(s store.CloudProviderSettings) cloudProviderSettingsResponse {
-	osuConfigured := s.OSUAPIKey != "" || s.OSUBaseURL != ""
-	if !osuConfigured {
-		if home, err := os.UserHomeDir(); err == nil {
-			if _, err := os.Stat(filepath.Join(home, ".osu-llm", "vllm-api-key")); err == nil {
-				osuConfigured = true
-			}
-		}
-	}
-	baseURL := s.OSUBaseURL
+func (h *Handler) toCloudProviderSettingsResponse(s store.CloudProviderSettings) cloudProviderSettingsResponse {
+	// Fall back to whatever this machine resolved for the self-hosted provider
+	// probing a fixed path or assuming a port; SelfHostedDefaults comes from user config.
+	baseURL := strings.TrimSpace(s.SelfHostedBaseURL)
 	if baseURL == "" {
-		baseURL = "http://127.0.0.1:8010/v1"
+		baseURL = strings.TrimSpace(h.SelfHostedDefaults.BaseURL)
 	}
+	selfHostedConfigured := s.SelfHostedAPIKey != "" || baseURL != "" || h.SelfHostedDefaults.APIKey != ""
 	return cloudProviderSettingsResponse{
 		AnthropicConfigured:  s.AnthropicAPIKey != "",
 		OpenAIConfigured:     s.OpenAIAPIKey != "",
 		GeminiConfigured:     s.GeminiAPIKey != "",
 		NvidiaConfigured:     s.NvidiaAPIKey != "",
 		CloudflareConfigured: s.CloudflareAPIKey != "" && s.CloudflareAccountID != "",
-		OSUConfigured:        osuConfigured,
-		OSUBaseURL:           baseURL,
+		SelfHostedConfigured: selfHostedConfigured,
+		SelfHostedBaseURL:    baseURL,
 	}
 }
 
@@ -871,8 +868,8 @@ func (h *Handler) UpdateCloudProviderSettings(w http.ResponseWriter, r *http.Req
 		NvidiaAPIKey        *string `json:"nvidia_api_key"`
 		CloudflareAPIKey    *string `json:"cloudflare_api_key"`
 		CloudflareAccountID *string `json:"cloudflare_account_id"`
-		OSUAPIKey           *string `json:"osu_api_key"`
-		OSUBaseURL          *string `json:"osu_base_url"`
+		SelfHostedAPIKey    *string `json:"osu_api_key"`
+		SelfHostedBaseURL   *string `json:"osu_base_url"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid cloud provider settings payload", http.StatusBadRequest)
@@ -903,11 +900,11 @@ func (h *Handler) UpdateCloudProviderSettings(w http.ResponseWriter, r *http.Req
 	if req.CloudflareAccountID != nil {
 		settings.CloudflareAccountID = *req.CloudflareAccountID
 	}
-	if req.OSUAPIKey != nil {
-		settings.OSUAPIKey = *req.OSUAPIKey
+	if req.SelfHostedAPIKey != nil {
+		settings.SelfHostedAPIKey = *req.SelfHostedAPIKey
 	}
-	if req.OSUBaseURL != nil {
-		settings.OSUBaseURL = *req.OSUBaseURL
+	if req.SelfHostedBaseURL != nil {
+		settings.SelfHostedBaseURL = *req.SelfHostedBaseURL
 	}
 
 	if err := store.SaveCloudProviderSettings(h.DB, settings); err != nil {
@@ -921,10 +918,10 @@ func (h *Handler) UpdateCloudProviderSettings(w http.ResponseWriter, r *http.Req
 		NvidiaAPIKey:        settings.NvidiaAPIKey,
 		CloudflareAPIKey:    settings.CloudflareAPIKey,
 		CloudflareAccountID: settings.CloudflareAccountID,
-		OSUBaseURL:          settings.OSUBaseURL,
-		OSUAPIKey:           settings.OSUAPIKey,
+		SelfHostedBaseURL:   settings.SelfHostedBaseURL,
+		SelfHostedAPIKey:    settings.SelfHostedAPIKey,
 	})
-	writeJSON(w, toCloudProviderSettingsResponse(settings))
+	writeJSON(w, h.toCloudProviderSettingsResponse(settings))
 }
 
 func (h *Handler) BrowseForFolder(w http.ResponseWriter, r *http.Request) {

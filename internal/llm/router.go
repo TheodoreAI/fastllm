@@ -3,10 +3,9 @@ package llm
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -22,7 +21,7 @@ const (
 	GeminiPrefix     = "gemini:"
 	NvidiaPrefix     = "nvidia:"
 	CloudflarePrefix = "cloudflare:"
-	OSUPrefix        = "osu:"
+	SelfHostedPrefix = "selfhosted:"
 	ClusterPrefix    = "cluster:"
 )
 
@@ -39,8 +38,11 @@ type CloudProviderConfig struct {
 	// Cloudflare Workers AI to be configured — see SetCloudProviders.
 	CloudflareAPIKey    string
 	CloudflareAccountID string
-	OSUBaseURL          string
-	OSUAPIKey           string
+	SelfHostedBaseURL   string
+	SelfHostedAPIKey    string
+	// SelfHostedModel is the served model id to default to. Resolved from config because
+	// the served alias differs per deployment.
+	SelfHostedModel string
 }
 
 // cloudClients bundles the four optional cloud clients so Router can
@@ -49,12 +51,13 @@ type CloudProviderConfig struct {
 // could otherwise let a concurrent StreamChat see one provider from the
 // old settings and another from the new mid-update.
 type cloudClients struct {
-	anthropic  *AnthropicClient
-	openai     *Client // OpenAI's real API is wire-compatible with Client
-	gemini     *GeminiClient
-	nvidia     *Client // NVIDIA Build's hosted API is also OpenAI-compatible — see OpenAIModels's doc comment
-	cloudflare *Client // Workers AI's /ai/v1/chat/completions endpoint is also OpenAI-compatible — see CloudflareModels's doc comment
-	osu        *Client // OSU cluster vLLM server via SSH tunnel (port 8010 for Muse Glimmer)
+	anthropic       *AnthropicClient
+	openai          *Client // OpenAI's real API is wire-compatible with Client
+	gemini          *GeminiClient
+	nvidia          *Client // NVIDIA Build's hosted API is also OpenAI-compatible — see OpenAIModels's doc comment
+	cloudflare      *Client // Workers AI's /ai/v1/chat/completions endpoint is also OpenAI-compatible — see CloudflareModels's doc comment
+	selfHostedModel string  // id the user configured for that endpoint
+	selfHosted      *Client // user-configured OpenAI-compatible server (see config.ResolveProvider)
 	// openaiResponses/cloudflareResponses talk to the corresponding
 	// provider's /v1/responses (or /ai/v1/responses) endpoint instead of
 	// Chat Completions — a handful of newer models on each provider (see
@@ -125,42 +128,61 @@ func (r *Router) SetCloudProviders(cloud CloudProviderConfig) {
 		next.cloudflareAnthropic = NewCloudflareAnthropicClient(cloudflareBaseURL, cloud.CloudflareAPIKey)
 	}
 
-	osuURL := cloud.OSUBaseURL
-	if osuURL == "" {
-		if env := os.Getenv("OSU_LLM_BASE_URL"); env != "" {
-			osuURL = env
-		} else if env := os.Getenv("LLM_OSU_BASE_URL"); env != "" {
-			osuURL = env
-		} else {
-			osuURL = "http://127.0.0.1:8010/v1"
-		}
+	// The self-hosted endpoint is whatever the composition root resolved from user
+	// the environment. No address is assumed here: an unconfigured machine simply has
+	// no client at all, and callers surface that as "not configured".
+	if strings.TrimSpace(cloud.SelfHostedBaseURL) != "" {
+		selfHostedModel := strings.TrimSpace(cloud.SelfHostedModel)
+		next.selfHosted = New(cloud.SelfHostedBaseURL, cloud.SelfHostedAPIKey, selfHostedModel, "")
+		// Self-hosted servers are where the channel-routed format shows up; this is
+		// an endpoint property, not a judgement about any particular model.
+		next.selfHosted.ChannelFraming = true
+		next.selfHostedModel = selfHostedModel
+		rememberSelfHostedModel(selfHostedModel)
 	}
-	osuKey := cloud.OSUAPIKey
-	if osuKey == "" {
-		if env := os.Getenv("OSU_LLM_API_KEY"); env != "" {
-			osuKey = env
-		} else if env := os.Getenv("LLM_OSU_API_KEY"); env != "" {
-			osuKey = env
-		} else {
-			if home, err := os.UserHomeDir(); err == nil {
-				keyPath := filepath.Join(home, ".osu-llm", "vllm-api-key")
-				if data, err := os.ReadFile(keyPath); err == nil {
-					osuKey = strings.TrimSpace(string(data))
-				}
-			}
-		}
-	}
-	next.osu = New(osuURL, osuKey, "meta-models/Muse-Glimmer-30B", "")
 
 	r.mu.Lock()
 	r.clouds = next
 	r.mu.Unlock()
 }
 
+// errProviderNotConfigured and errProviderUnreachable keep the two self-hosted
+// failure modes in one place. They describe how to point fastllm at an endpoint
+// rather than naming a particular tunnel or launcher script, which only exists on
+// the machine it was written for.
+func errProviderNotConfigured(provider string) error {
+	return fmt.Errorf("llm: no endpoint is configured for provider %q — add a model entry with \"provider\": %q to ~/.fastllm/config.json, or set %s_LLM_BASE_URL",
+		provider, provider, strings.ToUpper(provider))
+}
+
+func errProviderUnreachable(provider, baseURL string, err error) error {
+	return fmt.Errorf("llm: cannot reach the %q endpoint at %s — check that it is running and that any tunnel to it is open: %w",
+		provider, baseURL, err)
+}
+
 // stripProviderPrefix returns the bare model ID Anthropic/OpenAI/Gemini
 // actually expect (their APIs know nothing about fastllm's "anthropic:"
 // picker prefix) along with which provider it identified, or ("", "",
 // false) for a local/unprefixed model name.
+
+// selfHostedModelID remembers the model id configured for the self-hosted endpoint.
+// stripProviderPrefix is a package-level function with no access to user config, so
+// the id is recorded here when the client is built; this is what lets a bare name
+// route to that endpoint without any model name being compiled into the binary.
+var selfHostedModelID atomic.Value
+
+func rememberSelfHostedModel(id string) {
+	selfHostedModelID.Store(strings.ToLower(strings.TrimSpace(id)))
+}
+
+func isConfiguredSelfHostedModel(model string) bool {
+	id, _ := selfHostedModelID.Load().(string)
+	if id == "" {
+		return false
+	}
+	return CanonicalModelAlias(model, id) == id
+}
+
 func stripProviderPrefix(model string) (bare, provider string, ok bool) {
 	switch {
 	case strings.HasPrefix(model, AnthropicPrefix):
@@ -173,12 +195,12 @@ func stripProviderPrefix(model string) (bare, provider string, ok bool) {
 		return strings.TrimPrefix(model, NvidiaPrefix), "nvidia", true
 	case strings.HasPrefix(model, CloudflarePrefix):
 		return strings.TrimPrefix(model, CloudflarePrefix), "cloudflare", true
-	case strings.HasPrefix(model, OSUPrefix):
-		return strings.TrimPrefix(model, OSUPrefix), "osu", true
+	case strings.HasPrefix(model, SelfHostedPrefix):
+		return strings.TrimPrefix(model, SelfHostedPrefix), "selfhosted", true
 	case strings.HasPrefix(model, ClusterPrefix):
-		return strings.TrimPrefix(model, ClusterPrefix), "osu", true
-	case IsMuseModel(model):
-		return model, "osu", true
+		return strings.TrimPrefix(model, ClusterPrefix), "selfhosted", true
+	case isConfiguredSelfHostedModel(model):
+		return model, "selfhosted", true
 	default:
 		return "", "", false
 	}
@@ -229,13 +251,13 @@ func (r *Router) StreamChat(ctx context.Context, model string, messages []Messag
 			return clouds.cloudflareResponses.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning, onUsage)
 		}
 		return clouds.cloudflare.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning, onUsage)
-	case "osu":
-		if clouds.osu == nil {
-			return fmt.Errorf("llm: OSU cluster isn't configured — run 'osu-llm up muse' to start the tunnel")
+	case "selfhosted":
+		if clouds.selfHosted == nil {
+			return errProviderNotConfigured("selfhosted")
 		}
-		if err := clouds.osu.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning, onUsage); err != nil {
+		if err := clouds.selfHosted.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning, onUsage); err != nil {
 			if strings.Contains(err.Error(), "connection refused") || strings.Contains(err.Error(), "connectex") {
-				return fmt.Errorf("llm: cannot reach OSU cluster tunnel at %s — start it with 'osu-llm up muse': %w", clouds.osu.BaseURL, err)
+				return errProviderUnreachable("selfhosted", clouds.selfHosted.BaseURL, err)
 			}
 			return err
 		}
@@ -298,14 +320,14 @@ func (r *Router) Chat(ctx context.Context, model string, messages []Message, too
 			return clouds.cloudflareResponses.Chat(ctx, bare, messages, tools, thinkLevel)
 		}
 		return clouds.cloudflare.Chat(ctx, bare, messages, tools, thinkLevel)
-	case "osu":
-		if clouds.osu == nil {
-			return Message{}, fmt.Errorf("llm: OSU cluster isn't configured — run 'osu-llm up muse' to start the tunnel")
+	case "selfhosted":
+		if clouds.selfHosted == nil {
+			return Message{}, errProviderNotConfigured("selfhosted")
 		}
-		msg, err := clouds.osu.Chat(ctx, bare, messages, tools, thinkLevel)
+		msg, err := clouds.selfHosted.Chat(ctx, bare, messages, tools, thinkLevel)
 		if err != nil {
 			if strings.Contains(err.Error(), "connection refused") || strings.Contains(err.Error(), "connectex") {
-				return Message{}, fmt.Errorf("llm: cannot reach OSU cluster tunnel at %s — start it with 'osu-llm up muse': %w", clouds.osu.BaseURL, err)
+				return Message{}, errProviderUnreachable("selfhosted", clouds.selfHosted.BaseURL, err)
 			}
 			return Message{}, err
 		}
@@ -385,27 +407,27 @@ func (r *Router) ListModels(ctx context.Context) ([]Model, error) {
 			out = append(out, Model{Name: full, SupportsFileTools: SupportsToolsForModel(full), SupportsVision: SupportsVisionForModel(full), Provider: "cloudflare"})
 		}
 	}
-	if clouds.osu != nil {
+	if clouds.selfHosted != nil {
+		configuredModel := strings.TrimSpace(clouds.selfHostedModel)
 		listCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
-		liveModels, err := clouds.osu.ListModels(listCtx)
+		liveModels, err := clouds.selfHosted.ListModels(listCtx)
 		cancel()
 		if err == nil && len(liveModels) > 0 {
 			seen := make(map[string]bool)
 			for _, m := range liveModels {
-				canonical := CanonicalOSUModelName(m.Name)
+				canonical := CanonicalModelAlias(m.Name, configuredModel)
 				if seen[canonical] {
 					continue
 				}
 				seen[canonical] = true
-				full := OSUPrefix + canonical
-				out = append(out, Model{Name: full, SupportsFileTools: SupportsToolsForModel(full), SupportsVision: SupportsVisionForModel(full), Provider: "osu"})
+				full := SelfHostedPrefix + canonical
+				out = append(out, Model{Name: full, SupportsFileTools: SupportsToolsForModel(full), SupportsVision: SupportsVisionForModel(full), Provider: "selfhosted"})
 			}
-		} else {
-			for _, name := range OSUModels {
-				canonical := CanonicalOSUModelName(name)
-				full := OSUPrefix + canonical
-				out = append(out, Model{Name: full, SupportsFileTools: SupportsToolsForModel(full), SupportsVision: SupportsVisionForModel(full), Provider: "osu"})
-			}
+		} else if configuredModel != "" {
+			// The endpoint did not answer a model list, so fall back to the single
+			// id the user configured rather than a list baked into the binary.
+			full := SelfHostedPrefix + configuredModel
+			out = append(out, Model{Name: full, SupportsFileTools: SupportsToolsForModel(full), SupportsVision: SupportsVisionForModel(full), Provider: "selfhosted"})
 		}
 	}
 	return out, nil

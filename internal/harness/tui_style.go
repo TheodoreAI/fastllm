@@ -490,7 +490,7 @@ func FormatHelp() string {
 
 	renderSection("Models & Endpoints", []cmdEntry{
 		{"/models, /model", "List configured model endpoints"},
-		{"/model <name>", "Switch active model (e.g. /model muse-glimmer)"},
+		{"/model <name>", "Switch active model (e.g. /model llama3.1)"},
 		{"/models add <id> <url>", "Register a new inference endpoint in config.json"},
 	})
 
