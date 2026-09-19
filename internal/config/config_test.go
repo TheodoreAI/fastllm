@@ -2,6 +2,7 @@ package config
 
 import (
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -39,7 +40,13 @@ func TestLoadAndSaveSettings(t *testing.T) {
 }
 
 func TestCandidateConfigPaths(t *testing.T) {
-	paths := CandidateConfigPaths("C:\\project")
+	// Use a path that is absolute on the platform running the test; "C:\project"
+	// is just an ordinary relative name on Linux and macOS.
+	workingDir := filepath.Join(string(filepath.Separator), "project")
+	if runtime.GOOS == "windows" {
+		workingDir = `C:\project`
+	}
+	paths := CandidateConfigPaths(workingDir)
 	if len(paths) < 2 {
 		t.Fatalf("expected at least 2 paths, got %d", len(paths))
 	}

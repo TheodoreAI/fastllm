@@ -105,7 +105,17 @@ func RunCLI(args []string) int {
 
 	if isSelfHosted {
 		provider := config.ResolveProvider(settings, "selfhosted")
-		if strings.TrimSpace(*urlFlag) == "" && os.Getenv("LLM_BASE_URL") == "" && provider.BaseURL != "" {
+		explicitURL := strings.TrimSpace(*urlFlag) != "" || os.Getenv("LLM_BASE_URL") != ""
+		if !explicitURL && !provider.Configured() {
+			// Falling through here would quietly dial the default local endpoint,
+			// so a request for a self-hosted model would surface as "connection
+			// refused" against Ollama rather than as the real problem.
+			fmt.Fprintf(os.Stderr, "Error: no endpoint is configured for provider %q.\n", "selfhosted")
+			fmt.Fprintf(os.Stderr, "Add a model entry with \"provider\": \"selfhosted\" to your fastllm config,\n")
+			fmt.Fprintf(os.Stderr, "set SELFHOSTED_LLM_BASE_URL, or pass -url explicitly.\n")
+			return 1
+		}
+		if !explicitURL {
 			baseURL = provider.BaseURL
 		}
 		if apiKey == "" {
