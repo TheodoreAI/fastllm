@@ -404,8 +404,8 @@ var CloudflareModels = []string{
 // OSUModels lists the primary models served from the OSU cluster via vLLM.
 var OSUModels = []string{
 	"muse-glimmer",
-	"meta-models/Muse-Glimmer-30B",
 }
+
 
 type tagsResponse struct {
 	Models []struct {
@@ -806,6 +806,9 @@ func (c *Client) StreamChat(ctx context.Context, model string, messages []Messag
 	// providers actually send these.
 	rateLimit := parseRateLimitHeaders(resp.Header)
 
+	museFilter := newMuseStreamFilter(onToken, onReasoning)
+	isMuse := IsMuseModel(model) || IsMuseModel(c.ChatModel)
+
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
@@ -823,7 +826,11 @@ func (c *Client) StreamChat(ctx context.Context, model string, messages []Messag
 		}
 		if len(chunk.Choices) > 0 {
 			if chunk.Choices[0].Delta.Content != "" {
-				onToken(chunk.Choices[0].Delta.Content)
+				if isMuse {
+					museFilter.Feed(chunk.Choices[0].Delta.Content)
+				} else {
+					onToken(chunk.Choices[0].Delta.Content)
+				}
 			}
 			if chunk.Choices[0].Delta.Reasoning != "" && onReasoning != nil {
 				onReasoning(chunk.Choices[0].Delta.Reasoning)
@@ -837,6 +844,9 @@ func (c *Client) StreamChat(ctx context.Context, model string, messages []Messag
 				RateLimit:        rateLimit,
 			})
 		}
+	}
+	if isMuse {
+		museFilter.Flush()
 	}
 	return scanner.Err()
 }
@@ -895,6 +905,11 @@ func (c *Client) Chat(ctx context.Context, model string, messages []Message, too
 	}
 
 	reply := cr.Choices[0].Message
+	if IsMuseModel(model) || IsMuseModel(c.ChatModel) || strings.Contains(reply.Content, "to=user") || strings.Contains(reply.Content, "to=self") {
+		cleaned, _ := CleanMuseContent(reply.Content)
+		reply.Content = cleaned
+	}
+
 	if len(reply.ToolCalls) == 0 && len(tools) > 0 {
 		if call, ok := parseFallbackToolCall(reply.Content, tools); ok {
 			reply.ToolCalls = []ToolCall{call}

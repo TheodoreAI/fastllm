@@ -1,6 +1,11 @@
 package llm
 
-import "testing"
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
 
 var testTools = []Tool{
 	{Type: "function", Function: ToolFunction{Name: "read_file"}},
@@ -155,3 +160,43 @@ func TestSupportsToolsAndVisionForModel_OSU(t *testing.T) {
 		}
 	}
 }
+
+func TestRouter_ListModels_DeduplicatesOSU(t *testing.T) {
+	// Start a mock vLLM server returning 3 aliases for Muse Glimmer
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/models" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"data":[{"id":"meta-models/Muse-Glimmer-30B"},{"id":"muse-glimmer"},{"id":"muse-glimmer-30b"}]}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer ts.Close()
+
+	router := &Router{
+		Local: New("http://localhost:11434", "", "dummy", ""),
+		clouds: cloudClients{
+			osu: New(ts.URL, "test-key", "muse-glimmer", ""),
+		},
+	}
+
+	models, err := router.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListModels failed: %v", err)
+	}
+
+	var osuModels []Model
+	for _, m := range models {
+		if m.Provider == "osu" {
+			osuModels = append(osuModels, m)
+		}
+	}
+
+	if len(osuModels) != 1 {
+		t.Fatalf("expected 1 deduplicated OSU model, got %d: %+v", len(osuModels), osuModels)
+	}
+	if osuModels[0].Name != "osu:muse-glimmer" {
+		t.Errorf("expected osu:muse-glimmer, got %q", osuModels[0].Name)
+	}
+}
+
