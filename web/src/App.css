@@ -5954,3 +5954,219 @@ body.picking-mode #tweak-bar-panel {
   font-size: 0.8125rem;
   line-height: 1.4;
 }
+
+/* ---------- Integrated Agent Mode in Composer & Thread ---------- */
+
+.composer-mode-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 4px 6px;
+  gap: 8px;
+  user-select: none;
+}
+
+.composer-mode-selector {
+  display: inline-flex;
+  align-items: center;
+  background: color-mix(in srgb, var(--bg-input), var(--text) 4%);
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  gap: 2px;
+}
+
+.composer-mode-pill {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding: 3px 10px;
+  border-radius: calc(var(--radius-sm) - 1px);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.composer-mode-pill:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.composer-mode-pill.is-active {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.composer-agent-options {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+
+.composer-agent-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+
+.composer-agent-opt input[type="number"] {
+  width: 44px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  padding: 2px 4px;
+  font-size: 0.75rem;
+  text-align: center;
+  outline: none;
+}
+
+.composer-agent-opt input[type="number"]:focus {
+  border-color: var(--accent);
+}
+
+.composer-agent-opt-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.user-mode-tag {
+  display: inline-block;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  margin-left: 8px;
+  vertical-align: middle;
+}
+
+.composer-send-btn.is-agent {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.agent-exec-card {
+  margin: 10px 0 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  border-radius: var(--radius);
+  overflow: hidden;
+  transition: border-color 0.15s;
+}
+
+.agent-exec-card.is-running {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.agent-exec-card.is-success {
+  border-color: color-mix(in srgb, var(--success) 50%, transparent);
+}
+
+.agent-exec-card.is-error {
+  border-color: color-mix(in srgb, var(--danger) 50%, transparent);
+}
+
+.agent-exec-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--bg-panel), var(--text) 4%);
+  cursor: pointer;
+  user-select: none;
+}
+
+.agent-exec-status {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.agent-status-running {
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.agent-spinner {
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--accent);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  display: inline-block;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.agent-status-success {
+  color: var(--success);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.agent-status-fail {
+  color: var(--danger);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.agent-status-done {
+  color: var(--text-dim);
+}
+
+.agent-exec-summary {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  margin-left: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.agent-collapse-arrow {
+  font-size: 0.75rem;
+  color: var(--text-faint);
+  display: flex;
+  align-items: center;
+}
+
+.agent-exec-body {
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: color-mix(in srgb, var(--bg-panel), var(--bg-window) 50%);
+}
+
+.agent-exec-error-banner {
+  background: color-mix(in srgb, var(--danger) 15%, transparent);
+  border: 1px solid var(--danger);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  font-size: 0.8125rem;
+}

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import MessageContent from './MessageContent'
+import AgentExecutionBlock from './AgentExecutionBlock'
 
 // Small inline icon set replacing the emoji ChatPanel used to render
 // directly — emoji render inconsistently across platforms/fonts, while
@@ -91,6 +92,22 @@ function ArrowUpIcon(props) {
   )
 }
 
+function PlayIcon(props) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" {...props}>
+      <polygon points="7 4 19 12 7 20 7 4" />
+    </svg>
+  )
+}
+
+function BoltIcon(props) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" {...props}>
+      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+    </svg>
+  )
+}
+
 export default function ChatPanel({
   messages,
   messagesLoading,
@@ -111,6 +128,10 @@ export default function ChatPanel({
   onRemovePendingImage,
   visionSupported,
 }) {
+  const [executionMode, setExecutionMode] = useState('chat') // 'chat' | 'agent'
+  const [maxTurns, setMaxTurns] = useState(20)
+  const [allowCommands, setAllowCommands] = useState(true)
+
   // Shell-style prompt recall: ArrowUp/ArrowDown step through this
   // conversation's past user messages. historyIndex counts back from the
   // end (0 = not browsing, 1 = most recent prompt, 2 = the one before
@@ -184,6 +205,12 @@ export default function ChatPanel({
   }
 
   function handleComposerKeyDown(e) {
+    if (e.key === 'Tab' && !input.trim()) {
+      e.preventDefault()
+      setExecutionMode((m) => (m === 'chat' ? 'agent' : 'chat'))
+      return
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSubmit(e)
@@ -228,7 +255,7 @@ export default function ChatPanel({
   function handleSubmit(e) {
     setHistoryIndex(0)
     draftBeforeHistoryRef.current = ''
-    onSendMessage(e)
+    onSendMessage(e, executionMode, { maxTurns, allowCommands })
   }
 
   return (
@@ -264,6 +291,7 @@ export default function ChatPanel({
           <div key={i} className={`message ${m.role} ${m.isError ? 'is-error' : ''}`}>
             <span className="role">
               {m.role === 'user' ? (m.source === 'terminal' ? 'CLI' : userDisplayName || 'user') : m.role}
+              {m.mode === 'agent' && <span className="user-mode-tag">Agent Task</span>}
             </span>
             {isAwaitingResponse && (
               <div className="typing-indicator" role="status" aria-label="Waiting for model response">
@@ -275,6 +303,14 @@ export default function ChatPanel({
                 <summary>{m.content ? 'Thinking' : 'Thinking…'}</summary>
                 <p>{m.reasoning}</p>
               </details>
+            )}
+            {(m.isAgent || (m.turns && m.turns.length > 0) || m.currentTurn || m.finalResult) && (
+              <AgentExecutionBlock
+                turns={m.turns || []}
+                currentTurn={m.currentTurn}
+                finalResult={m.finalResult}
+                error={m.error}
+              />
             )}
             {m.toolCalls && m.toolCalls.length > 0 && (
               <ul className="tool-calls">
@@ -324,7 +360,7 @@ export default function ChatPanel({
                 ))}
               </div>
             )}
-            <MessageContent content={m.content} />
+            {m.content && <MessageContent content={m.content} />}
             {m.sources && m.sources.length > 0 && (
               <details className="sources">
                 <summary>{m.sources.length} source{m.sources.length === 1 ? '' : 's'}</summary>
@@ -361,6 +397,53 @@ export default function ChatPanel({
             ))}
           </div>
         )}
+
+        <div className="composer-mode-bar">
+          <div className="composer-mode-selector">
+            <button
+              type="button"
+              className={`composer-mode-pill ${executionMode === 'chat' ? 'is-active' : ''}`}
+              onClick={() => setExecutionMode('chat')}
+              disabled={streaming}
+            >
+              Chat
+            </button>
+            <button
+              type="button"
+              className={`composer-mode-pill ${executionMode === 'agent' ? 'is-active' : ''}`}
+              onClick={() => setExecutionMode('agent')}
+              disabled={streaming}
+            >
+              <BoltIcon className="inline-icon" /> Agent
+            </button>
+          </div>
+
+          {executionMode === 'agent' && (
+            <div className="composer-agent-options">
+              <label className="composer-agent-opt" title="Maximum autonomous tool turns">
+                <span>Turns</span>
+                <input
+                  type="number"
+                  min="1"
+                  max="100"
+                  value={maxTurns}
+                  onChange={(e) => setMaxTurns(e.target.value)}
+                  disabled={streaming}
+                />
+              </label>
+              <label className="composer-agent-opt-checkbox" title="Allow running shell commands">
+                <input
+                  type="checkbox"
+                  checked={allowCommands}
+                  onChange={(e) => setAllowCommands(e.target.checked)}
+                  disabled={streaming}
+                />
+                <span>Shell</span>
+              </label>
+            </div>
+          )}
+        </div>
+
         <div className="composer">
           <span
             className={`composer-vision-flag ${visionSupported ? 'is-supported' : 'is-unsupported'}`}
@@ -374,7 +457,13 @@ export default function ChatPanel({
             onChange={(e) => handleComposerChange(e.target.value)}
             onKeyDown={handleComposerKeyDown}
             onPaste={onComposerPaste}
-            placeholder={visionSupported ? 'Ask something… (paste an image to attach it)' : 'Ask something…'}
+            placeholder={
+              executionMode === 'agent'
+                ? 'Describe an autonomous task (Tab to switch to Chat)…'
+                : visionSupported
+                ? 'Ask something… (paste an image to attach, Tab for Agent)'
+                : 'Ask something… (Tab for Agent)'
+            }
             disabled={streaming}
             rows={1}
           />
@@ -383,8 +472,13 @@ export default function ChatPanel({
               <StopIcon className="inline-icon" />
             </button>
           ) : (
-            <button type="submit" className="composer-send-btn" disabled={!input.trim() && (!pendingImages || pendingImages.length === 0)} title="Send">
-              <ArrowUpIcon className="inline-icon" />
+            <button
+              type="submit"
+              className={`composer-send-btn ${executionMode === 'agent' ? 'is-agent' : ''}`}
+              disabled={!input.trim() && (!pendingImages || pendingImages.length === 0)}
+              title={executionMode === 'agent' ? 'Run Agent Task' : 'Send'}
+            >
+              {executionMode === 'agent' ? <PlayIcon className="inline-icon" /> : <ArrowUpIcon className="inline-icon" />}
             </button>
           )}
         </div>

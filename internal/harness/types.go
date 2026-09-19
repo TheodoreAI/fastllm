@@ -36,6 +36,18 @@ type RunRequest struct {
 	// ThinkLevel optionally sets the reasoning effort level (e.g. "low", "medium", "high")
 	// for models/providers that support it.
 	ThinkLevel string `json:"think_level,omitempty"`
+
+	// ConversationID optionally links the run to a persistent conversation thread in the database.
+	ConversationID int64 `json:"conversation_id,omitempty"`
+
+	// InitialMessages provides previous conversation turns for multi-turn context.
+	InitialMessages []InitialMessage `json:"initial_messages,omitempty"`
+}
+
+// InitialMessage represents a prior conversation turn.
+type InitialMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
 }
 
 // ToolCallRecord records a single tool invocation and its returned output.
@@ -72,6 +84,7 @@ type RunResult struct {
 type EventType string
 
 const (
+	EventConversation EventType = "conversation"
 	EventTurnStart    EventType = "turn_start"
 	EventToolCall     EventType = "tool_call"
 	EventToolResult   EventType = "tool_result"
@@ -81,11 +94,12 @@ const (
 
 // Event is emitted in real time during a harness run.
 type Event struct {
-	Type      EventType       `json:"type"`
-	Turn      int             `json:"turn,omitempty"`
-	ToolCall  *ToolCallRecord `json:"tool_call,omitempty"`
-	Response  string          `json:"response,omitempty"`
-	Metrics   *TurnMetrics    `json:"metrics,omitempty"`
-	Result    *RunResult      `json:"result,omitempty"`
-	Error     string          `json:"error,omitempty"`
+	Type           EventType       `json:"type"`
+	ConversationID int64           `json:"conversation_id,omitempty"`
+	Turn           int             `json:"turn,omitempty"`
+	ToolCall       *ToolCallRecord `json:"tool_call,omitempty"`
+	Response       string          `json:"response,omitempty"`
+	Metrics        *TurnMetrics    `json:"metrics,omitempty"`
+	Result         *RunResult      `json:"result,omitempty"`
+	Error          string          `json:"error,omitempty"`
 }

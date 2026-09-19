@@ -138,8 +138,13 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 
 	messages := []llm.Message{
 		{Role: "system", Content: systemPrompt},
-		{Role: "user", Content: req.Task},
 	}
+	for _, m := range req.InitialMessages {
+		if m.Role != "system" && strings.TrimSpace(m.Content) != "" {
+			messages = append(messages, llm.Message{Role: m.Role, Content: m.Content})
+		}
+	}
+	messages = append(messages, llm.Message{Role: "user", Content: req.Task})
 
 	sessionMetrics := &SessionMetrics{}
 

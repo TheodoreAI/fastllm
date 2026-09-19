@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"fastllm/internal/harness"
+	"fastllm/internal/store"
 )
 
 // HarnessRun handles POST /api/harness/run.
@@ -40,11 +41,45 @@ func (h *Handler) HarnessRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if req.Model == "" {
+	if req.Model == "" && h.LLM != nil {
 		req.Model = h.LLM.ChatModel()
 	}
 
+	convID := req.ConversationID
+	if h.DB != nil {
+		if convID == 0 {
+			newID, err := store.CreateConversation(h.DB, defaultWorkspace, conversationTitle(req.Task))
+			if err == nil {
+				convID = newID
+				req.ConversationID = convID
+			}
+		}
+		if convID > 0 {
+			_, _ = store.SaveMessage(h.DB, defaultWorkspace, convID, "user", req.Task, nil)
+		}
+	}
+
 	runner := harness.NewRunner(h.LLM, req.WorkingDir, req.Model)
+
+	saveFinalResponse := func(res *harness.RunResult) {
+		if convID > 0 && h.DB != nil {
+			var text string
+			if res != nil && res.FinalResponse != "" {
+				text = res.FinalResponse
+			} else if res != nil && res.Success {
+				text = "Task completed successfully."
+			} else if res != nil && !res.Success {
+				if res.Error != "" {
+					text = "Task failed: " + res.Error
+				} else {
+					text = "Task failed."
+				}
+			}
+			if text != "" {
+				_, _ = store.SaveMessage(h.DB, defaultWorkspace, convID, "assistant", text, nil)
+			}
+		}
+	}
 
 	isStream := strings.Contains(r.Header.Get("Accept"), "text/event-stream") || r.URL.Query().Get("stream") == "true"
 	if isStream {
@@ -67,11 +102,20 @@ func (h *Handler) HarnessRun(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		_, _ = runner.Run(r.Context(), req, onEvent)
+		if convID > 0 {
+			onEvent(harness.Event{
+				Type:           harness.EventConversation,
+				ConversationID: convID,
+			})
+		}
+
+		res, _ := runner.Run(r.Context(), req, onEvent)
+		saveFinalResponse(res)
 		return
 	}
 
 	res, err := runner.Run(r.Context(), req, nil)
+	saveFinalResponse(res)
 	if err != nil && res == nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
