@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import MessageContent from './MessageContent'
+import MessageContent from './DeferredMessageContent'
 import AgentExecutionBlock from './AgentExecutionBlock'
 import MaxTurnsPicker from './MaxTurnsPicker'
 

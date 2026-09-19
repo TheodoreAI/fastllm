@@ -1,0 +1,3 @@
+value: Lazy-load MessageContent and use Vite 8 Rolldown codeSplitting groups capped at 300 KB for React, Markdown, KaTeX, highlighting, and remaining vendor modules.
+reason: Reduces the initial app chunk from 864 KB to 82 KB, defers markdown-only code and CSS until needed, and removes the large-chunk warning; raising the warning threshold would not improve loading and manualChunks is deprecated in Vite 8.
+decided_at: 2026-09-19T17:54:57+00:00

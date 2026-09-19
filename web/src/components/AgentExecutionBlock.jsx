@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import MessageContent from './MessageContent'
+import MessageContent from './DeferredMessageContent'
 
 function CheckIcon(props) {
   return (
