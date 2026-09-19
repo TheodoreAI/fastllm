@@ -6170,3 +6170,205 @@ body.picking-mode #tweak-bar-panel {
   padding: 8px 12px;
   font-size: 0.8125rem;
 }
+
+/* ---------- Modern Max Turns Dropdown Picker ---------- */
+
+.max-turns-picker {
+  position: relative;
+  display: inline-block;
+}
+
+.max-turns-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: color-mix(in srgb, var(--bg-input), var(--text) 4%);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  padding: 3px 8px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+  line-height: 1.2;
+}
+
+.max-turns-trigger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--bg-input), var(--text) 8%);
+  border-color: var(--accent);
+}
+
+.max-turns-trigger.is-open {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.max-turns-icon {
+  width: 12px;
+  height: 12px;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.max-turns-current {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.max-turns-chevron {
+  width: 12px;
+  height: 12px;
+  color: var(--text-dim);
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+}
+
+.max-turns-chevron.is-flipped {
+  transform: rotate(180deg);
+}
+
+.max-turns-dropdown {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 100;
+  width: 250px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  padding: 6px 0;
+  animation: popoverFadeIn 0.12s ease-out;
+}
+
+@keyframes popoverFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.max-turns-menu-header {
+  padding: 4px 12px 6px;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-faint);
+  border-bottom: 1px solid var(--border);
+}
+
+.max-turns-options {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 0;
+}
+
+.max-turns-option {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  background: transparent;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.1s ease;
+}
+
+.max-turns-option:hover {
+  background: color-mix(in srgb, var(--bg-panel), var(--text) 7%);
+}
+
+.max-turns-option.is-selected {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.max-turns-option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.max-turns-option-label {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.max-turns-option.is-selected .max-turns-option-label {
+  color: var(--accent);
+}
+
+.max-turns-option-desc {
+  font-size: 0.6875rem;
+  color: var(--text-dim);
+}
+
+.max-turns-check {
+  width: 14px;
+  height: 14px;
+  color: var(--accent);
+  flex-shrink: 0;
+  margin-left: 8px;
+}
+
+.max-turns-custom-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px 4px;
+  border-top: 1px solid var(--border);
+  gap: 8px;
+}
+
+.max-turns-custom-label {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  font-weight: 500;
+}
+
+.max-turns-custom-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.max-turns-custom-input-wrap input {
+  width: 50px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  padding: 3px 6px;
+  font-size: 0.75rem;
+  text-align: center;
+  outline: none;
+}
+
+.max-turns-custom-input-wrap input:focus {
+  border-color: var(--accent);
+}
+
+.max-turns-custom-btn {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 3px 8px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.max-turns-custom-btn:hover {
+  opacity: 0.9;
+}
