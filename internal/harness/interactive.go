@@ -63,34 +63,11 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 	processMgr := NewProcessManager()
 	defer processMgr.KillAll()
 
+	initConsole()
+
 	var sessionMetrics SessionMetrics
 
-	fmt.Println("================================================================")
-	fmt.Println("  fastllm Interactive Agent REPL")
-	fmt.Printf("  Directory:   %s\n", absWorkingDir)
-	fmt.Printf("  Model:       %s\n", model)
-	if configPath != "" {
-		fmt.Printf("  Config:      %s\n", configPath)
-	}
-	fmt.Printf("  Git Repo:    %v\n", checkpointMgr.IsGitRepo())
-	fmt.Printf("  Rules:       %d rule file(s) discovered\n", len(discoveredRules))
-	fmt.Printf("  Commands:    %v\n", allowCmds)
-	fmt.Println("----------------------------------------------------------------")
-	fmt.Println("  Slash Commands:")
-	fmt.Println("    /help                 - Show command reference")
-	fmt.Println("    /models, /model       - List available models & endpoints")
-	fmt.Println("    /model <name>         - Switch active model")
-	fmt.Println("    /models add <id> <url>- Add a new model endpoint to config")
-	fmt.Println("    /undo                 - Rollback working tree to pre-turn checkpoint")
-	fmt.Println("    /diff                 - Inspect git diff of current changes")
-	fmt.Println("    /status               - View session metrics, tokens, cost, and procs")
-	fmt.Println("    /dir <path>           - Switch working directory")
-	fmt.Println("    /rules                - Inspect loaded workspace rules")
-	fmt.Println("    /ps                   - List active background processes")
-	fmt.Println("    /kill <id>            - Kill a background process")
-	fmt.Println("    /clear                - Reset conversation context")
-	fmt.Println("    exit, quit            - Exit interactive session")
-	fmt.Println("================================================================")
+	fmt.Println(FormatWelcomeBanner(absWorkingDir, model, configPath, checkpointMgr.IsGitRepo(), len(discoveredRules), allowCmds))
 
 	fileReader := files.New(absWorkingDir, true)
 
@@ -114,7 +91,7 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 	scanner := bufio.NewScanner(os.Stdin)
 
 	for {
-		fmt.Print("\nfastllm> ")
+		fmt.Print(FormatPrompt(model))
 		if !scanner.Scan() {
 			break
 		}
@@ -129,87 +106,86 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 			cmd := strings.ToLower(parts[0])
 			switch cmd {
 			case "/exit", "/quit":
-				fmt.Println("Goodbye!")
+				fmt.Println(ColorGray("\nSession ended. Goodbye!"))
 				return nil
 
 			case "/help":
-				fmt.Println("\nAvailable Slash Commands:")
-				fmt.Println("  /undo          - Rollback working directory to checkpoint before latest turn")
-				fmt.Println("  /diff          - Show git diff of uncommitted changes")
-				fmt.Println("  /status        - Display session tokens, cost, latency, and background jobs")
-				fmt.Println("  /model <name>  - Switch active model (e.g. /model muse-glimmer, /model llama3.1)")
-				fmt.Println("  /dir <path>    - Switch working directory and reload rules")
-				fmt.Println("  /rules         - View discovered workspace instruction files")
-				fmt.Println("  /ps            - List running background processes")
-				fmt.Println("  /kill <id>     - Kill background process by ID (e.g. /kill proc-1)")
-				fmt.Println("  /clear         - Clear conversation history and reset context")
-				fmt.Println("  /exit, /quit   - Quit the REPL")
+				fmt.Println(FormatHelp())
 				continue
 
 			case "/undo":
 				if !checkpointMgr.IsGitRepo() {
-					fmt.Println("[Undo] Current directory is not a Git repository; checkpoints disabled.")
+					fmt.Println(ColorYellow("  " + SymCross + " Current directory is not a Git repository; checkpoints disabled."))
 					continue
 				}
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				err := checkpointMgr.Rollback(ctx, "")
 				cancel()
 				if err != nil {
-					fmt.Printf("[Undo Error] %v\n", err)
+					fmt.Println(ColorRed(fmt.Sprintf("  %s Undo failed: %v", SymCross, err)))
 				} else {
-					fmt.Println("[Undo] Successfully rolled back working tree to previous checkpoint.")
+					fmt.Println(ColorGreen(fmt.Sprintf("  %s Successfully rolled back working tree to pre-turn checkpoint.", SymCheck)))
 				}
 				continue
 
 			case "/diff":
 				if !checkpointMgr.IsGitRepo() {
-					fmt.Println("[Diff] Current directory is not a Git repository.")
+					fmt.Println(ColorYellow("  " + SymCross + " Current directory is not a Git repository."))
 					continue
 				}
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				diff, err := checkpointMgr.Diff(ctx)
 				cancel()
 				if err != nil {
-					fmt.Printf("[Diff Error] %v\n", err)
+					fmt.Println(ColorRed(fmt.Sprintf("  %s Diff failed: %v", SymCross, err)))
+				} else if strings.TrimSpace(diff) == "" {
+					fmt.Println(ColorGray("  Working tree clean (no uncommitted changes)."))
 				} else {
-					fmt.Println(diff)
+					fmt.Println("\n" + HighlightDiff(diff))
 				}
 				continue
 
 			case "/status":
-				fmt.Println("\n=== Session Status ===")
-				fmt.Printf("  Working Directory: %s\n", absWorkingDir)
-				fmt.Printf("  Active Model:      %s\n", model)
-				fmt.Printf("  Rules Loaded:      %d\n", len(discoveredRules))
-				fmt.Printf("  %s\n", sessionMetrics.FormatSessionSummary())
-				fmt.Println("\n=== Background Processes ===")
-				fmt.Println(processMgr.FormatProcessTable())
+				fmt.Println(FormatStatusCard(absWorkingDir, model, len(discoveredRules), sessionMetrics, processMgr))
 				continue
 
 			case "/rules":
 				if len(discoveredRules) == 0 {
-					fmt.Println("No workspace rules discovered in this directory or its parents.")
+					fmt.Println(ColorGray("  No workspace instruction files discovered in this directory or parents."))
 				} else {
-					fmt.Printf("Discovered %d workspace rule file(s):\n", len(discoveredRules))
+					fmt.Println(ColorCyan(StyleBold(fmt.Sprintf("\nDiscovered %d workspace rule file(s):", len(discoveredRules)))))
 					for _, r := range discoveredRules {
-						fmt.Printf("\n--- [%s] (%s) ---\n%s\n", r.Filename, r.Path, r.Content)
+						lines := []string{
+							"",
+							FormatKV("file", r.Filename, 8),
+							FormatKV("path", r.Path, 8),
+							"",
+							ColorGray(r.Content),
+							"",
+						}
+						fmt.Println(FormatCard(r.Filename, lines, 74))
 					}
 				}
 				continue
 
 			case "/ps":
-				fmt.Println(processMgr.FormatProcessTable())
+				procs := processMgr.List()
+				if len(procs) == 0 {
+					fmt.Println(ColorGray("  No background processes running."))
+				} else {
+					fmt.Println(processMgr.FormatProcessTable())
+				}
 				continue
 
 			case "/kill":
 				if len(parts) < 2 {
-					fmt.Println("Usage: /kill <process_id> (e.g. /kill proc-1)")
+					fmt.Println(ColorYellow("  Usage: /kill <process_id> (e.g. /kill proc-1)"))
 				} else {
 					err := processMgr.Kill(parts[1])
 					if err != nil {
-						fmt.Printf("Error killing process %s: %v\n", parts[1], err)
+						fmt.Println(ColorRed(fmt.Sprintf("  %s Error killing process %s: %v", SymCross, parts[1], err)))
 					} else {
-						fmt.Printf("Killed process %s.\n", parts[1])
+						fmt.Println(ColorGreen(fmt.Sprintf("  %s Killed process %s.", SymCheck, parts[1])))
 					}
 				}
 				continue
@@ -218,33 +194,17 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 				sessionMessages = []llm.Message{
 					{Role: "system", Content: systemPrompt + rulesPrompt},
 				}
-				fmt.Println("Conversation context cleared.")
+				fmt.Println(ColorGreen("  " + SymCheck + " Conversation context cleared."))
 				continue
 
 			case "/model", "/models":
 				if len(parts) == 1 || (len(parts) == 2 && parts[1] == "list") {
-					fmt.Printf("\nConfigured Models (from %s):\n", configPath)
 					if settings != nil && len(settings.Models) > 0 {
-						for _, m := range settings.Models {
-							marker := "  "
-							if strings.EqualFold(m.ID, model) {
-								marker = "* "
-							}
-							desc := m.Name
-							if desc == "" {
-								desc = m.ID
-							}
-							fmt.Printf("  %s%-18s %-32s [%s]\n", marker, m.ID, desc, m.URL)
-						}
+						fmt.Println(FormatModelsTable(settings.Models, model, configPath))
 					} else {
-						fmt.Println("  (no models configured)")
+						fmt.Println(ColorGray("  (no models configured in " + configPath + ")"))
 					}
-					fmt.Println("\nUsage:")
-					fmt.Println("  /model <name>              - Switch active model")
-					fmt.Println("  /models add <id> <url>     - Add a new model endpoint")
-					if configPath != "" {
-						fmt.Printf("  Config file: %s\n", configPath)
-					}
+					fmt.Println("\n" + ColorGray("Usage: /model <name> | /models add <id> <url>"))
 					continue
 				}
 
@@ -260,9 +220,9 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 						URL:  newURL,
 					})
 					if err := config.SaveSettings(configPath, settings); err != nil {
-						fmt.Printf("Error saving to %s: %v\n", configPath, err)
+						fmt.Println(ColorRed(fmt.Sprintf("  %s Error saving to %s: %v", SymCross, configPath, err)))
 					} else {
-						fmt.Printf("Added model %q (%s) to %s\n", newID, newURL, configPath)
+						fmt.Println(ColorGreen(fmt.Sprintf("  %s Added model %q (%s) to %s", SymCheck, newID, newURL, configPath)))
 					}
 					continue
 				}
@@ -271,7 +231,7 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 				model = targetModel
 				if settings != nil {
 					if matched := settings.FindModel(targetModel); matched != nil {
-						fmt.Printf("Switched model to: %s (%s, URL: %s)\n", matched.ID, matched.Name, matched.URL)
+						fmt.Println(ColorGreen(fmt.Sprintf("  %s Switched model to: %s (%s, URL: %s)", SymCheck, matched.ID, matched.Name, matched.URL)))
 						if client, ok := r.LLM.(*llm.Client); ok {
 							if matched.URL != "" {
 								client.BaseURL = matched.URL
@@ -284,7 +244,7 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 						continue
 					}
 				}
-				fmt.Printf("Switched model to: %s\n", model)
+				fmt.Println(ColorGreen(fmt.Sprintf("  %s Switched model to: %s", SymCheck, model)))
 				continue
 
 			case "/dir":
@@ -400,7 +360,7 @@ func (r *Runner) runInteractiveTurn(
 		turnDuration := time.Since(turnStart)
 		if err != nil {
 			if ctx.Err() == nil {
-				fmt.Printf("\n[Error: %v]\n", err)
+				fmt.Println(ColorRed(fmt.Sprintf("\n%s Error: %v", SymCross, err)))
 			}
 			return
 		}
@@ -414,7 +374,7 @@ func (r *Runner) runInteractiveTurn(
 			if reply.Content != "" {
 				fmt.Printf("\n%s\n", reply.Content)
 			}
-			fmt.Printf("\n[%s]\n", metrics.FormatTurnSummary())
+			fmt.Println(FormatTurnSummary(metrics))
 			*sessionMessages = append(*sessionMessages, reply)
 			return
 		}
@@ -422,13 +382,14 @@ func (r *Runner) runInteractiveTurn(
 		*sessionMessages = append(*sessionMessages, reply)
 
 		var taskFinished bool
+		var finishSummary string
 		for _, call := range reply.ToolCalls {
 			if ctx.Err() != nil {
-				fmt.Println("Turn canceled.")
+				fmt.Println(ColorYellow("\nTurn canceled."))
 				return
 			}
 
-			fmt.Printf("\n  -> tool: %s %s\n", call.Function.Name, summarizeArgs(call.Function.Arguments))
+			fmt.Println(FormatToolCall(call.Function.Name, summarizeArgs(call.Function.Arguments)))
 
 			var toolResult string
 			switch call.Function.Name {
@@ -555,24 +516,15 @@ func (r *Runner) runInteractiveTurn(
 				if args.Answer != "" {
 					summary = fmt.Sprintf("%s\n\nAnswer: %s", summary, args.Answer)
 				}
-				fmt.Printf("\n[Finished]: %s\n", summary)
-				toolResult = "Task finished."
+				finishSummary = summary
+				toolResult = "Task completed successfully."
 				taskFinished = true
 
 			default:
 				toolResult = fmt.Sprintf("Error: unknown tool %q", call.Function.Name)
 			}
 
-			lines := strings.Split(strings.TrimSpace(toolResult), "\n")
-			firstLine := ""
-			if len(lines) > 0 {
-				firstLine = lines[0]
-			}
-			if len(lines) > 1 {
-				fmt.Printf("     result: %s (... %d more lines)\n", firstLine, len(lines)-1)
-			} else {
-				fmt.Printf("     result: %s\n", firstLine)
-			}
+			fmt.Println(FormatToolResult(call.Function.Name, toolResult, 4))
 
 			*sessionMessages = append(*sessionMessages, llm.Message{
 				Role:       "tool",
@@ -581,14 +533,21 @@ func (r *Runner) runInteractiveTurn(
 			})
 		}
 
-		fmt.Printf("  [%s]\n", metrics.FormatTurnSummary())
+		fmt.Println(FormatTurnSummary(metrics))
 
 		if taskFinished {
+			lines := []string{
+				"",
+				FormatKV("status", ColorGreen(SymCheck+" completed"), 10),
+				FormatKV("summary", finishSummary, 10),
+				"",
+			}
+			fmt.Println("\n" + FormatCard("Task Complete", lines, 74))
 			return
 		}
 	}
 
-	fmt.Println("\n[Max turns limit reached for this turn]")
+	fmt.Println(ColorYellow(fmt.Sprintf("\n%s Max turns limit reached for this prompt.", SymCross)))
 }
 
 func applyModelParameters(client *llm.Client, params map[string]interface{}) {
