@@ -21,17 +21,20 @@ type InteractiveRuntime struct {
 	ThinkLevel     string         `json:"think_level"`
 	AllowCommands  bool           `json:"allow_commands"`
 	PermissionMode PermissionMode `json:"permission_mode"`
+	ExpandedTools  bool           `json:"expanded_tools,omitempty"`
 }
 
 type InteractiveSession struct {
-	ID         string             `json:"id"`
-	Title      string             `json:"title"`
-	CreatedAt  time.Time          `json:"created_at"`
-	UpdatedAt  time.Time          `json:"updated_at"`
-	WorkingDir string             `json:"working_dir"`
-	Model      string             `json:"model"`
-	Runtime    InteractiveRuntime `json:"runtime"`
-	Messages   []llm.Message      `json:"messages"`
+	ID          string             `json:"id"`
+	Title       string             `json:"title"`
+	CreatedAt   time.Time          `json:"created_at"`
+	UpdatedAt   time.Time          `json:"updated_at"`
+	WorkingDir  string             `json:"working_dir"`
+	Model       string             `json:"model"`
+	Runtime     InteractiveRuntime `json:"runtime"`
+	Messages    []llm.Message      `json:"messages"`
+	ClosedAt    *time.Time         `json:"closed_at,omitempty"`
+	CustomTitle bool               `json:"custom_title,omitempty"`
 }
 
 type SessionStore struct {
@@ -103,6 +106,70 @@ func (s *SessionStore) Save(session *InteractiveSession) error {
 		return err
 	}
 	return os.Rename(tempName, target)
+}
+
+func (s *SessionStore) Delete(id string) error {
+	if !validSessionID(id) {
+		return fmt.Errorf("invalid session ID %q", id)
+	}
+	err := os.Remove(filepath.Join(s.Dir, id+".json"))
+	if os.IsNotExist(err) {
+		return fmt.Errorf("session %q not found", id)
+	}
+	return err
+}
+
+func (s *SessionStore) Rename(id, title string) (*InteractiveSession, error) {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return nil, fmt.Errorf("session title cannot be empty")
+	}
+	session, err := s.Load(id)
+	if err != nil {
+		return nil, err
+	}
+	session.Title = title
+	session.CustomTitle = true
+	if err := s.Save(session); err != nil {
+		return nil, err
+	}
+	return session, nil
+}
+
+func (s *SessionStore) Latest() (*InteractiveSession, error) {
+	sessions, err := s.List()
+	if err != nil {
+		return nil, err
+	}
+	if len(sessions) == 0 {
+		return nil, fmt.Errorf("no saved sessions")
+	}
+	return s.Load(sessions[0].ID)
+}
+
+// Prune removes abandoned empty sessions older than a day and caps retained
+// non-empty sessions by count. Content is never removed solely because of age.
+func (s *SessionStore) Prune(now time.Time, maxNonEmpty int) (int, error) {
+	sessions, err := s.List()
+	if err != nil {
+		return 0, err
+	}
+	removed, keptNonEmpty := 0, 0
+	for _, session := range sessions {
+		empty := len(session.Messages) == 0
+		remove := empty && now.Sub(session.UpdatedAt) > 24*time.Hour
+		if !empty {
+			keptNonEmpty++
+			remove = remove || (maxNonEmpty > 0 && keptNonEmpty > maxNonEmpty)
+		}
+		if remove {
+			if err := s.Delete(session.ID); err != nil {
+				return removed, err
+			}
+			removed++
+		}
+	}
+	return removed, nil
 }
 
 func (s *SessionStore) Load(id string) (*InteractiveSession, error) {

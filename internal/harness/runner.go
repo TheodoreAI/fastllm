@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -170,7 +171,7 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 		turnStart := time.Now()
 		promptTokens := countApproxTokens(messages)
 
-		reply, err := r.LLM.Chat(ctx, model, messages, tools, req.ThinkLevel)
+		reply, err := chatWithRetry(ctx, r.LLM, model, messages, tools, req.ThinkLevel, nil)
 		turnDuration := time.Since(turnStart)
 		if err != nil {
 			result.Error = fmt.Sprintf("LLM chat error on turn %d: %v", turn, err)
@@ -205,6 +206,15 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 
 		// Execute all tool calls
 		for _, call := range reply.ToolCalls {
+			normalizedArgs, argErr := normalizeToolArguments(call.Function.Arguments)
+			if argErr != nil {
+				toolResult := argErr.Error()
+				tcRec := ToolCallRecord{ID: call.ID, Name: call.Function.Name, Arguments: call.Function.Arguments, Result: toolResult}
+				emit(Event{Type: EventToolResult, Turn: turn, ToolCall: &tcRec})
+				messages = append(messages, llm.Message{Role: "tool", Content: toolResult, ToolCallID: call.ID})
+				continue
+			}
+			call.Function.Arguments = normalizedArgs
 			tcRec := ToolCallRecord{
 				ID:        call.ID,
 				Name:      call.Function.Name,
@@ -396,7 +406,7 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 				Role:    "system",
 				Content: "Turn budget exhausted. Stop calling tools and provide your final response summarizing what was done and what remains.",
 			})
-			finalReply, err := r.LLM.Chat(ctx, model, messages, nil, req.ThinkLevel)
+			finalReply, err := chatWithRetry(ctx, r.LLM, model, messages, nil, req.ThinkLevel, nil)
 			if err == nil && finalReply.Content != "" {
 				result.FinalResponse = finalReply.Content
 			}
@@ -661,6 +671,41 @@ func (r *Runner) executeRunCommand(ctx context.Context, root, command string, ti
 		return fmt.Sprintf("Exit code: %d (Error: %v)\nOutput:\n%s", exitCode, runErr, output)
 	}
 
+	return fmt.Sprintf("Exit code: 0\nOutput:\n%s", output)
+}
+
+func (r *Runner) executeRunCommandLive(ctx context.Context, root, command string, timeout time.Duration) string {
+	if strings.TrimSpace(command) == "" {
+		return "Error: command is required."
+	}
+	ctxTimeout, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.CommandContext(ctxTimeout, "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command)
+	} else {
+		cmd = exec.CommandContext(ctxTimeout, "sh", "-c", command)
+	}
+	cmd.Dir = root
+	var buffer bytes.Buffer
+	writer := io.MultiWriter(os.Stdout, &buffer)
+	cmd.Stdout, cmd.Stderr = writer, writer
+	runErr := cmd.Run()
+	output := buffer.String()
+	if len(output) > 64*1024 {
+		output = output[:64*1024] + "\n\n[output truncated to 64KB]"
+	}
+	if ctxTimeout.Err() == context.DeadlineExceeded {
+		return fmt.Sprintf("Command timed out after %v.\nOutput so far:\n%s", timeout, output)
+	}
+	if runErr != nil {
+		exitCode := 1
+		var exitErr *exec.ExitError
+		if errors.As(runErr, &exitErr) {
+			exitCode = exitErr.ExitCode()
+		}
+		return fmt.Sprintf("Exit code: %d (Error: %v)\nOutput:\n%s", exitCode, runErr, output)
+	}
 	return fmt.Sprintf("Exit code: 0\nOutput:\n%s", output)
 }
 

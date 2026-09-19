@@ -37,6 +37,9 @@ type RunRequest struct {
 	// for models/providers that support it.
 	ThinkLevel string `json:"think_level,omitempty"`
 
+	// ResumeSession restores an interactive session by ID, or "last" for the newest.
+	ResumeSession string `json:"resume_session,omitempty"`
+
 	// ConversationID optionally links the run to a persistent conversation thread in the database.
 	ConversationID int64 `json:"conversation_id,omitempty"`
 

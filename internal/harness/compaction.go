@@ -21,6 +21,14 @@ type CompactionConfig struct {
 	MaxToolOutputChars int
 }
 
+func messageCharacterCount(messages []llm.Message) int {
+	total := 0
+	for _, message := range messages {
+		total += len(message.Content)
+	}
+	return total
+}
+
 // DefaultCompactionConfig returns sensible default limits for agent context management.
 func DefaultCompactionConfig() CompactionConfig {
 	return CompactionConfig{
