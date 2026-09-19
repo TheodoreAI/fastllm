@@ -88,15 +88,12 @@ export default function SettingsPanel({
   fontScale,
   onFontScaleChange,
   settings,
-  ragSettings,
-  onSaveRagSettings,
   fileAccessSettings,
   onSaveFileAccessSettings,
   cloudProviderSettings,
   onSaveCloudProviderSettings,
   thinkLevel,
   onThinkLevelChange,
-  onClearKnowledgeBase,
   onClearConversations,
   expandSection,
   onClose,
@@ -112,43 +109,20 @@ export default function SettingsPanel({
     document.addEventListener('mousedown', handlePointerDown)
     return () => document.removeEventListener('mousedown', handlePointerDown)
   }, [onClose])
-  const [ragForm, setRagForm] = useState(ragSettings)
-  const [ragStatus, setRagStatus] = useState('')
   const [fileAccessForm, setFileAccessForm] = useState(fileAccessSettings)
   const [fileAccessStatus, setFileAccessStatus] = useState('')
-  // key text the user has typed. A provider absent from this object was
-  // never touched this session, so saving omits its field entirely and
-  // whatever key (if any) is already stored server-side is left alone —
-  // see UpdateCloudProviderSettings's doc comment for why that distinction
-  // matters. The server never sends real key values back (only whether
-  // one is configured), so there is no "current key" to prefill here.
   const [cloudProviderForm, setCloudProviderForm] = useState({})
   const [cloudProviderStatus, setCloudProviderStatus] = useState('')
-  const [confirming, setConfirming] = useState(null) // 'kb' | 'conversations' | null
+  const [confirming, setConfirming] = useState(null) // 'conversations' | null
   const [dataStatus, setDataStatus] = useState('')
   const [browsing, setBrowsing] = useState(false)
 
-  // Persisted across sessions (see useSettingsExpanded) — Appearance
-  // starts open on a first-ever run since it's the sub-section most
-  // people touch first, but a returning user's expand/collapse choices
-  // now stick instead of resetting every time Settings reopens.
   const [expanded, setExpanded] = useSettingsExpanded()
 
   function toggleSection(id) {
     setExpanded((prev) => ({ ...prev, [id]: !prev[id] }))
   }
 
-  // Lets a cross-link elsewhere in the app (ModelPicker's "manage
-  // models", the Editor's "Enable the terminal" checklist item) force one
-  // specific sub-section open — e.g. jumping to LLM backend or Terminal —
-  // without the panel otherwise needing to be a controlled component. See
-  // App.jsx's onOpenSettings. Also scrolls that section into view: with
-  // several sub-sections above it already expanded (their own remembered
-  // state — see useSettingsExpanded), the target can easily open below the
-  // fold, which reads as "the button did nothing" even though it worked.
-  // The rAF defers the scroll one paint past the state flip above, so it
-  // measures the section's real (expanded) position instead of the
-  // collapsed one still on screen this same tick.
   useEffect(() => {
     if (!expandSection) return
     setExpanded((prev) => ({ ...prev, [expandSection]: true }))
@@ -157,35 +131,11 @@ export default function SettingsPanel({
     })
   }, [expandSection, setExpanded])
 
-  // Drives disabling the read/write checkboxes and Save button before an
-  // invalid (checked-but-no-root) state can even be reached, rather than
-  // only rejecting it after the fact — see handleSaveFileAccess's
-  // pre-flight check below for the belt-and-suspenders case where root
-  // gets cleared again after a box was already checked.
   const fileAccessRootEmpty = !fileAccessForm.root?.trim()
-
-  useEffect(() => {
-    setRagForm(ragSettings)
-  }, [ragSettings])
 
   useEffect(() => {
     setFileAccessForm(fileAccessSettings)
   }, [fileAccessSettings])
-
-  async function handleSaveRag(e) {
-    e.preventDefault()
-    setRagStatus('Saving…')
-    try {
-      await onSaveRagSettings({
-        chunk_size: Number(ragForm.chunk_size),
-        chunk_overlap: Number(ragForm.chunk_overlap),
-        top_k: Number(ragForm.top_k),
-      })
-      setRagStatus('Saved. Applies to newly indexed documents and the next chat message.')
-    } catch (err) {
-      setRagStatus(`Couldn't save retrieval settings: ${err.message}`)
-    }
-  }
 
   // Opens a native OS folder dialog on the server's own machine/desktop —
   // unlike a browser <input type=file webkitdirectory>, this returns a
@@ -514,61 +464,11 @@ export default function SettingsPanel({
         </p>
       </SubSection>
 
-      <SubSection id="rag" label="Retrieval (RAG) tuning" expanded={!!expanded.rag} onToggle={toggleSection}>
-        {ragForm ? (
-          <form onSubmit={handleSaveRag} className="rag-form">
-            <label className="rag-field">
-              <span>Chunk size (characters)</span>
-              <input
-                type="number"
-                min={50}
-                value={ragForm.chunk_size}
-                onChange={(e) => setRagForm({ ...ragForm, chunk_size: e.target.value })}
-              />
-            </label>
-            <label className="rag-field">
-              <span>Chunk overlap</span>
-              <input
-                type="number"
-                min={0}
-                value={ragForm.chunk_overlap}
-                onChange={(e) => setRagForm({ ...ragForm, chunk_overlap: e.target.value })}
-              />
-            </label>
-            <label className="rag-field">
-              <span>Chunks retrieved per question</span>
-              <input
-                type="number"
-                min={1}
-                value={ragForm.top_k}
-                onChange={(e) => setRagForm({ ...ragForm, top_k: e.target.value })}
-              />
-            </label>
-            <button type="submit" className="btn-primary">Save retrieval settings</button>
-            {ragStatus && (
-              <p className={`status ${ragStatus.startsWith("Couldn't") ? 'status-error' : ''}`}>{ragStatus}</p>
-            )}
-            <p className="settings-hint">
-              Chunk size/overlap only affect documents indexed after saving — existing
-              documents keep the chunks they were indexed with.
-            </p>
-          </form>
-        ) : (
-          <p className="settings-hint">Loading…</p>
-        )}
-      </SubSection>
-
       <SubSection id="data" label="Data management" expanded={!!expanded.data} onToggle={toggleSection}>
         <div className="danger-zone">
           <div className="danger-row">
             <span>Clear all conversations</span>
             <button type="button" className="btn-danger" onClick={() => setConfirming('conversations')}>
-              Clear…
-            </button>
-          </div>
-          <div className="danger-row">
-            <span>Clear knowledge base</span>
-            <button type="button" className="btn-danger" onClick={() => setConfirming('kb')}>
               Clear…
             </button>
           </div>
@@ -612,16 +512,6 @@ export default function SettingsPanel({
           confirmLabel="Delete all conversations"
           onCancel={() => setConfirming(null)}
           onConfirm={() => runConfirmed('conversations')}
-        />
-      )}
-
-      {confirming === 'kb' && (
-        <ConfirmDeleteModal
-          heading="Clear the knowledge base?"
-          description="Delete every indexed document and chunk. This can't be undone."
-          confirmLabel="Delete knowledge base"
-          onCancel={() => setConfirming(null)}
-          onConfirm={() => runConfirmed('kb')}
         />
       )}
     </div>

@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import MessageContent from './MessageContent'
-import PendingWriteCard from './PendingWriteCard'
 
 // Small inline icon set replacing the emoji ChatPanel used to render
 // directly — emoji render inconsistently across platforms/fonts, while
@@ -106,8 +105,6 @@ export default function ChatPanel({
   onSendMessage,
   onStop,
   userDisplayName,
-  onRequestApproveWrite,
-  onRejectWrite,
   pendingImages,
   composerImageError,
   onComposerPaste,
@@ -328,13 +325,6 @@ export default function ChatPanel({
               </div>
             )}
             <MessageContent content={m.content} />
-            {m.pendingWrites && m.pendingWrites.length > 0 && (
-              <div className="pending-writes">
-                {m.pendingWrites.map((w) => (
-                  <PendingWriteCard key={w.id} write={w} onRequestApprove={onRequestApproveWrite} onReject={onRejectWrite} />
-                ))}
-              </div>
-            )}
             {m.sources && m.sources.length > 0 && (
               <details className="sources">
                 <summary>{m.sources.length} source{m.sources.length === 1 ? '' : 's'}</summary>
