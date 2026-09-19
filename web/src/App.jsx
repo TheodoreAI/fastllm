@@ -3,7 +3,6 @@ import './App.css'
 import ConversationList from './components/ConversationList'
 import ModelPicker from './components/ModelPicker'
 import ChatPanel from './components/ChatPanel'
-import HarnessPanel from './components/HarnessPanel'
 import ConfirmDeleteModal from './components/ConfirmDeleteModal'
 import CommandPalette from './components/CommandPalette'
 import SettingsPanel from './components/SettingsPanel'
@@ -30,6 +29,7 @@ import {
   saveCloudProviderSettings,
   clearConversations,
   streamChat,
+  streamHarnessRun,
   subscribeLiveChat,
   setLiveTarget,
   quitServer,
@@ -78,7 +78,6 @@ function CloseIcon(props) {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('chat') // 'chat' | 'harness'
   const [messages, setMessages] = useState([])
   const [messagesLoading, setMessagesLoading] = useState(false)
   const [input, setInput] = useState('')
@@ -250,7 +249,6 @@ export default function App() {
     setMessages([])
     setInput('')
     setPendingImages([])
-    setActiveTab('chat')
   }
 
   function handleCloseChat() {
@@ -285,11 +283,156 @@ export default function App() {
     setStreaming(false)
   }
 
-  async function sendMessage(e) {
+  async function sendMessage(e, mode = 'chat', agentConfig = {}) {
     e.preventDefault()
     const trimmed = input.trim()
     if (!trimmed && pendingImages.length === 0) return
     if (streaming) return
+
+    if (mode === 'agent') {
+      const userMessage = {
+        role: 'user',
+        content: trimmed,
+        mode: 'agent',
+      }
+      setMessages((prev) => [...prev, userMessage])
+      setInput('')
+      setStreaming(true)
+
+      const assistantPlaceholder = {
+        role: 'assistant',
+        content: '',
+        isAgent: true,
+        turns: [],
+        currentTurn: { turn: 1, toolCalls: [] },
+        finalResult: null,
+      }
+      setMessages((prev) => [...prev, assistantPlaceholder])
+
+      const ac = new AbortController()
+      streamAbortRef.current = ac
+
+      let activeTurn = { turn: 1, toolCalls: [] }
+
+      const priorTurns = messages.slice(-8).map((m) => ({
+        role: m.role,
+        content: m.content || '',
+      }))
+
+      const payload = {
+        task: trimmed,
+        conversation_id: conversationId || undefined,
+        working_dir: agentConfig?.workingDir?.trim() || fileAccessSettings?.root || undefined,
+        model: model || undefined,
+        max_turns: Number(agentConfig?.maxTurns) || 20,
+        allow_commands: agentConfig?.allowCommands ?? true,
+        initial_messages: priorTurns,
+      }
+
+      try {
+        await streamHarnessRun(
+          payload,
+          (ev) => {
+            if (ev.type === 'conversation' && ev.conversation_id) {
+              if (!conversationIdRef.current) {
+                setConversationId(ev.conversation_id)
+                refreshConversations()
+              }
+            } else if (ev.type === 'turn_start') {
+              activeTurn = { turn: ev.turn, toolCalls: [] }
+              setMessages((prev) => {
+                const last = prev[prev.length - 1]
+                if (!last || last.role !== 'assistant') return prev
+                return [...prev.slice(0, -1), { ...last, currentTurn: { ...activeTurn } }]
+              })
+            } else if (ev.type === 'tool_call') {
+              if (ev.tool_call) {
+                activeTurn.toolCalls = [...activeTurn.toolCalls, { ...ev.tool_call, pending: true }]
+                setMessages((prev) => {
+                  const last = prev[prev.length - 1]
+                  if (!last || last.role !== 'assistant') return prev
+                  return [...prev.slice(0, -1), { ...last, currentTurn: { ...activeTurn } }]
+                })
+              }
+            } else if (ev.type === 'tool_result') {
+              if (ev.tool_call) {
+                activeTurn.toolCalls = activeTurn.toolCalls.map((tc) =>
+                  tc.id === ev.tool_call.id ? { ...ev.tool_call, pending: false } : tc
+                )
+                setMessages((prev) => {
+                  const last = prev[prev.length - 1]
+                  if (!last || last.role !== 'assistant') return prev
+                  return [...prev.slice(0, -1), { ...last, currentTurn: { ...activeTurn } }]
+                })
+              }
+            } else if (ev.type === 'turn_complete') {
+              if (ev.metrics) activeTurn.metrics = ev.metrics
+              if (ev.response) activeTurn.response = ev.response
+              const completedTurn = { ...activeTurn }
+              setMessages((prev) => {
+                const last = prev[prev.length - 1]
+                if (!last || last.role !== 'assistant') return prev
+                return [
+                  ...prev.slice(0, -1),
+                  {
+                    ...last,
+                    turns: [...(last.turns || []), completedTurn],
+                    currentTurn: null,
+                  },
+                ]
+              })
+            } else if (ev.type === 'task_finished') {
+              setMessages((prev) => {
+                const last = prev[prev.length - 1]
+                if (!last || last.role !== 'assistant') return prev
+                return [
+                  ...prev.slice(0, -1),
+                  {
+                    ...last,
+                    content: ev.result?.final_response || (ev.result?.success ? 'Task completed successfully.' : ''),
+                    finalResult: ev.result,
+                    error: ev.error,
+                    currentTurn: null,
+                  },
+                ]
+              })
+            }
+          },
+          (err) => {
+            setMessages((prev) => {
+              const last = prev[prev.length - 1]
+              if (!last || last.role !== 'assistant') return prev
+              return [
+                ...prev.slice(0, -1),
+                {
+                  ...last,
+                  error: err.message,
+                  isError: true,
+                  currentTurn: null,
+                },
+              ]
+            })
+          },
+          ac.signal
+        )
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          setMessages((prev) => {
+            const last = prev[prev.length - 1]
+            if (!last || last.role !== 'assistant') return prev
+            return [
+              ...prev.slice(0, -1),
+              { ...last, error: err.message, isError: true, currentTurn: null },
+            ]
+          })
+        }
+      } finally {
+        setStreaming(false)
+        streamAbortRef.current = null
+        refreshConversations()
+      }
+      return
+    }
 
     const userMessage = {
       role: 'user',
@@ -440,23 +583,6 @@ export default function App() {
             <span className="brand-title">fastllm</span>
           </div>
 
-          <div className="view-mode-tabs">
-            <button
-              type="button"
-              className={`view-mode-tab ${activeTab === 'chat' ? 'is-active' : ''}`}
-              onClick={() => setActiveTab('chat')}
-            >
-              Chat
-            </button>
-            <button
-              type="button"
-              className={`view-mode-tab ${activeTab === 'harness' ? 'is-active' : ''}`}
-              onClick={() => setActiveTab('harness')}
-            >
-              Agent
-            </button>
-          </div>
-
           <div className="header-actions">
             <button
               type="button"
@@ -478,35 +604,26 @@ export default function App() {
         </nav>
 
         <div className="main-row">
-          {activeTab === 'harness' ? (
-            <HarnessPanel
-              models={models}
-              selectedModel={model}
-              onSelectModel={setModel}
-              defaultWorkingDir={fileAccessSettings?.root || ''}
-            />
-          ) : (
-            <ChatPanel
-              messages={messages}
-              messagesLoading={messagesLoading}
-              conversationId={conversationId}
-              conversationTitle={conversations.find((c) => String(c.id) === String(conversationId))?.title}
-              onCloseChat={handleCloseChat}
-              onNewChat={startNewChat}
-              bottomRef={bottomRef}
-              input={input}
-              onInputChange={setInput}
-              streaming={streaming}
-              onSendMessage={sendMessage}
-              onStop={stopStreaming}
-              userDisplayName={settings?.username}
-              pendingImages={pendingImages}
-              composerImageError={composerImageError}
-              onComposerPaste={handleComposerPaste}
-              onRemovePendingImage={removePendingImage}
-              visionSupported={visionSupported}
-            />
-          )}
+          <ChatPanel
+            messages={messages}
+            messagesLoading={messagesLoading}
+            conversationId={conversationId}
+            conversationTitle={conversations.find((c) => String(c.id) === String(conversationId))?.title}
+            onCloseChat={handleCloseChat}
+            onNewChat={startNewChat}
+            bottomRef={bottomRef}
+            input={input}
+            onInputChange={setInput}
+            streaming={streaming}
+            onSendMessage={sendMessage}
+            onStop={stopStreaming}
+            userDisplayName={settings?.username}
+            pendingImages={pendingImages}
+            composerImageError={composerImageError}
+            onComposerPaste={handleComposerPaste}
+            onRemovePendingImage={removePendingImage}
+            visionSupported={visionSupported}
+          />
 
           <aside className={`sidebar ${sidebarCollapsed ? 'is-collapsed' : ''}`}>
             <button
