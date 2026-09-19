@@ -279,6 +279,7 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 							if matched.APIKey != "" {
 								client.APIKey = matched.APIKey
 							}
+							applyModelParameters(client, matched.Parameters)
 						}
 						continue
 					}
@@ -589,3 +590,26 @@ func (r *Runner) runInteractiveTurn(
 
 	fmt.Println("\n[Max turns limit reached for this turn]")
 }
+
+func applyModelParameters(client *llm.Client, params map[string]interface{}) {
+	if client == nil || params == nil {
+		return
+	}
+	if v, ok := params["temperature"]; ok {
+		if f, ok := v.(float64); ok {
+			client.Temperature = &f
+		}
+	}
+	if v, ok := params["top_p"]; ok {
+		if f, ok := v.(float64); ok {
+			client.TopP = &f
+		}
+	}
+	if v, ok := params["max_tokens"]; ok {
+		if f, ok := v.(float64); ok {
+			i := int(f)
+			client.MaxTokens = &i
+		}
+	}
+}
+

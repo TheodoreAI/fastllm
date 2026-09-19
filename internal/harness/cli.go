@@ -121,6 +121,11 @@ func RunCLI(args []string) int {
 	if strings.Contains(baseURL, "localhost:11434") || strings.Contains(baseURL, "127.0.0.1:11434") {
 		client.SendThink = true
 	}
+	if settings != nil {
+		if matched := settings.FindModel(model); matched != nil {
+			applyModelParameters(client, matched.Parameters)
+		}
+	}
 
 	runner := NewRunner(client, workDir, model)
 
