@@ -1,0 +1,165 @@
+package harness
+
+import "fastllm/internal/llm"
+
+// DefaultSystemPrompt directs an autonomous coding harness agent to inspect
+// files before acting, verify changes, and finish concisely.
+const DefaultSystemPrompt = `You are an autonomous AI coding agent executing tasks directly in a project directory.
+You have tools to explore the codebase, edit files, run shell commands, and finish the task.
+
+Follow these operational rules:
+1. First, explore the directory or search for relevant files to understand the project structure and context before modifying code.
+2. When making changes:
+   - Prefer edit_file for targeted modifications to existing files.
+   - Use write_file for creating new files or replacing small files completely.
+3. If commands are allowed, verify your changes by running tests, builds, or scripts with run_command before concluding.
+4. When finished, call finish_task (or state your final answer) explaining what was done and verifying the result.`
+
+var readFileTool = llm.Tool{
+	Type: "function",
+	Function: llm.ToolFunction{
+		Name:        "read_file",
+		Description: "Read the contents of a text file from the project directory. Path is relative to the project root.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]any{
+					"type":        "string",
+					"description": "Path to the file, relative to the project root (e.g. \"README.md\" or \"src/main.go\").",
+				},
+			},
+			"required": []string{"path"},
+		},
+	},
+}
+
+var writeFileTool = llm.Tool{
+	Type: "function",
+	Function: llm.ToolFunction{
+		Name:        "write_file",
+		Description: "Write full content directly to a file in the project directory. Automatically creates parent directories if needed. Path is relative to the project root. Prefer edit_file for small changes to existing files.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]any{
+					"type":        "string",
+					"description": "Path to the file, relative to the project root (e.g. \"main.go\" or \"docs/guide.md\").",
+				},
+				"content": map[string]any{
+					"type":        "string",
+					"description": "The full content to write to the file.",
+				},
+			},
+			"required": []string{"path", "content"},
+		},
+	},
+}
+
+var editFileTool = llm.Tool{
+	Type: "function",
+	Function: llm.ToolFunction{
+		Name:        "edit_file",
+		Description: "Edit an existing file by replacing an exact block of current content with new content. 'search' must match the file's current content exactly (including whitespace and indentation) and appear exactly once. Path is relative to the project root.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]any{
+					"type":        "string",
+					"description": "Path to the existing file, relative to the project root.",
+				},
+				"search": map[string]any{
+					"type":        "string",
+					"description": "The exact text to find in the file. Must appear exactly once.",
+				},
+				"replace": map[string]any{
+					"type":        "string",
+					"description": "The replacement text.",
+				},
+			},
+			"required": []string{"path", "search", "replace"},
+		},
+	},
+}
+
+var listFilesTool = llm.Tool{
+	Type: "function",
+	Function: llm.ToolFunction{
+		Name:        "list_files",
+		Description: "List files in the project directory recursively. Returns relative paths.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]any{
+					"type":        "string",
+					"description": "Subdirectory to list, relative to the project root (e.g. \"internal\" or \"\").",
+				},
+			},
+		},
+	},
+}
+
+var searchFilesTool = llm.Tool{
+	Type: "function",
+	Function: llm.ToolFunction{
+		Name:        "search_files",
+		Description: "Search file contents in the project directory using a regular expression (Go RE2 syntax). Returns matching lines formatted as 'path:line: text'.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"pattern": map[string]any{
+					"type":        "string",
+					"description": "Regular expression pattern to search for.",
+				},
+				"path": map[string]any{
+					"type":        "string",
+					"description": "Subdirectory to search within. Omit or use \"\" for the entire project.",
+				},
+			},
+			"required": []string{"pattern"},
+		},
+	},
+}
+
+var runCommandTool = llm.Tool{
+	Type: "function",
+	Function: llm.ToolFunction{
+		Name:        "run_command",
+		Description: "Run a shell command in the project directory and return its stdout, stderr, and exit code. Use this to run builds, tests, linting, or inspection commands.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"command": map[string]any{
+					"type":        "string",
+					"description": "The shell command line to execute.",
+				},
+				"timeout_seconds": map[string]any{
+					"type":        "integer",
+					"description": "Maximum execution time in seconds (default 60).",
+				},
+			},
+			"required": []string{"command"},
+		},
+	},
+}
+
+var finishTaskTool = llm.Tool{
+	Type: "function",
+	Function: llm.ToolFunction{
+		Name:        "finish_task",
+		Description: "Explicitly signal that the task has been completed, providing a final summary and optional answer.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"summary": map[string]any{
+					"type":        "string",
+					"description": "Summary of actions taken, fixes applied, or verification results.",
+				},
+				"answer": map[string]any{
+					"type":        "string",
+					"description": "Direct answer if the task asked a question or requested specific data.",
+				},
+			},
+			"required": []string{"summary"},
+		},
+	},
+}
