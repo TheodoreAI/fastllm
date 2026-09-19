@@ -8,7 +8,11 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
-dist
+# Ignore build output but keep the directory itself: web/embed.go does
+# //go:embed all:dist, which is a hard compile error when dist/ is missing,
+# so a fresh clone must still have the directory present.
+dist/*
+!dist/.gitkeep
 dist-ssr
 *.local
 
