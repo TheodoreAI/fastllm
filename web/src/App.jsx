@@ -9,7 +9,6 @@ import SettingsPanel from './components/SettingsPanel'
 import DraggableSection from './components/DraggableSection'
 import SectionIcon from './components/SectionIcon'
 import TweakBar from './components/TweakBar'
-import TopBar from './components/TopBar'
 import { useTheme } from './useTheme'
 import { useFontFamily } from './useFontFamily'
 import { useFontScale } from './useFontScale'
@@ -577,11 +576,6 @@ export default function App() {
           </button>
         </div>
       )}
-
-      <TopBar
-        onOpenFolder={() => setOpenFolderSignal((s) => s + 1)}
-        onQuit={() => setQuitConfirmOpen(true)}
-      />
 
       <div className="app-body">
         <nav className="header-nav">
