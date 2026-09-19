@@ -168,6 +168,10 @@ func RunCLI(args []string) int {
 					fmt.Printf("     result: %s\n", firstLine)
 				}
 			}
+		case EventTurnComplete:
+			if ev.Metrics != nil {
+				fmt.Printf("  [%s]\n", ev.Metrics.FormatTurnSummary())
+			}
 		}
 	}
 
@@ -193,6 +197,9 @@ func RunCLI(args []string) int {
 		if result != nil {
 			fmt.Printf(" Turns:    %d\n", result.Turns)
 			fmt.Printf(" Duration: %.2fs\n", float64(result.DurationMS)/1000.0)
+			if result.Metrics != nil {
+				fmt.Printf(" Metrics:  %s\n", result.Metrics.FormatSessionSummary())
+			}
 			if result.Error != "" {
 				fmt.Printf(" Error:    %s\n", result.Error)
 			}
