@@ -93,6 +93,35 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 		{Role: "system", Content: systemPrompt + rulesPrompt},
 	}
 
+	switchWorkspace := func(newDir string) error {
+		resolvedDir, err := resolveInteractiveDirectory(absWorkingDir, newDir)
+		if err != nil {
+			return err
+		}
+		absWorkingDir = resolvedDir
+		fileReader = files.New(absWorkingDir, true)
+		checkpointMgr = NewCheckpointManager(absWorkingDir)
+		discoveredRules = DiscoverWorkspaceRules(absWorkingDir)
+		rulesPrompt = FormatRulesForPrompt(discoveredRules)
+		settings, configPath, _ = config.LoadSettings(absWorkingDir)
+		sessionMessages = []llm.Message{
+			{Role: "system", Content: systemPrompt + rulesPrompt},
+		}
+		fmt.Println(FormatWelcomeBanner(absWorkingDir, model, configPath, checkpointMgr.IsGitRepo(), len(discoveredRules), allowCmds))
+		return nil
+	}
+
+	runShellCommand := func(command string) {
+		path, isDirectoryChange := parseDirectoryChange(command)
+		if isDirectoryChange {
+			if err := switchWorkspace(path); err != nil {
+				fmt.Println(ColorRed(fmt.Sprintf("  %s Cannot change directory: %v", SymCross, err)))
+			}
+			return
+		}
+		_ = runInteractiveCommand(absWorkingDir, command)
+	}
+
 	var shellMode bool
 	scanner := bufio.NewScanner(os.Stdin)
 
@@ -134,7 +163,7 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 				fmt.Println(FormatHelp())
 				continue
 			}
-			_ = runInteractiveCommand(absWorkingDir, line)
+			runShellCommand(line)
 			continue
 		}
 
@@ -142,14 +171,14 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 		if strings.HasPrefix(line, "!") {
 			cmdStr := strings.TrimSpace(line[1:])
 			if cmdStr != "" {
-				_ = runInteractiveCommand(absWorkingDir, cmdStr)
+				runShellCommand(cmdStr)
 			}
 			continue
 		}
 		if strings.HasPrefix(line, "$ ") {
 			cmdStr := strings.TrimSpace(line[2:])
 			if cmdStr != "" {
-				_ = runInteractiveCommand(absWorkingDir, cmdStr)
+				runShellCommand(cmdStr)
 			}
 			continue
 		}
@@ -170,7 +199,7 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 			case "/shell", "/sh":
 				if len(parts) > 1 {
 					cmdStr := strings.TrimSpace(line[len(parts[0]):])
-					_ = runInteractiveCommand(absWorkingDir, cmdStr)
+					runShellCommand(cmdStr)
 					continue
 				}
 				shellMode = true
@@ -322,21 +351,8 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 				if len(parts) < 2 {
 					fmt.Printf("Current directory: %s\nUsage: /dir <path>\n", absWorkingDir)
 				} else {
-					newDir, err := filepath.Abs(parts[1])
-					if err != nil {
+					if err := switchWorkspace(strings.TrimSpace(line[len(parts[0]):])); err != nil {
 						fmt.Printf("Invalid directory %q: %v\n", parts[1], err)
-					} else {
-						absWorkingDir = newDir
-						fileReader = files.New(absWorkingDir, true)
-						checkpointMgr = NewCheckpointManager(absWorkingDir)
-						discoveredRules = DiscoverWorkspaceRules(absWorkingDir)
-						rulesPrompt = FormatRulesForPrompt(discoveredRules)
-						settings, configPath, _ = config.LoadSettings(absWorkingDir)
-						sessionMessages = []llm.Message{
-							{Role: "system", Content: systemPrompt + rulesPrompt},
-						}
-						fmt.Printf("Switched working directory to: %s\n", absWorkingDir)
-						fmt.Printf("Discovered %d rule file(s).\n", len(discoveredRules))
 					}
 				}
 				continue
@@ -672,6 +688,61 @@ func (r *Runner) runInteractiveTurn(
 	fmt.Println(ColorYellow(fmt.Sprintf("\n%s Max turns limit reached for this prompt.", SymCross)))
 }
 
+func parseDirectoryChange(command string) (string, bool) {
+	trimmed := strings.TrimSpace(command)
+	lower := strings.ToLower(trimmed)
+	for _, name := range []string{"set-location", "chdir", "cd", "sl"} {
+		if lower == name {
+			return "", true
+		}
+		prefix := name + " "
+		if strings.HasPrefix(lower, prefix) {
+			path := strings.TrimSpace(trimmed[len(prefix):])
+			if strings.HasPrefix(path, "/d ") {
+				path = strings.TrimSpace(path[3:])
+			}
+			if len(path) >= 2 && ((path[0] == '"' && path[len(path)-1] == '"') || (path[0] == '\'' && path[len(path)-1] == '\'')) {
+				path = path[1 : len(path)-1]
+			}
+			return path, true
+		}
+	}
+	return "", false
+}
+
+func resolveInteractiveDirectory(currentDir, requested string) (string, error) {
+	requested = strings.TrimSpace(requested)
+	if requested == "" || requested == "~" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve home directory: %w", err)
+		}
+		requested = home
+	} else if strings.HasPrefix(requested, "~"+string(filepath.Separator)) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve home directory: %w", err)
+		}
+		requested = filepath.Join(home, strings.TrimPrefix(requested, "~"+string(filepath.Separator)))
+	}
+
+	if !filepath.IsAbs(requested) {
+		requested = filepath.Join(currentDir, requested)
+	}
+	resolved, err := filepath.Abs(requested)
+	if err != nil {
+		return "", fmt.Errorf("resolve %q: %w", requested, err)
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", fmt.Errorf("open %q: %w", resolved, err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("%q is not a directory", resolved)
+	}
+	return filepath.Clean(resolved), nil
+}
+
 func applyModelParameters(client *llm.Client, params map[string]interface{}) {
 	if client == nil || params == nil {
 		return
@@ -746,4 +817,3 @@ func runInteractiveCommand(dir, command string) error {
 		return err
 	}
 }
-
