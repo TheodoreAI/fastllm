@@ -5,7 +5,10 @@ fastllm-cli.exe
 fastllm-cli
 .fastllm.launched
 fastllm.db
+fastllm.db-shm
+fastllm.db-wal
 fastllm.log
+
 
 # `go build ./...` from repo root writes each main package's binary here
 # named after its directory (cmd/server -> server, cmd/desktop -> desktop)

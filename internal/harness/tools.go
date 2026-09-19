@@ -5,14 +5,16 @@ import "fastllm/internal/llm"
 // DefaultSystemPrompt directs an autonomous coding harness agent to inspect
 // files before acting, verify changes, and finish concisely.
 const DefaultSystemPrompt = `You are an autonomous AI coding agent executing tasks directly in a project directory.
-You have tools to explore the codebase, edit files, run shell commands, and finish the task.
+You have tools to explore the codebase, edit files, patch diffs, run shell commands, manage background processes, and finish the task.
 
 Follow these operational rules:
 1. First, explore the directory or search for relevant files to understand the project structure and context before modifying code.
 2. When making changes:
-   - Prefer edit_file for targeted modifications to existing files.
+   - Prefer edit_file for targeted replacements in existing files.
+   - Use patch_file for unified diffs.
    - Use write_file for creating new files or replacing small files completely.
 3. If commands are allowed, verify your changes by running tests, builds, or scripts with run_command before concluding.
+   - For long-running servers or watchers, set background: true and inspect using process_status.
 4. When finished, call finish_task (or state your final answer) explaining what was done and verifying the result.`
 
 var readFileTool = llm.Tool{
@@ -59,7 +61,7 @@ var editFileTool = llm.Tool{
 	Type: "function",
 	Function: llm.ToolFunction{
 		Name:        "edit_file",
-		Description: "Edit an existing file by replacing an exact block of current content with new content. 'search' must match the file's current content exactly (including whitespace and indentation) and appear exactly once. Path is relative to the project root.",
+		Description: "Edit an existing file by replacing an exact block of current content with new content. 'search' must match the file's current content and appear uniquely. Path is relative to the project root.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -69,7 +71,7 @@ var editFileTool = llm.Tool{
 				},
 				"search": map[string]any{
 					"type":        "string",
-					"description": "The exact text to find in the file. Must appear exactly once.",
+					"description": "The exact text to find in the file. Must appear uniquely.",
 				},
 				"replace": map[string]any{
 					"type":        "string",
@@ -77,6 +79,28 @@ var editFileTool = llm.Tool{
 				},
 			},
 			"required": []string{"path", "search", "replace"},
+		},
+	},
+}
+
+var patchFileTool = llm.Tool{
+	Type: "function",
+	Function: llm.ToolFunction{
+		Name:        "patch_file",
+		Description: "Apply a unified diff or hunk patch to an existing file in the project directory.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]any{
+					"type":        "string",
+					"description": "Path to the existing file, relative to the project root.",
+				},
+				"diff": map[string]any{
+					"type":        "string",
+					"description": "Unified diff content (including @@ lines, -, +) to apply.",
+				},
+			},
+			"required": []string{"path", "diff"},
 		},
 	},
 }
@@ -124,7 +148,7 @@ var runCommandTool = llm.Tool{
 	Type: "function",
 	Function: llm.ToolFunction{
 		Name:        "run_command",
-		Description: "Run a shell command in the project directory and return its stdout, stderr, and exit code. Use this to run builds, tests, linting, or inspection commands.",
+		Description: "Run a shell command in the project directory and return its stdout, stderr, and exit code. Supports running background processes with background: true.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -134,10 +158,49 @@ var runCommandTool = llm.Tool{
 				},
 				"timeout_seconds": map[string]any{
 					"type":        "integer",
-					"description": "Maximum execution time in seconds (default 60).",
+					"description": "Maximum execution time in seconds (default 60). Ignored if background is true.",
+				},
+				"background": map[string]any{
+					"type":        "boolean",
+					"description": "If true, run command asynchronously in the background and return process ID immediately.",
 				},
 			},
 			"required": []string{"command"},
+		},
+	},
+}
+
+var processStatusTool = llm.Tool{
+	Type: "function",
+	Function: llm.ToolFunction{
+		Name:        "process_status",
+		Description: "Check status and recent output of a background process, or list all running processes if process_id is empty.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"process_id": map[string]any{
+					"type":        "string",
+					"description": "The ID of the background process (e.g. \"proc-1\"). Omit or leave empty to list all processes.",
+				},
+			},
+		},
+	},
+}
+
+var killProcessTool = llm.Tool{
+	Type: "function",
+	Function: llm.ToolFunction{
+		Name:        "kill_process",
+		Description: "Terminate an active background process by ID.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"process_id": map[string]any{
+					"type":        "string",
+					"description": "The ID of the background process to kill (e.g. \"proc-1\").",
+				},
+			},
+			"required": []string{"process_id"},
 		},
 	},
 }
@@ -163,3 +226,4 @@ var finishTaskTool = llm.Tool{
 		},
 	},
 }
+
