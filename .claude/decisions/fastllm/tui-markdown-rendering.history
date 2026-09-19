@@ -1,0 +1,4 @@
+- decided_at: 2026-09-19T18:10:49+00:00
+  event: initial
+  value: Dependency-free ANSI renderer for headings, bullets, quotes, fenced code, inline code, emphasis, links, rules, diffs, and structured tool previews.
+  reason: Improves terminal readability without adding a heavy TUI framework or duplicating browser-grade layout behavior.

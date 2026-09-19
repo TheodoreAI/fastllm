@@ -5,21 +5,42 @@ import (
 	"unicode"
 )
 
-// CanonicalOSUModelName collapses redundant model aliases (such as the
-// three aliases served by vLLM's --served-model-name for Muse Glimmer) into
-// a single canonical identifier for clean display in the model picker.
-func CanonicalOSUModelName(name string) string {
-	lower := strings.ToLower(name)
-	if strings.Contains(lower, "muse-glimmer") || strings.Contains(lower, "muse_glimmer") {
-		return "muse-glimmer"
-	}
-	return name
+// Package-internal helpers for the channel-routed completion format used by
+// several self-hosted servers, where a single stream carries both private
+// reasoning ("to=self") and the user-facing answer ("to=user"), separated by
+// <|message|> framing tokens. Nothing here is tied to a particular model: the
+// format is detected from the bytes on the wire.
+
+// HasChannelMarkers reports whether text carries channel routing headers, which is
+// how this format is recognised without knowing which model produced it.
+func HasChannelMarkers(s string) bool {
+	return strings.Contains(s, "to=user") || strings.Contains(s, "to=self")
 }
 
-// IsMuseModel reports whether the given model name refers to Meta's Muse Glimmer model family.
-func IsMuseModel(name string) bool {
-	lower := strings.ToLower(name)
-	return strings.Contains(lower, "muse-glimmer") || strings.Contains(lower, "muse_glimmer")
+// CanonicalModelAlias collapses the aliases a server reports for one model onto the
+// id the user configured for that endpoint. Servers commonly advertise several names
+// for the same weights (a fully-qualified repo path, a short name, a size-suffixed
+// name); without the configured id there is no way to know they are the same, so an
+// empty configured id leaves the reported name untouched.
+func CanonicalModelAlias(reported, configured string) string {
+	if configured == "" {
+		return reported
+	}
+	normalize := func(name string) string {
+		lower := strings.ToLower(strings.TrimSpace(name))
+		if slash := strings.LastIndexAny(lower, "/\\"); slash >= 0 {
+			lower = lower[slash+1:]
+		}
+		return strings.ReplaceAll(lower, "_", "-")
+	}
+	left, right := normalize(reported), normalize(configured)
+	if left == "" || right == "" {
+		return reported
+	}
+	if strings.HasPrefix(left, right) || strings.HasPrefix(right, left) {
+		return configured
+	}
+	return reported
 }
 
 var framingMarkers = []string{
@@ -38,10 +59,10 @@ func stripFramingMarkers(s string) string {
 	return s
 }
 
-// CleanMuseContent parses a raw completion from Muse Glimmer, separating
+// SplitChannelContent parses a raw completion in the channel format, separating
 // internal chain-of-thought (the "to=self" channel) from the user-facing answer
 // (the "to=user" channel) and stripping all raw channel routing tokens.
-func CleanMuseContent(raw string) (content string, reasoning string) {
+func SplitChannelContent(raw string) (content string, reasoning string) {
 	// Look for the user channel header.
 	userIdx := strings.Index(raw, "to=user")
 	if userIdx != -1 {
@@ -75,28 +96,28 @@ func CleanMuseContent(raw string) (content string, reasoning string) {
 	return raw, ""
 }
 
-type museFilterState int
+type channelFilterState int
 
 const (
-	stateInit museFilterState = iota
+	stateInit channelFilterState = iota
 	stateReasoning
 	stateContent
 )
 
-// museStreamFilter buffers and demuxes streaming tokens from Muse Glimmer
+// channelStreamFilter buffers and demuxes streaming tokens in the channel format
 // into separate reasoning and user-facing content token callbacks, stripping
 // the raw "to=self" and "to=user" routing headers.
-type museStreamFilter struct {
+type channelStreamFilter struct {
 	onToken     func(string)
 	onReasoning func(string)
 
-	state    museFilterState
+	state    channelFilterState
 	buf      strings.Builder
 	holdback strings.Builder
 }
 
-func newMuseStreamFilter(onToken func(string), onReasoning func(string)) *museStreamFilter {
-	return &museStreamFilter{
+func newChannelStreamFilter(onToken func(string), onReasoning func(string)) *channelStreamFilter {
+	return &channelStreamFilter{
 		onToken:     onToken,
 		onReasoning: onReasoning,
 		state:       stateInit,
@@ -104,7 +125,7 @@ func newMuseStreamFilter(onToken func(string), onReasoning func(string)) *museSt
 }
 
 // Feed receives the next incremental token string from the model stream.
-func (f *museStreamFilter) Feed(token string) {
+func (f *channelStreamFilter) Feed(token string) {
 	switch f.state {
 	case stateInit:
 		f.buf.WriteString(token)
@@ -164,7 +185,7 @@ func (f *museStreamFilter) Feed(token string) {
 
 // feedReasoning processes reasoning tokens, holding back candidate transition
 // suffixes so that "assistant to=user" transitions are not leaked to onReasoning.
-func (f *museStreamFilter) feedReasoning(token string) {
+func (f *channelStreamFilter) feedReasoning(token string) {
 	f.holdback.WriteString(token)
 	hb := f.holdback.String()
 
@@ -221,7 +242,7 @@ func (f *museStreamFilter) feedReasoning(token string) {
 }
 
 // Flush emits any remaining buffered text when the stream terminates.
-func (f *museStreamFilter) Flush() {
+func (f *channelStreamFilter) Flush() {
 	switch f.state {
 	case stateInit:
 		s := stripFramingMarkers(f.buf.String())

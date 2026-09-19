@@ -1,0 +1,4 @@
+- decided_at: 2026-09-19T03:23:21+00:00
+  event: initial
+  value: Native interactive terminal TUI built on internal/harness; removed embedded web editor and terminal emulator components to streamline codebase and avoid IDE duplication
+  reason: External IDEs and native shells handle editing and terminal emulation better; focusing fastllm on native TUI harness and lightweight chat UI

@@ -119,20 +119,25 @@ func TestSupportsToolsAllowlist(t *testing.T) {
 	}
 }
 
-func TestStripProviderPrefix_OSU(t *testing.T) {
+func TestStripProviderPrefix_SelfHosted(t *testing.T) {
+	// A bare name routes to the self-hosted endpoint only because the user
+	// configured that id; no model name is compiled into the binary.
+	rememberSelfHostedModel("example-model")
+	t.Cleanup(func() { rememberSelfHostedModel("") })
+
 	cases := []struct {
 		model    string
 		wantBare string
 		wantProv string
 		wantOK   bool
 	}{
-		{"osu:muse-glimmer", "muse-glimmer", "osu", true},
-		{"cluster:muse-glimmer", "muse-glimmer", "osu", true},
-		{"osu:meta-models/Muse-Glimmer-30B", "meta-models/Muse-Glimmer-30B", "osu", true},
-		{"muse-glimmer", "muse-glimmer", "osu", true},
-		{"muse-glimmer-30b", "muse-glimmer-30b", "osu", true},
-		{"meta-models/Muse-Glimmer-30B", "meta-models/Muse-Glimmer-30B", "osu", true},
-		{"qwen2.5-coder:7b", "", "", false},
+		{"selfhosted:example-model", "example-model", "selfhosted", true},
+		{"cluster:example-model", "example-model", "selfhosted", true},
+		{"selfhosted:vendor-models/Example-Model-30B", "vendor-models/Example-Model-30B", "selfhosted", true},
+		{"example-model", "example-model", "selfhosted", true},
+		{"example-model-30b", "example-model-30b", "selfhosted", true},
+		{"vendor-models/Example-Model-30B", "vendor-models/Example-Model-30B", "selfhosted", true},
+		{"some-unrelated-model", "", "", false},
 	}
 	for _, c := range cases {
 		bare, prov, ok := stripProviderPrefix(c.model)
@@ -143,15 +148,20 @@ func TestStripProviderPrefix_OSU(t *testing.T) {
 	}
 }
 
-func TestSupportsToolsAndVisionForModel_OSU(t *testing.T) {
-	models := []string{
-		"osu:muse-glimmer",
-		"cluster:muse-glimmer",
-		"osu:meta-models/Muse-Glimmer-30B",
-		"muse-glimmer",
-		"meta-models/Muse-Glimmer-30B",
+func TestStripProviderPrefixIgnoresBareNamesWithoutConfiguredEndpoint(t *testing.T) {
+	rememberSelfHostedModel("")
+	if _, _, ok := stripProviderPrefix("example-model"); ok {
+		t.Error("a bare name must not route anywhere when no endpoint is configured")
 	}
-	for _, m := range models {
+	// An explicit prefix still works: it names the provider outright.
+	if _, prov, ok := stripProviderPrefix("selfhosted:example-model"); !ok || prov != "selfhosted" {
+		t.Errorf("explicit prefix should route regardless of config, got (%q, %v)", prov, ok)
+	}
+}
+
+func TestSupportsToolsAndVisionForSelfHostedProvider(t *testing.T) {
+	// Capability follows the provider, not any particular model name.
+	for _, m := range []string{"selfhosted:example-model", "cluster:anything", "selfhosted:vendor/Other-Model"} {
 		if !SupportsToolsForModel(m) {
 			t.Errorf("SupportsToolsForModel(%q) = false, want true", m)
 		}
@@ -161,12 +171,12 @@ func TestSupportsToolsAndVisionForModel_OSU(t *testing.T) {
 	}
 }
 
-func TestRouter_ListModels_DeduplicatesOSU(t *testing.T) {
-	// Start a mock vLLM server returning 3 aliases for Muse Glimmer
+func TestRouter_ListModels_CollapsesAliasesOntoConfiguredID(t *testing.T) {
+	// A server advertising three --served-model-name aliases for one model.
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/models" {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"data":[{"id":"meta-models/Muse-Glimmer-30B"},{"id":"muse-glimmer"},{"id":"muse-glimmer-30b"}]}`))
+			w.Write([]byte(`{"data":[{"id":"vendor-models/Example-Model-30B"},{"id":"example-model"},{"id":"example-model-30b"}]}`))
 			return
 		}
 		http.NotFound(w, r)
@@ -176,7 +186,8 @@ func TestRouter_ListModels_DeduplicatesOSU(t *testing.T) {
 	router := &Router{
 		Local: New("http://localhost:11434", "", "dummy", ""),
 		clouds: cloudClients{
-			osu: New(ts.URL, "test-key", "muse-glimmer", ""),
+			selfHosted:      New(ts.URL, "test-key", "example-model", ""),
+			selfHostedModel: "example-model",
 		},
 	}
 
@@ -185,18 +196,16 @@ func TestRouter_ListModels_DeduplicatesOSU(t *testing.T) {
 		t.Fatalf("ListModels failed: %v", err)
 	}
 
-	var osuModels []Model
+	var selfHosted []Model
 	for _, m := range models {
-		if m.Provider == "osu" {
-			osuModels = append(osuModels, m)
+		if m.Provider == "selfhosted" {
+			selfHosted = append(selfHosted, m)
 		}
 	}
-
-	if len(osuModels) != 1 {
-		t.Fatalf("expected 1 deduplicated OSU model, got %d: %+v", len(osuModels), osuModels)
+	if len(selfHosted) != 1 {
+		t.Fatalf("expected the three aliases collapsed to 1, got %d: %+v", len(selfHosted), selfHosted)
 	}
-	if osuModels[0].Name != "osu:muse-glimmer" {
-		t.Errorf("expected osu:muse-glimmer, got %q", osuModels[0].Name)
+	if selfHosted[0].Name != "selfhosted:example-model" {
+		t.Errorf("expected selfhosted:example-model, got %q", selfHosted[0].Name)
 	}
 }
-

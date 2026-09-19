@@ -84,7 +84,7 @@ func TestCloudProviderSettings(t *testing.T) {
 
 	s := CloudProviderSettings{
 		AnthropicAPIKey: "sk-ant-test",
-		OSUBaseURL:      "http://localhost:8010/v1",
+		SelfHostedBaseURL:      "http://localhost:8010/v1",
 	}
 	if err := SaveCloudProviderSettings(db, s); err != nil {
 		t.Fatalf("SaveCloudProviderSettings failed: %v", err)
@@ -94,7 +94,7 @@ func TestCloudProviderSettings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCloudProviderSettings failed: %v", err)
 	}
-	if loaded.AnthropicAPIKey != "sk-ant-test" || loaded.OSUBaseURL != "http://localhost:8010/v1" {
+	if loaded.AnthropicAPIKey != "sk-ant-test" || loaded.SelfHostedBaseURL != "http://localhost:8010/v1" {
 		t.Errorf("loaded settings mismatch: %+v", loaded)
 	}
 }

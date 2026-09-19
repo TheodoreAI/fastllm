@@ -1,0 +1,4 @@
+- decided_at: 2026-09-19T21:24:47+00:00
+  event: initial
+  value: Autosave sessions, recover the latest unclosed non-empty session, support explicit --resume last, and prune empty sessions after 24h plus non-empty sessions beyond 100
+  reason: Recovers crashes without age-deleting meaningful content; count cap prevents unbounded accumulation

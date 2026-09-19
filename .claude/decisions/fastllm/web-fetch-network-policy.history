@@ -1,0 +1,4 @@
+- decided_at: 2026-09-19T17:49:16+00:00
+  event: initial
+  value: Allow only publicly routable HTTP(S) destinations; reject local, private, link-local, multicast, carrier-grade NAT, documentation, and reserved IP ranges at dial time.
+  reason: Preserves zero-configuration public browsing while preventing model-generated URLs and redirects from reaching services on the user machine or private network; unrestricted fetch was unsafe and a hostname allowlist was too restrictive.

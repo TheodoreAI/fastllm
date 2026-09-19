@@ -17,7 +17,7 @@ func TestLoadAndSaveSettings(t *testing.T) {
 		URL:  "http://localhost:9999/v1",
 	})
 
-	if err := SaveSettings(cfgPath, s); err != nil {
+	if _, err := SaveSettings(cfgPath, s); err != nil {
 		t.Fatalf("SaveSettings failed: %v", err)
 	}
 
