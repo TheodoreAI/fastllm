@@ -3,8 +3,11 @@ package llm
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Cloud model names are prefixed so Router can tell at a glance which
@@ -19,6 +22,8 @@ const (
 	GeminiPrefix     = "gemini:"
 	NvidiaPrefix     = "nvidia:"
 	CloudflarePrefix = "cloudflare:"
+	OSUPrefix        = "osu:"
+	ClusterPrefix    = "cluster:"
 )
 
 // CloudProviderConfig is the subset of store.CloudProviderSettings the
@@ -34,6 +39,8 @@ type CloudProviderConfig struct {
 	// Cloudflare Workers AI to be configured — see SetCloudProviders.
 	CloudflareAPIKey    string
 	CloudflareAccountID string
+	OSUBaseURL          string
+	OSUAPIKey           string
 }
 
 // cloudClients bundles the four optional cloud clients so Router can
@@ -42,11 +49,12 @@ type CloudProviderConfig struct {
 // could otherwise let a concurrent StreamChat see one provider from the
 // old settings and another from the new mid-update.
 type cloudClients struct {
-	anthropic *AnthropicClient
-	openai    *Client // OpenAI's real API is wire-compatible with Client
-	gemini    *GeminiClient
-	nvidia    *Client // NVIDIA Build's hosted API is also OpenAI-compatible — see OpenAIModels's doc comment
+	anthropic  *AnthropicClient
+	openai     *Client // OpenAI's real API is wire-compatible with Client
+	gemini     *GeminiClient
+	nvidia     *Client // NVIDIA Build's hosted API is also OpenAI-compatible — see OpenAIModels's doc comment
 	cloudflare *Client // Workers AI's /ai/v1/chat/completions endpoint is also OpenAI-compatible — see CloudflareModels's doc comment
+	osu        *Client // OSU cluster vLLM server via SSH tunnel (port 8010 for Muse Glimmer)
 	// openaiResponses/cloudflareResponses talk to the corresponding
 	// provider's /v1/responses (or /ai/v1/responses) endpoint instead of
 	// Chat Completions — a handful of newer models on each provider (see
@@ -116,6 +124,34 @@ func (r *Router) SetCloudProviders(cloud CloudProviderConfig) {
 		next.cloudflareResponses = NewResponsesClient(cloudflareBaseURL, cloud.CloudflareAPIKey)
 		next.cloudflareAnthropic = NewCloudflareAnthropicClient(cloudflareBaseURL, cloud.CloudflareAPIKey)
 	}
+
+	osuURL := cloud.OSUBaseURL
+	if osuURL == "" {
+		if env := os.Getenv("OSU_LLM_BASE_URL"); env != "" {
+			osuURL = env
+		} else if env := os.Getenv("LLM_OSU_BASE_URL"); env != "" {
+			osuURL = env
+		} else {
+			osuURL = "http://127.0.0.1:8010/v1"
+		}
+	}
+	osuKey := cloud.OSUAPIKey
+	if osuKey == "" {
+		if env := os.Getenv("OSU_LLM_API_KEY"); env != "" {
+			osuKey = env
+		} else if env := os.Getenv("LLM_OSU_API_KEY"); env != "" {
+			osuKey = env
+		} else {
+			if home, err := os.UserHomeDir(); err == nil {
+				keyPath := filepath.Join(home, ".osu-llm", "vllm-api-key")
+				if data, err := os.ReadFile(keyPath); err == nil {
+					osuKey = strings.TrimSpace(string(data))
+				}
+			}
+		}
+	}
+	next.osu = New(osuURL, osuKey, "meta-models/Muse-Glimmer-30B", "")
+
 	r.mu.Lock()
 	r.clouds = next
 	r.mu.Unlock()
@@ -137,6 +173,12 @@ func stripProviderPrefix(model string) (bare, provider string, ok bool) {
 		return strings.TrimPrefix(model, NvidiaPrefix), "nvidia", true
 	case strings.HasPrefix(model, CloudflarePrefix):
 		return strings.TrimPrefix(model, CloudflarePrefix), "cloudflare", true
+	case strings.HasPrefix(model, OSUPrefix):
+		return strings.TrimPrefix(model, OSUPrefix), "osu", true
+	case strings.HasPrefix(model, ClusterPrefix):
+		return strings.TrimPrefix(model, ClusterPrefix), "osu", true
+	case model == "muse-glimmer" || model == "muse-glimmer-30b" || model == "meta-models/Muse-Glimmer-30B":
+		return model, "osu", true
 	default:
 		return "", "", false
 	}
@@ -187,6 +229,17 @@ func (r *Router) StreamChat(ctx context.Context, model string, messages []Messag
 			return clouds.cloudflareResponses.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning, onUsage)
 		}
 		return clouds.cloudflare.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning, onUsage)
+	case "osu":
+		if clouds.osu == nil {
+			return fmt.Errorf("llm: OSU cluster isn't configured — run 'osu-llm up muse' to start the tunnel")
+		}
+		if err := clouds.osu.StreamChat(ctx, bare, messages, thinkLevel, onToken, onReasoning, onUsage); err != nil {
+			if strings.Contains(err.Error(), "connection refused") || strings.Contains(err.Error(), "connectex") {
+				return fmt.Errorf("llm: cannot reach OSU cluster tunnel at %s — start it with 'osu-llm up muse': %w", clouds.osu.BaseURL, err)
+			}
+			return err
+		}
+		return nil
 	}
 	return fmt.Errorf("llm: unknown provider for model %q", model)
 }
@@ -245,6 +298,18 @@ func (r *Router) Chat(ctx context.Context, model string, messages []Message, too
 			return clouds.cloudflareResponses.Chat(ctx, bare, messages, tools, thinkLevel)
 		}
 		return clouds.cloudflare.Chat(ctx, bare, messages, tools, thinkLevel)
+	case "osu":
+		if clouds.osu == nil {
+			return Message{}, fmt.Errorf("llm: OSU cluster isn't configured — run 'osu-llm up muse' to start the tunnel")
+		}
+		msg, err := clouds.osu.Chat(ctx, bare, messages, tools, thinkLevel)
+		if err != nil {
+			if strings.Contains(err.Error(), "connection refused") || strings.Contains(err.Error(), "connectex") {
+				return Message{}, fmt.Errorf("llm: cannot reach OSU cluster tunnel at %s — start it with 'osu-llm up muse': %w", clouds.osu.BaseURL, err)
+			}
+			return Message{}, err
+		}
+		return msg, nil
 	}
 	return Message{}, fmt.Errorf("llm: unknown provider for model %q", model)
 }
@@ -318,6 +383,22 @@ func (r *Router) ListModels(ctx context.Context) ([]Model, error) {
 		for _, name := range CloudflareModels {
 			full := CloudflarePrefix + name
 			out = append(out, Model{Name: full, SupportsFileTools: SupportsToolsForModel(full), SupportsVision: SupportsVisionForModel(full), Provider: "cloudflare"})
+		}
+	}
+	if clouds.osu != nil {
+		listCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+		liveModels, err := clouds.osu.ListModels(listCtx)
+		cancel()
+		if err == nil && len(liveModels) > 0 {
+			for _, m := range liveModels {
+				full := OSUPrefix + m.Name
+				out = append(out, Model{Name: full, SupportsFileTools: SupportsToolsForModel(full), SupportsVision: SupportsVisionForModel(full), Provider: "osu"})
+			}
+		} else {
+			for _, name := range OSUModels {
+				full := OSUPrefix + name
+				out = append(out, Model{Name: full, SupportsFileTools: SupportsToolsForModel(full), SupportsVision: SupportsVisionForModel(full), Provider: "osu"})
+			}
 		}
 	}
 	return out, nil

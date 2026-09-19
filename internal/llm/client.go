@@ -401,6 +401,12 @@ var CloudflareModels = []string{
 	"anthropic/claude-haiku-4.5",
 }
 
+// OSUModels lists the primary models served from the OSU cluster via vLLM.
+var OSUModels = []string{
+	"muse-glimmer",
+	"meta-models/Muse-Glimmer-30B",
+}
+
 type tagsResponse struct {
 	Models []struct {
 		Name         string   `json:"name"`
@@ -584,10 +590,16 @@ var toolCapableModelPrefixes = []string{
 // same hand-verified way as NvidiaModels.
 func SupportsToolsForModel(model string) bool {
 	if bare, provider, ok := stripProviderPrefix(model); ok {
+		if provider == "osu" {
+			return true
+		}
 		if provider == "cloudflare" {
 			return NeedsResponsesAPI("cloudflare", bare) || NeedsAnthropicAPI(bare) || cloudflareToolCapableModels[bare]
 		}
 		return provider == "gemini" || provider == "openai" || provider == "nvidia" || provider == "anthropic"
+	}
+	if strings.Contains(strings.ToLower(model), "muse-glimmer") || strings.Contains(strings.ToLower(model), "muse_glimmer") {
+		return true
 	}
 	return SupportsTools(model)
 }
@@ -676,12 +688,15 @@ var nvidiaVisionModels = map[string]bool{
 func SupportsVisionForModel(model string) bool {
 	if bare, provider, ok := stripProviderPrefix(model); ok {
 		switch provider {
-		case "anthropic", "openai", "gemini":
+		case "anthropic", "openai", "gemini", "osu":
 			return true
 		case "nvidia":
 			return nvidiaVisionModels[bare]
 		}
 		return false
+	}
+	if strings.Contains(strings.ToLower(model), "muse-glimmer") || strings.Contains(strings.ToLower(model), "muse_glimmer") {
+		return true
 	}
 	for _, prefix := range visionCapableModelPrefixes {
 		if strings.HasPrefix(model, prefix) {

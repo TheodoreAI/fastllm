@@ -9,6 +9,8 @@ import GroupedDropdown from './GroupedDropdown'
 // (AnthropicPrefix/OpenAIPrefix/GeminiPrefix in router.go) lives in
 // exactly one place instead of also being copied into this file.
 const PROVIDER_LABELS = {
+  osu: 'OSU Cluster (vLLM)',
+  cluster: 'OSU Cluster (vLLM)',
   anthropic: 'Anthropic (Claude)',
   openai: 'OpenAI (ChatGPT)',
   gemini: 'Google (Gemini)',

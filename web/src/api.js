@@ -181,7 +181,7 @@ export function saveNotes(content) {
 export function fetchCloudProviderSettings() {
   return fetch('/api/settings/cloud-providers')
     .then((r) => okJson(r, 'fetchCloudProviderSettings'))
-    .catch(swallowNetworkError({ anthropic_configured: false, openai_configured: false, gemini_configured: false, nvidia_configured: false, cloudflare_configured: false }))
+    .catch(swallowNetworkError({ anthropic_configured: false, openai_configured: false, gemini_configured: false, nvidia_configured: false, cloudflare_configured: false, osu_configured: false }))
 }
 
 // Opens a native OS folder-picker dialog on the machine running the

@@ -64,6 +64,31 @@ func RunCLI(args []string) int {
 		model = getenv("LLM_CHAT_MODEL", "llama3.1")
 	}
 
+	// Auto-route Muse Glimmer or OSU cluster models to the cluster tunnel (port 8010)
+	isOSU := strings.HasPrefix(model, "osu:") || strings.HasPrefix(model, "cluster:") ||
+		model == "muse-glimmer" || model == "muse-glimmer-30b" || model == "meta-models/Muse-Glimmer-30B"
+
+	if isOSU {
+		if strings.TrimSpace(*urlFlag) == "" && os.Getenv("LLM_BASE_URL") == "" {
+			if env := os.Getenv("OSU_LLM_BASE_URL"); env != "" {
+				baseURL = env
+			} else {
+				baseURL = "http://127.0.0.1:8010/v1"
+			}
+		}
+		if apiKey == "" {
+			if env := os.Getenv("OSU_LLM_API_KEY"); env != "" {
+				apiKey = env
+			} else if home, err := os.UserHomeDir(); err == nil {
+				keyFile := filepath.Join(home, ".osu-llm", "vllm-api-key")
+				if data, err := os.ReadFile(keyFile); err == nil {
+					apiKey = strings.TrimSpace(string(data))
+				}
+			}
+		}
+		model = strings.TrimPrefix(strings.TrimPrefix(model, "osu:"), "cluster:")
+	}
+
 	workDir, err := filepath.Abs(*dirFlag)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error resolving working dir %q: %v\n", *dirFlag, err)

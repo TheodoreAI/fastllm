@@ -126,6 +126,8 @@ func Build(cfg Config) (*Built, error) {
 		NvidiaAPIKey:        cloudSettings.NvidiaAPIKey,
 		CloudflareAPIKey:    cloudSettings.CloudflareAPIKey,
 		CloudflareAccountID: cloudSettings.CloudflareAccountID,
+		OSUBaseURL:          cloudSettings.OSUBaseURL,
+		OSUAPIKey:           cloudSettings.OSUAPIKey,
 	})
 
 	if err := store.SeedFileAccessSettingsFromEnv(db, cfg.FilesRoot, cfg.FilesWrite); err != nil {
