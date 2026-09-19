@@ -17,12 +17,24 @@ Follow these operational rules:
    - Use patch_file for unified diffs.
    - Use write_file for creating new files or replacing small files completely.
 3. If commands are allowed, verify your changes by running tests, builds, or scripts with run_command before concluding.
+   - When the verification command is already known, prefer the mutation tool's then_run field to combine the edit and verification in one turn.
    - For long-running servers or watchers, set background: true and inspect using process_status.
+   - Large outputs may be archived. Use read_observation with the provided reference to retrieve exact line ranges.
 4. Use web_search and web_fetch when you need documentation, API references, library examples, or real-time web information.
 5. When finished, call finish_task (or state your final answer) explaining what was done and verifying the result.`
 
 var webSearchTool = webtools.SearchTool
 var webFetchTool = webtools.FetchTool
+
+var followUpCommandSchema = map[string]any{
+	"type":        "object",
+	"description": "Optional verification command to run immediately after a successful mutation, returning both outcomes in one observation.",
+	"properties": map[string]any{
+		"command":         map[string]any{"type": "string", "description": "Verification command such as a focused test or formatter check."},
+		"timeout_seconds": map[string]any{"type": "integer", "description": "Maximum execution time in seconds."},
+	},
+	"required": []string{"command"},
+}
 
 var readFileTool = llm.Tool{
 	Type: "function",
@@ -58,6 +70,7 @@ var writeFileTool = llm.Tool{
 					"type":        "string",
 					"description": "The full content to write to the file.",
 				},
+				"then_run": followUpCommandSchema,
 			},
 			"required": []string{"path", "content"},
 		},
@@ -84,6 +97,7 @@ var editFileTool = llm.Tool{
 					"type":        "string",
 					"description": "The replacement text.",
 				},
+				"then_run": followUpCommandSchema,
 			},
 			"required": []string{"path", "search", "replace"},
 		},
@@ -106,8 +120,44 @@ var patchFileTool = llm.Tool{
 					"type":        "string",
 					"description": "Unified diff content (including @@ lines, -, +) to apply.",
 				},
+				"then_run": followUpCommandSchema,
 			},
 			"required": []string{"path", "diff"},
+		},
+	},
+}
+
+var readObservationTool = llm.Tool{
+	Type: "function",
+	Function: llm.ToolFunction{
+		Name:        "read_observation",
+		Description: "Retrieve exact archived tool output by stable observation reference and line range.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"ref":    map[string]any{"type": "string", "description": "Observation reference such as obs_a81d92f3c811."},
+				"offset": map[string]any{"type": "integer", "description": "Zero-based starting line."},
+				"limit":  map[string]any{"type": "integer", "description": "Number of lines to return, maximum 500."},
+			},
+			"required": []string{"ref"},
+		},
+	},
+}
+
+var updatePlanTool = llm.Tool{
+	Type: "function",
+	Function: llm.ToolFunction{
+		Name:        "update_plan",
+		Description: "Record task progress. Completing a step creates a safe boundary where the harness may compact older context.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"goal":      map[string]any{"type": "string", "description": "Overall task goal."},
+				"completed": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Steps completed since the last update."},
+				"current":   map[string]any{"type": "string", "description": "Current step."},
+				"remaining": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Known remaining steps."},
+			},
+			"required": []string{"goal", "current"},
 		},
 	},
 }

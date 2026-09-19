@@ -13,7 +13,35 @@ type ModelEndpoint struct {
 	Name       string                 `json:"name"`
 	URL        string                 `json:"url"`
 	APIKey     string                 `json:"api_key,omitempty"`
+	APIKeyFile string                 `json:"api_key_file,omitempty"`
 	Parameters map[string]interface{} `json:"parameters,omitempty"`
+}
+
+// ResolveAPIKey returns the endpoint's API key. An inline APIKey wins; otherwise the
+// key is read from APIKeyFile. The indirection keeps the secret out of config.json,
+// which is otherwise safe to copy between machines or paste into a bug report.
+// A missing or unreadable file yields an empty key rather than an error, so an
+// endpoint that needs no auth still works when the field is left set.
+func (m *ModelEndpoint) ResolveAPIKey() string {
+	if key := strings.TrimSpace(m.APIKey); key != "" {
+		return key
+	}
+	path := strings.TrimSpace(m.APIKeyFile)
+	if path == "" {
+		return ""
+	}
+	if strings.HasPrefix(path, "~") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		path = filepath.Join(home, strings.TrimLeft(strings.TrimPrefix(path, "~"), `/\`))
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
 }
 
 // Settings represents the overall fastllm configuration file structure.

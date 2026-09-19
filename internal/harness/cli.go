@@ -83,8 +83,8 @@ func RunCLI(args []string) int {
 			if baseURL == "" && os.Getenv("LLM_BASE_URL") == "" && matched.URL != "" {
 				baseURL = matched.URL
 			}
-			if apiKey == "" && os.Getenv("LLM_API_KEY") == "" && matched.APIKey != "" {
-				apiKey = matched.APIKey
+			if apiKey == "" && os.Getenv("LLM_API_KEY") == "" && matched.ResolveAPIKey() != "" {
+				apiKey = matched.ResolveAPIKey()
 			}
 		}
 	}
