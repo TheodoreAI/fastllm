@@ -7,6 +7,9 @@ Auto-generated — do not edit by hand.
 ### architecture-scope
 - `Native interactive terminal TUI built on internal/harness; removed embedded web editor and terminal emulator components to streamline codebase and avoid IDE duplication` — External IDEs and native shells handle editing and terminal emulation better; focusing fastllm on native TUI harness and lightweight chat UI (2026-09-19T03:23:21+00:00)
 
+### frontend-bundle-splitting
+- `Lazy-load MessageContent and use Vite 8 Rolldown codeSplitting groups capped at 300 KB for React, Markdown, KaTeX, highlighting, and remaining vendor modules.` — Reduces the initial app chunk from 864 KB to 82 KB, defers markdown-only code and CSS until needed, and removes the large-chunk warning; raising the warning threshold would not improve loading and manualChunks is deprecated in Vite 8. (2026-09-19T17:54:57+00:00)
+
 ### harness-design
 - `Shared internal engine (internal/harness) providing autonomous multi-turn tool loop (file tools + run_command), exposed via both cmd/cli and POST /api/harness/run` — Allows direct CLI execution from terminal while supporting programmatic benchmark sweeps from external scripts with identical behavior (2026-09-19T03:12:07+00:00)
 

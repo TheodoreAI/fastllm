@@ -45,6 +45,43 @@ export default defineConfig(({ mode }) => ({
     // returning its own 404 for /api/* instead lets that fallback work.
     proxy: mode === 'desktop' ? {} : { '/api': 'http://localhost:8080' },
   },
+  build: {
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          groups: [
+            {
+              name: 'react-vendor',
+              test: /node_modules[\\/](?:react|react-dom)[\\/]/,
+              priority: 30,
+            },
+            {
+              name: 'katex',
+              test: /node_modules[\\/]katex[\\/]/,
+              priority: 25,
+            },
+            {
+              name: 'highlight',
+              test: /node_modules[\\/]highlight\.js[\\/]/,
+              priority: 25,
+            },
+            {
+              name: 'markdown',
+              test: /node_modules[\\/](?:react-markdown|remark-|rehype-|unified|micromark|mdast|hast|unist|vfile|property-information)/,
+              priority: 20,
+              maxSize: 300_000,
+            },
+            {
+              name: 'vendor',
+              test: /node_modules/,
+              priority: 10,
+              maxSize: 300_000,
+            },
+          ],
+        },
+      },
+    },
+  },
   define: {
     // Baked in at build time so the running app can show exactly which
     // build it is — critical for a locally-built/self-hosted app where
