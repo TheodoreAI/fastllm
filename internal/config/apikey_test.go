@@ -277,3 +277,55 @@ func TestFindByProviderIgnoresUntaggedEntries(t *testing.T) {
 		t.Fatal("nil settings must be safe")
 	}
 }
+
+func TestIsOllamaEndpointMatchesOnPortNotHostname(t *testing.T) {
+	for _, url := range []string{
+		"http://localhost:11434/v1",
+		"http://127.0.0.1:11434/v1",
+		"http://192.168.1.50:11434/v1", // Ollama on another box still counts
+		"https://ollama.internal:11434/v1",
+	} {
+		if !IsOllamaEndpoint(url) {
+			t.Errorf("expected %q to be recognised as Ollama", url)
+		}
+	}
+	for _, url := range []string{
+		"http://localhost:8010/v1", // a self-hosted server on another port
+		"https://api.openai.com/v1",
+		"http://localhost/v1",
+		"",
+	} {
+		if IsOllamaEndpoint(url) {
+			t.Errorf("did not expect %q to be treated as Ollama", url)
+		}
+	}
+}
+
+func TestShouldSendThinkPrefersExplicitConfig(t *testing.T) {
+	yes, no := true, false
+
+	// An explicit setting wins in both directions, whatever the port suggests.
+	if !ShouldSendThink(&ModelEndpoint{SendThink: &yes}, "https://api.openai.com/v1") {
+		t.Error("an explicit send_think:true should be honoured on any endpoint")
+	}
+	if ShouldSendThink(&ModelEndpoint{SendThink: &no}, "http://localhost:11434/v1") {
+		t.Error("an explicit send_think:false must override port detection")
+	}
+
+	// With nothing configured, fall back to detecting Ollama by port.
+	if !ShouldSendThink(nil, "http://10.0.0.7:11434/v1") {
+		t.Error("Ollama on a remote host should still get the think field")
+	}
+	if ShouldSendThink(nil, "http://127.0.0.1:8010/v1") {
+		t.Error("a non-Ollama endpoint must not be sent the think field")
+	}
+	if ShouldSendThink(&ModelEndpoint{}, "http://127.0.0.1:8010/v1") {
+		t.Error("an endpoint without send_think should follow detection")
+	}
+}
+
+func TestFindModelIsNilSafe(t *testing.T) {
+	if got := (*Settings)(nil).FindModel("anything"); got != nil {
+		t.Fatal("FindModel on nil settings must return nil, not panic")
+	}
+}

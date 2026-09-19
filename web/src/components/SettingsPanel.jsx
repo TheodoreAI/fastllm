@@ -380,14 +380,17 @@ export default function SettingsPanel({
       <SubSection id="cloudProviders" label="Cloud providers" expanded={!!expanded.cloudProviders} onToggle={toggleSection}>
         <form onSubmit={handleSaveCloudProviders} className="rag-form">
           <p className="settings-hint">
-            Add your own API key for a cloud provider or OSU cluster to use its models from the Model picker alongside your local models. For OSU Cluster (Muse Glimmer 30B), run &apos;osu-llm up muse&apos; to start the SSH tunnel on port 8010.
+            Add your own API key for a cloud provider to use its models from the Model picker alongside your local models. Self-hosted covers any OpenAI-compatible server you run yourself — give it the endpoint below, and make sure the server is running (or its tunnel is open) before connecting.
           </p>
+          {/* The 'osu' id and the osu_* keys below are stored field names, kept
+              for compatibility with existing saved settings; only the labels are
+              user-facing. See the self-hosted-provider-naming decision. */}
           {[
             { id: 'anthropic', label: 'Anthropic (Claude)', configured: cloudProviderSettings?.anthropic_configured },
             { id: 'openai', label: 'OpenAI (ChatGPT)', configured: cloudProviderSettings?.openai_configured },
             { id: 'gemini', label: 'Google (Gemini)', configured: cloudProviderSettings?.gemini_configured },
             { id: 'nvidia', label: 'NVIDIA Build', configured: cloudProviderSettings?.nvidia_configured },
-            { id: 'osu', label: 'OSU Cluster (vLLM / Muse Glimmer)', configured: cloudProviderSettings?.osu_configured },
+            { id: 'osu', label: 'Self-hosted (OpenAI-compatible)', configured: cloudProviderSettings?.osu_configured },
           ].map(({ id, label, configured }) => (
             <label className="settings-field" key={id}>
               <span>{label}{configured && !(id in cloudProviderForm) && <span className="settings-hint-inline"> (key saved)</span>}</span>
@@ -395,14 +398,14 @@ export default function SettingsPanel({
                 type="password"
                 autoComplete="off"
                 value={cloudProviderForm[id] ?? ''}
-                placeholder={configured ? 'Enter a new key to replace the saved one' : (id === 'osu' ? 'API key (auto-loaded from ~/.osu-llm/vllm-api-key if left empty)' : 'API key')}
+                placeholder={configured ? 'Enter a new key to replace the saved one' : (id === 'osu' ? 'API key (leave empty if the server needs none)' : 'API key')}
                 onChange={(e) => setCloudProviderForm((prev) => ({ ...prev, [id]: e.target.value }))}
               />
             </label>
           ))}
           <label className="settings-field">
             <span>
-              OSU Cluster endpoint
+              Self-hosted endpoint
               {cloudProviderSettings?.osu_base_url && !('osu_base_url' in cloudProviderForm) && (
                 <span className="settings-hint-inline"> ({cloudProviderSettings.osu_base_url})</span>
               )}
@@ -411,7 +414,7 @@ export default function SettingsPanel({
               type="text"
               autoComplete="off"
               value={cloudProviderForm.osu_base_url ?? ''}
-              placeholder={cloudProviderSettings?.osu_base_url || 'http://127.0.0.1:8010/v1 (tunnel port)'}
+              placeholder={cloudProviderSettings?.osu_base_url || 'http://host:port/v1'}
               onChange={(e) => setCloudProviderForm((prev) => ({ ...prev, osu_base_url: e.target.value }))}
             />
           </label>

@@ -33,6 +33,20 @@ function desktopApiFallthrough() {
 }
 
 // https://vite.dev/config/
+// backendOrigin resolves where cmd/server is listening. FASTLLM_ADDR is the same
+// variable the server itself reads, in Go's listen-address form (":8080",
+// "127.0.0.1:8080", or a bare port), so changing the port in one place does not
+// leave dev-mode /api requests proxying into a closed socket.
+function backendOrigin() {
+  const addr = (process.env.FASTLLM_ADDR || ':8080').trim()
+  const [host, port] = addr.includes(':')
+    ? [addr.slice(0, addr.lastIndexOf(':')), addr.slice(addr.lastIndexOf(':') + 1)]
+    : ['', addr]
+  // An empty or wildcard host means "all interfaces"; dial loopback for that.
+  const target = !host || host === '0.0.0.0' || host === '[::]' ? 'localhost' : host
+  return `http://${target}:${port || '8080'}`
+}
+
 export default defineConfig(({ mode }) => ({
   plugins: [react(), ...(mode === 'desktop' ? [desktopApiFallthrough()] : [])],
   server: {
@@ -43,7 +57,7 @@ export default defineConfig(({ mode }) => ({
     // AssetServer fallback (Assets 404 -> Handler, see cmd/desktop/main.go)
     // ever got a chance to serve it from the real in-process backend. Vite
     // returning its own 404 for /api/* instead lets that fallback work.
-    proxy: mode === 'desktop' ? {} : { '/api': 'http://localhost:8080' },
+    proxy: mode === 'desktop' ? {} : { '/api': backendOrigin() },
   },
   build: {
     rolldownOptions: {

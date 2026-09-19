@@ -45,7 +45,7 @@ func TestSelfHostedProviderIsBuiltFromInjectedConfig(t *testing.T) {
 	router := NewRouter(New("http://localhost:11434/v1", "", "llama3.1", ""), CloudProviderConfig{
 		SelfHostedBaseURL: "http://10.0.0.5:9000/v1",
 		SelfHostedAPIKey:  "secret",
-		SelfHostedModel:   "muse-glimmer",
+		SelfHostedModel:   "example-model",
 	})
 	router.mu.RLock()
 	selfHosted := router.clouds.selfHosted

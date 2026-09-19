@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -10,12 +11,14 @@ import (
 
 // ModelEndpoint configures an LLM model and its inference endpoint.
 type ModelEndpoint struct {
-	ID         string                 `json:"id"`
-	Name       string                 `json:"name"`
-	URL        string                 `json:"url"`
-	APIKey     string                 `json:"api_key,omitempty"`
-	APIKeyFile string                 `json:"api_key_file,omitempty"`
-	Provider   string                 `json:"provider,omitempty"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	URL        string `json:"url"`
+	APIKey     string `json:"api_key,omitempty"`
+	APIKeyFile string `json:"api_key_file,omitempty"`
+	Provider   string `json:"provider,omitempty"`
+	// SendThink overrides the automatic detection of Ollama's "think" extension.
+	SendThink  *bool                  `json:"send_think,omitempty"`
 	Parameters map[string]interface{} `json:"parameters,omitempty"`
 }
 
@@ -299,8 +302,39 @@ func ResolveProvider(s *Settings, provider string) ProviderEndpointDefaults {
 	return resolved
 }
 
+// DefaultOllamaPort is the port Ollama listens on out of the box. It is the one
+// piece of host knowledge worth keeping: the "think" field is Ollama's own
+// extension, and every other OpenAI-compatible server either ignores it or
+// rejects the request outright.
+const DefaultOllamaPort = "11434"
+
+// IsOllamaEndpoint reports whether a base URL points at an Ollama server. It
+// matches on the port rather than the hostname, so Ollama on another box or
+// behind a forward is recognised just as well as one on loopback.
+func IsOllamaEndpoint(baseURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil {
+		return false
+	}
+	return parsed.Port() == DefaultOllamaPort
+}
+
+// ShouldSendThink decides whether to send Ollama's "think" field to an endpoint.
+// An explicit send_think in config always wins; otherwise the endpoint is probed
+// by port, so a non-default Ollama port only needs the field set once rather than
+// silently dropping reasoning effort.
+func ShouldSendThink(endpoint *ModelEndpoint, baseURL string) bool {
+	if endpoint != nil && endpoint.SendThink != nil {
+		return *endpoint.SendThink
+	}
+	return IsOllamaEndpoint(baseURL)
+}
+
 // FindModel looks up a model endpoint by ID (case-insensitive).
 func (s *Settings) FindModel(id string) *ModelEndpoint {
+	if s == nil {
+		return nil
+	}
 	target := strings.ToLower(strings.TrimSpace(id))
 	for i := range s.Models {
 		if strings.ToLower(s.Models[i].ID) == target {
