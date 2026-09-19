@@ -201,7 +201,7 @@ func TestRunFileToolsSearchFiles(t *testing.T) {
 	defer server.Close()
 
 	router := llm.NewRouter(llm.New(server.URL, "", "test-model", ""), llm.CloudProviderConfig{})
-	h := New(nil, router, nil, files.New(dir, false), nil)
+	h := New(nil, router, nil, files.New(dir, false))
 
 	messages := []llm.Message{{Role: "user", Content: "where is needle defined?"}}
 	reads, pending, _, _, _ := h.runFileTools(context.Background(), "test-model", &messages, "", 0)
@@ -299,7 +299,7 @@ func TestRunFileToolsRunTest(t *testing.T) {
 	defer server.Close()
 
 	router := llm.NewRouter(llm.New(server.URL, "", "test-model", ""), llm.CloudProviderConfig{})
-	h := New(nil, router, nil, files.New(dir, false), nil)
+	h := New(nil, router, nil, files.New(dir, false))
 
 	messages := []llm.Message{{Role: "user", Content: "are the tests passing?"}}
 	_, _, _, testChecks, _ := h.runFileTools(context.Background(), "test-model", &messages, "", 0)

@@ -62,8 +62,6 @@ export default function ModelPicker({
   onChange,
   fileAccessSettings,
   onOpenSettings,
-  completionModel,
-  onCompletionModelChange,
 }) {
   const readOn = !!fileAccessSettings?.read_enabled
   const writeOn = !!fileAccessSettings?.write_enabled
@@ -88,24 +86,6 @@ export default function ModelPicker({
         disabled={models.length === 0}
         placeholder={models.length === 0 ? 'Default' : 'Select a model'}
       />
-
-      {local.length > 0 && (
-        <label className="model-completion-field">
-          <span>Completion model</span>
-          <select
-            className="model-select"
-            value={completionModel || ''}
-            onChange={(e) => onCompletionModelChange?.(e.target.value)}
-          >
-            <option value="">Same as backend default</option>
-            {local.map((m) => (
-              <option key={m.name} value={m.name}>
-                {m.name}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
 
       <button type="button" className="file-access-status" onClick={onOpenSettings}>
         <span className={`file-access-dot ${readOn && modelSupportsFileTools ? 'is-on' : 'is-off'}`} />

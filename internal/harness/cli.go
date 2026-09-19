@@ -49,12 +49,6 @@ func RunCLI(args []string) int {
 		task = strings.Join(fs.Args(), " ")
 	}
 
-	if task == "" {
-		fmt.Fprintln(os.Stderr, "Error: task instruction is required. Provide -task \"...\" or pass as arguments.")
-		fs.Usage()
-		return 1
-	}
-
 	baseURL := strings.TrimSpace(*urlFlag)
 	if baseURL == "" {
 		baseURL = getenv("LLM_BASE_URL", "http://localhost:11434/v1")
@@ -92,6 +86,15 @@ func RunCLI(args []string) int {
 		AllowCommands:  !*noCmdsFlag,
 		CommandTimeout: time.Duration(*timeoutFlag) * time.Second,
 		ThinkLevel:     *thinkFlag,
+	}
+
+	// If no task was specified, launch the interactive TUI REPL
+	if task == "" || task == "tui" || task == "interactive" {
+		if err := runner.RunInteractive(req); err != nil {
+			fmt.Fprintf(os.Stderr, "Interactive session error: %v\n", err)
+			return 1
+		}
+		return 0
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

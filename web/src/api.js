@@ -164,12 +164,6 @@ export function fetchFileAccessSettings() {
     .catch(swallowNetworkError({ root: '', read_enabled: false, write_enabled: false }))
 }
 
-export function fetchTerminalSettings() {
-  return fetch('/api/settings/terminal')
-    .then((r) => okJson(r, 'fetchTerminalSettings'))
-    .catch(swallowNetworkError({ enabled: false }))
-}
-
 export function fetchNotes() {
   return fetch('/api/notes')
     .then((r) => okJson(r, 'fetchNotes'))
@@ -188,23 +182,6 @@ export function fetchCloudProviderSettings() {
   return fetch('/api/settings/cloud-providers')
     .then((r) => okJson(r, 'fetchCloudProviderSettings'))
     .catch(swallowNetworkError({ anthropic_configured: false, openai_configured: false, gemini_configured: false, nvidia_configured: false, cloudflare_configured: false }))
-}
-
-// Editor preferences — currently just which local model powers inline AI
-// completion (see ModelPicker.jsx's "Completion model" field and
-// internal/chat.EditorComplete).
-export function fetchEditorSettings() {
-  return fetch('/api/settings/editor')
-    .then((r) => okJson(r, 'fetchEditorSettings'))
-    .catch(swallowNetworkError({ completion_model: '' }))
-}
-
-export function saveEditorSettings(settings) {
-  return fetch('/api/settings/editor', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(settings),
-  })
 }
 
 // Opens a native OS folder-picker dialog on the machine running the
@@ -226,29 +203,11 @@ export function isWails() {
   return typeof window !== 'undefined' && typeof window.runtime?.Quit === 'function'
 }
 
-// The terminal WebSocket can't go through Wails' normal in-process bridge
-// (see cmd/desktop/main.go's termListener comment for why) — it needs the
-// real loopback TCP listener cmd/desktop opens alongside it, whose port is
-// exposed via a bound Go method rather than a fixed/predictable one, since
-// a fixed port could collide with another local process. Falls back to
-// window.location.host for the plain-browser build, which has no such
-// bridge to route around.
-export async function terminalWSHost() {
-  if (isWails() && window.go?.main?.terminalBridge?.TerminalPort) {
-    const port = await window.go.main.terminalBridge.TerminalPort()
-    return `127.0.0.1:${port}`
-  }
-  return window.location.host
-}
-
-// SSE streaming has the same problem as the terminal WebSocket above: Wails'
-// in-process AssetServer bridge doesn't implement http.Flusher (see
-// cmd/desktop/main.go's termListener comment), so a chat response never
-// flushes and the request just hangs until the server 500s with "streaming
-// unsupported". Routing through the same real loopback listener the
-// terminal bridge already opens fixes it, since that listener is a genuine
-// net/http connection. Falls back to a relative URL for the plain-browser
-// build, which has no such bridge to route around.
+// SSE streaming needs a real http.Flusher (see cmd/desktop/main.go's stream bridge comment),
+// so a chat response never flushes over Wails' in-process AssetServer bridge.
+// Routing through the loopback listener exposed by the bound terminalBridge
+// fixes it, since that listener is a genuine net/http connection.
+// Falls back to a relative URL for the plain-browser build.
 export async function apiOrigin() {
   if (isWails() && window.go?.main?.terminalBridge?.TerminalPort) {
     const port = await window.go.main.terminalBridge.TerminalPort()
@@ -281,184 +240,6 @@ export function captureScreenshot() {
   })
 }
 
-export function fetchEditorTree() {
-  return fetch('/api/editor/tree')
-    .then((r) => okJson(r, 'fetchEditorTree'))
-    .then((data) => data ?? [])
-    .catch(swallowNetworkError([]))
-}
-
-export function fetchEditorFile(path) {
-  return fetch(`/api/editor/file?path=${encodeURIComponent(path)}`)
-    .then((r) => okJson(r, 'fetchEditorFile'))
-}
-
-export function saveEditorFile(path, content) {
-  return fetch('/api/editor/file', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path, content }),
-  })
-}
-
-// fetchEditorCompletion powers the editor's inline ghost-text suggestion
-// (see EditorView.jsx). Always uses the local model server-side (see
-// internal/chat.EditorComplete's doc comment), independent of whatever
-// model is selected in the chat Model picker. Takes an AbortSignal since
-// this fires on a debounce timer while the user types — a fast typist
-// can trigger several overlapping requests, and only the most recent
-// one's result should ever be shown.
-export function fetchEditorCompletion(prefix, suffix, language, signal) {
-  return fetch('/api/editor/complete', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prefix, suffix, language }),
-    signal,
-  })
-    .then((r) => okJson(r, 'fetchEditorCompletion'))
-    .then((data) => data?.completion ?? '')
-}
-
-// Creating a file is just saving an empty (or given) body to a
-// not-yet-existing path — the backend's Write already creates parent
-// directories as needed, so there's no separate "create" endpoint.
-export function createEditorFile(path, content = '') {
-  return saveEditorFile(path, content)
-}
-
-export function deleteEditorFile(path) {
-  return fetch('/api/editor/file', {
-    method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path }),
-  })
-}
-
-export function fetchEditorFolderFileCount(path) {
-  return fetch(`/api/editor/folder/file-count?path=${encodeURIComponent(path)}`)
-    .then((r) => okJson(r, 'fetchEditorFolderFileCount'))
-}
-
-export function deleteEditorFolder(path) {
-  return fetch('/api/editor/folder', {
-    method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path }),
-  })
-}
-
-export function renameEditorFile(from, to) {
-  return fetch('/api/editor/file/rename', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ from, to }),
-  })
-}
-
-export function searchEditor(query) {
-  return fetch(`/api/editor/search?q=${encodeURIComponent(query)}`)
-    .then((r) => okJson(r, 'searchEditor'))
-    .then((data) => data ?? [])
-    .catch(swallowNetworkError([]))
-}
-
-export function fetchGitStatus() {
-  return fetch('/api/editor/git/status')
-    .then((r) => okJson(r, 'fetchGitStatus'))
-    .then((data) => data ?? [])
-    .catch(swallowNetworkError([]))
-}
-
-export function fetchGitDiff(path, staged) {
-  return fetch(`/api/editor/git/diff?path=${encodeURIComponent(path)}${staged ? '&staged=1' : ''}`)
-    .then((r) => okJson(r, 'fetchGitDiff'))
-}
-
-export function stageGitPaths(paths) {
-  return fetch('/api/editor/git/stage', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ paths }),
-  })
-}
-
-export function unstageGitPaths(paths) {
-  return fetch('/api/editor/git/unstage', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ paths }),
-  })
-}
-
-export function discardGitPaths(paths) {
-  return fetch('/api/editor/git/discard', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ paths }),
-  })
-}
-
-export function commitGit(message) {
-  return fetch('/api/editor/git/commit', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message }),
-  })
-}
-
-// Pushes the current branch to its configured upstream — a plain `git
-// push`, never a force-push. If the remote has diverged (or there's no
-// upstream configured), the request fails and the caller shows git's
-// own error as-is rather than resolving it automatically.
-export function pushGit() {
-  return fetch('/api/editor/git/push', { method: 'POST' })
-}
-
-// The fix offered when pushGit() fails with { no_upstream: true } — runs
-// `git push -u origin HEAD` server-side (see internal/gitrepo.
-// PushSetUpstream), only ever called from that specific error's own
-// button, never automatically.
-export function pushSetUpstreamGit() {
-  return fetch('/api/editor/git/push-set-upstream', { method: 'POST' })
-}
-
-// Runs "go test ./..." against the real project root (see
-// internal/chat.Handler.EditorRunTests) — an explicit human action on
-// already-saved files, not a preview of unapproved model writes. Returns
-// the raw response; the caller checks res.ok and reads {passed, output}
-// or the error body itself, same pattern as pushGit above.
-export function runEditorTests() {
-  return fetch('/api/editor/test', { method: 'POST' })
-}
-
-export function fetchGitBranches() {
-  return fetch('/api/editor/git/branches')
-    .then((r) => okJson(r, 'fetchGitBranches'))
-    .then((data) => data ?? [])
-    .catch(swallowNetworkError([]))
-}
-
-// Switches to an existing local branch. If uncommitted changes would be
-// overwritten by the target branch, this fails (a 500/error response)
-// rather than discarding or auto-stashing them.
-export function switchGitBranch(name) {
-  return fetch('/api/editor/git/switch', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name }),
-  })
-}
-
-// Creates a new branch from the current HEAD and switches to it. Fails
-// if a branch with that name already exists.
-export function createGitBranch(name) {
-  return fetch('/api/editor/git/branch', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name }),
-  })
-}
-
 export function approveWrite(id) {
   return fetch(`/api/writes/${id}/approve`, { method: 'POST' })
 }
@@ -483,20 +264,56 @@ export function saveFileAccessSettings(settings) {
   })
 }
 
-export function saveTerminalSettings(settings) {
-  return fetch('/api/settings/terminal', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(settings),
-  })
-}
-
 export function saveCloudProviderSettings(settings) {
   return fetch('/api/settings/cloud-providers', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(settings),
   })
+}
+
+// Runs an autonomous harness task via POST /api/harness/run with SSE streaming.
+export async function runHarness({ prompt, dir, model, maxTurns }, callbacks, signal) {
+  const origin = await apiOrigin()
+  const res = await fetch(`${origin}/api/harness/run`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream',
+    },
+    body: JSON.stringify({
+      prompt,
+      dir,
+      model,
+      max_turns: maxTurns,
+    }),
+    signal,
+  })
+  if (!res.ok || !res.body) throw new Error(await res.text())
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  for (;;) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+
+    const events = buffer.split('\n\n')
+    buffer = events.pop() ?? ''
+
+    for (const event of events) {
+      const dataLine = event.split('\n').find((l) => l.startsWith('data:'))
+      if (!dataLine) continue
+      try {
+        const payload = JSON.parse(dataLine.slice(5).trim())
+        callbacks.onEvent?.(payload)
+      } catch (err) {
+        console.error('Error parsing harness event:', err)
+      }
+    }
+  }
 }
 
 // Streams a chat response via SSE, invoking the provided callbacks as

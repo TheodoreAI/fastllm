@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { FONT_OPTIONS } from '../useFontFamily'
 import { FONT_SCALE_OPTIONS } from '../useFontScale'
 import { THEMES } from '../themes'
-import { browseForFolder, isWails, apiOrigin } from '../api'
+import { browseForFolder, isWails } from '../api'
 import { useEscapeKey } from '../useEscapeKey'
 import { useSettingsExpanded } from '../useSettingsExpanded'
 import ConfirmDeleteModal from './ConfirmDeleteModal'
@@ -38,10 +38,7 @@ const CHEVRON = (
 // list has to be kept in sync by hand rather than generated from one
 // source.
 const KEYBINDINGS = [
-  { keys: 'Ctrl+B', description: 'Toggle the editor’s Files panel', native: false },
-  { keys: 'Ctrl+J', description: 'Toggle the terminal panel', native: false },
   { keys: 'Ctrl+Shift+M', description: 'Toggle the model settings panel', native: false },
-  { keys: 'Ctrl+S', description: 'Save the current file (Editor tab)', native: false },
   { keys: 'Ctrl+O', description: 'Open folder', native: true },
   { keys: 'Ctrl+Q', description: 'Exit fastllm', native: true },
   { keys: 'Ctrl+Z', description: 'Undo', native: true },
@@ -50,8 +47,6 @@ const KEYBINDINGS = [
   { keys: 'Ctrl+C', description: 'Copy', native: true },
   { keys: 'Ctrl+V', description: 'Paste', native: true },
   { keys: 'Ctrl+A', description: 'Select all', native: true },
-  { keys: 'Ctrl+Shift+C', description: 'Copy selection (in the Terminal panel)', native: false },
-  { keys: 'Ctrl+Shift+V', description: 'Paste (in the Terminal panel)', native: false },
 ]
 
 // One collapsible sub-block within the Settings panel — mirrors
@@ -97,8 +92,6 @@ export default function SettingsPanel({
   onSaveRagSettings,
   fileAccessSettings,
   onSaveFileAccessSettings,
-  terminalSettings,
-  onSaveTerminalSettings,
   cloudProviderSettings,
   onSaveCloudProviderSettings,
   thinkLevel,
@@ -123,20 +116,6 @@ export default function SettingsPanel({
   const [ragStatus, setRagStatus] = useState('')
   const [fileAccessForm, setFileAccessForm] = useState(fileAccessSettings)
   const [fileAccessStatus, setFileAccessStatus] = useState('')
-  const [terminalForm, setTerminalForm] = useState(terminalSettings)
-  const [terminalStatus, setTerminalStatus] = useState('')
-  // Display-only — shown next to the "point local AI CLIs at fastllm"
-  // toggle so the user can also copy/paste it manually (e.g. into a tool
-  // that reads OPENAI_BASE_URL from a config file rather than the
-  // environment). The toggle itself works independently of whether this
-  // ever resolves — the real base URL is computed server-side per session
-  // (see terminal.BaseURLHolder) from whatever address the app is actually
-  // reachable on, which can differ from this browser tab's own origin.
-  const [liveChatURL, setLiveChatURL] = useState('')
-  useEffect(() => {
-    apiOrigin().then((origin) => setLiveChatURL(`${origin || window.location.origin}/v1`))
-  }, [])
-  // Keyed by provider id ('anthropic' | 'openai' | 'gemini') -> the new
   // key text the user has typed. A provider absent from this object was
   // never touched this session, so saving omits its field entirely and
   // whatever key (if any) is already stored server-side is left alone —
@@ -192,10 +171,6 @@ export default function SettingsPanel({
   useEffect(() => {
     setFileAccessForm(fileAccessSettings)
   }, [fileAccessSettings])
-
-  useEffect(() => {
-    setTerminalForm(terminalSettings)
-  }, [terminalSettings])
 
   async function handleSaveRag(e) {
     e.preventDefault()
@@ -255,18 +230,6 @@ export default function SettingsPanel({
       setFileAccessStatus('Saved. File access updates apply immediately without a server restart.')
     } catch (err) {
       setFileAccessStatus(`Couldn't save file access: ${err.message}`)
-    }
-  }
-
-  async function handleSaveTerminal(e) {
-    e.preventDefault()
-    setTerminalStatus('Saving…')
-    try {
-      const next = { enabled: !!terminalForm.enabled, injectLiveChatEnv: !!terminalForm.injectLiveChatEnv }
-      await onSaveTerminalSettings(next)
-      setTerminalStatus('Saved. Terminal access updates apply immediately without a server restart.')
-    } catch (err) {
-      setTerminalStatus(`Couldn't save terminal access: ${err.message}`)
     }
   }
 
@@ -449,38 +412,6 @@ export default function SettingsPanel({
           </button>
           {fileAccessStatus && (
             <p className={`status ${fileAccessStatus.startsWith("Couldn't") ? 'status-error' : ''}`}>{fileAccessStatus}</p>
-          )}
-        </form>
-      </SubSection>
-
-      <SubSection id="terminal" label="Terminal" expanded={!!expanded.terminal} onToggle={toggleSection}>
-        <form onSubmit={handleSaveTerminal} className="rag-form">
-          <label className="settings-field checkbox-field settings-check-row">
-            <input
-              type="checkbox"
-              checked={!!terminalForm.enabled}
-              onChange={(e) => setTerminalForm({ ...terminalForm, enabled: e.target.checked })}
-            />
-            <span>Enable interactive terminal</span>
-          </label>
-          <p className="settings-hint">
-            Gives the Editor panel a real PowerShell session on this machine. Unlike file access, this isn't sandboxed — anything the terminal can run, it runs with full access as whatever account runs fastllm. Only enable this if you trust everyone who can reach this app.
-          </p>
-          <label className="settings-field checkbox-field settings-check-row">
-            <input
-              type="checkbox"
-              checked={!!terminalForm.injectLiveChatEnv}
-              disabled={!terminalForm.enabled}
-              onChange={(e) => setTerminalForm({ ...terminalForm, injectLiveChatEnv: e.target.checked })}
-            />
-            <span>Point local AI CLIs at fastllm</span>
-          </label>
-          <p className="settings-hint">
-            Sets OPENAI_BASE_URL and ANTHROPIC_BASE_URL in every new terminal session, so a terminal-based AI tool (Claude Code, a ChatGPT or Gemini CLI, etc.) talks to fastllm with no manual setup — and that conversation shows up live in a "Live Terminal" chat here. Current value: <code className="settings-inline-code">{liveChatURL || '…'}</code>
-          </p>
-          <button type="submit" className="btn-primary">Save terminal access</button>
-          {terminalStatus && (
-            <p className={`status ${terminalStatus.startsWith("Couldn't") ? 'status-error' : ''}`}>{terminalStatus}</p>
           )}
         </form>
       </SubSection>
