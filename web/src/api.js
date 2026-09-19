@@ -168,10 +168,14 @@ export async function streamChat(
 
       for (const event of events) {
         const lines = event.split('\n')
+        if (lines[0]?.startsWith(':')) continue
         const eventLine = lines.find((l) => l.startsWith('event:'))
         const dataLine = lines.find((l) => l.startsWith('data:'))
-        if (!dataLine) continue
         const eventType = eventLine ? eventLine.slice(6).trim() : 'message'
+        if (eventType === 'done') {
+          return
+        }
+        if (!dataLine) continue
         const payload = JSON.parse(dataLine.slice(5).trim())
 
         if (eventType === 'conversation' && payload.conversation_id) {
@@ -197,6 +201,9 @@ export async function streamChat(
     if (stalled) {
       throw new Error(`The model stopped responding (no output for ${STALL_TIMEOUT_MS / 1000}s). It may be stuck — try again or switch models.`)
     }
+    if (err?.message?.includes('input stream')) {
+      return
+    }
     throw err
   } finally {
     clearTimeout(stallTimer)
@@ -205,6 +212,8 @@ export async function streamChat(
 
 // streamHarnessRun executes an autonomous agent task on the backend via SSE streaming.
 export async function streamHarnessRun(payload, onEvent, onError, signal) {
+  let isDone = false
+  let reader = null
   try {
     const res = await fetch('/api/harness/run?stream=true', {
       method: 'POST',
@@ -222,33 +231,64 @@ export async function streamHarnessRun(payload, onEvent, onError, signal) {
       return
     }
 
-    const reader = res.body.getReader()
+    reader = res.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
 
-    while (true) {
+    while (!isDone) {
       const { done, value } = await reader.read()
-      if (done) break
+      if (done) {
+        isDone = true
+        break
+      }
       buffer += decoder.decode(value, { stream: true })
 
       const chunks = buffer.split('\n\n')
       buffer = chunks.pop() ?? ''
 
       for (const chunk of chunks) {
-        const lines = chunk.split('\n')
+        const trimmed = chunk.trim()
+        if (!trimmed || trimmed.startsWith(':')) {
+          // SSE comment or keepalive ping, ignore
+          continue
+        }
+        const lines = trimmed.split('\n')
+        const eventLine = lines.find((l) => l.startsWith('event:'))
         const dataLine = lines.find((l) => l.startsWith('data:'))
+        const eventType = eventLine ? eventLine.slice(6).trim() : 'message'
+
+        if (eventType === 'done') {
+          isDone = true
+          break
+        }
+
         if (!dataLine) continue
+
         try {
           const ev = JSON.parse(dataLine.slice(5).trim())
           onEvent?.(ev)
+          if (ev.type === 'task_finished') {
+            isDone = true
+          }
         } catch (e) {
           console.error('Failed to parse harness SSE event:', chunk, e)
         }
       }
     }
   } catch (err) {
-    if (err.name !== 'AbortError') {
-      onError?.(err)
+    if (err.name === 'AbortError') {
+      return
+    }
+    // Firefox/WebKit throws "TypeError: Error in input stream" when the server closes an SSE connection.
+    // If the task already finished, or if it's a stream closure error, do not fail the task.
+    const isStreamClosureError = err?.message?.includes('input stream') || err?.message?.includes('network error')
+    if (isDone || isStreamClosureError) {
+      return
+    }
+    onError?.(err)
+  } finally {
+    if (reader) {
+      reader.cancel().catch(() => {})
     }
   }
 }

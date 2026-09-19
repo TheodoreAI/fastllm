@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
+	"time"
 
 	"fastllm/internal/harness"
 	"fastllm/internal/store"
@@ -92,13 +94,50 @@ func (h *Handler) HarnessRun(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("X-Accel-Buffering", "no")
 		flusher.Flush()
+
+		var mu sync.Mutex
+		writeSSE := func(eventType string, data []byte) {
+			mu.Lock()
+			defer mu.Unlock()
+			if eventType != "" {
+				fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, data)
+			} else {
+				fmt.Fprintf(w, "data: %s\n\n", data)
+			}
+			flusher.Flush()
+		}
+
+		writePing := func() {
+			mu.Lock()
+			defer mu.Unlock()
+			fmt.Fprintf(w, ": keepalive\n\n")
+			flusher.Flush()
+		}
+
+		// Keepalive ticker to prevent intermediate proxies, browsers, or Windows TCP timeouts
+		// from cutting off the stream with "Error in input stream" during long LLM inference or tool execution.
+		doneChan := make(chan struct{})
+		go func() {
+			ticker := time.NewTicker(3 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					writePing()
+				case <-doneChan:
+					return
+				case <-r.Context().Done():
+					return
+				}
+			}
+		}()
 
 		onEvent := func(ev harness.Event) {
 			payload, err := json.Marshal(ev)
 			if err == nil {
-				fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Type, payload)
-				flusher.Flush()
+				writeSSE(string(ev.Type), payload)
 			}
 		}
 
@@ -111,6 +150,9 @@ func (h *Handler) HarnessRun(w http.ResponseWriter, r *http.Request) {
 
 		res, _ := runner.Run(r.Context(), req, onEvent)
 		saveFinalResponse(res)
+
+		close(doneChan)
+		writeSSE("done", []byte("{}"))
 		return
 	}
 
