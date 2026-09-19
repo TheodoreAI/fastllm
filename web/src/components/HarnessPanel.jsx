@@ -26,6 +26,22 @@ function CheckIcon(props) {
   )
 }
 
+function ChevronRightIcon(props) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      <polyline points="9 18 15 12 9 6" />
+    </svg>
+  )
+}
+
+function ChevronDownIcon(props) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      <polyline points="6 9 12 15 18 9" />
+    </svg>
+  )
+}
+
 export default function HarnessPanel({
   models,
   selectedModel,
@@ -246,7 +262,7 @@ export default function HarnessPanel({
           <div className={`harness-final-result ${finalResult.success ? 'is-success' : 'is-failure'}`}>
             <div className="harness-final-header">
               <span className="harness-status-pill">
-                {finalResult.success ? '✓ Task Complete' : '✕ Task Failed'}
+                {finalResult.success ? 'Task Completed' : 'Task Failed'}
               </span>
               <span className="harness-final-meta">
                 {finalResult.turns} turns · {(finalResult.duration_ms / 1000).toFixed(2)}s
@@ -294,7 +310,9 @@ function TurnCard({ turn, active = false }) {
             {turn.metrics.estimated_cost > 0 && ` · $${turn.metrics.estimated_cost.toFixed(4)}`}
           </span>
         )}
-        <span className="harness-collapse-indicator">{collapsed ? '▶' : '▼'}</span>
+        <span className="harness-collapse-indicator">
+          {collapsed ? <ChevronRightIcon className="inline-icon" /> : <ChevronDownIcon className="inline-icon" />}
+        </span>
       </div>
 
       {!collapsed && (
@@ -339,7 +357,9 @@ function ToolCallItem({ toolCall }) {
         {toolCall.pending ? (
           <span className="harness-tool-spin">executing…</span>
         ) : (
-          <span className="harness-tool-done">✓</span>
+          <span className="harness-tool-done">
+            <CheckIcon className="inline-icon" />
+          </span>
         )}
       </div>
 
