@@ -1034,6 +1034,8 @@ type CloudProviderSettings struct {
 	// working client — see internal/llm.Router.SetCloudProviders.
 	CloudflareAPIKey    string `json:"cloudflare_api_key"`
 	CloudflareAccountID string `json:"cloudflare_account_id"`
+	OSUBaseURL          string `json:"osu_base_url,omitempty"`
+	OSUAPIKey           string `json:"osu_api_key,omitempty"`
 }
 
 var DefaultCloudProviderSettings = CloudProviderSettings{}

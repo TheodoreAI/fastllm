@@ -113,3 +113,45 @@ func TestSupportsToolsAllowlist(t *testing.T) {
 		}
 	}
 }
+
+func TestStripProviderPrefix_OSU(t *testing.T) {
+	cases := []struct {
+		model    string
+		wantBare string
+		wantProv string
+		wantOK   bool
+	}{
+		{"osu:muse-glimmer", "muse-glimmer", "osu", true},
+		{"cluster:muse-glimmer", "muse-glimmer", "osu", true},
+		{"osu:meta-models/Muse-Glimmer-30B", "meta-models/Muse-Glimmer-30B", "osu", true},
+		{"muse-glimmer", "muse-glimmer", "osu", true},
+		{"muse-glimmer-30b", "muse-glimmer-30b", "osu", true},
+		{"meta-models/Muse-Glimmer-30B", "meta-models/Muse-Glimmer-30B", "osu", true},
+		{"qwen2.5-coder:7b", "", "", false},
+	}
+	for _, c := range cases {
+		bare, prov, ok := stripProviderPrefix(c.model)
+		if bare != c.wantBare || prov != c.wantProv || ok != c.wantOK {
+			t.Errorf("stripProviderPrefix(%q) = (%q, %q, %v), want (%q, %q, %v)",
+				c.model, bare, prov, ok, c.wantBare, c.wantProv, c.wantOK)
+		}
+	}
+}
+
+func TestSupportsToolsAndVisionForModel_OSU(t *testing.T) {
+	models := []string{
+		"osu:muse-glimmer",
+		"cluster:muse-glimmer",
+		"osu:meta-models/Muse-Glimmer-30B",
+		"muse-glimmer",
+		"meta-models/Muse-Glimmer-30B",
+	}
+	for _, m := range models {
+		if !SupportsToolsForModel(m) {
+			t.Errorf("SupportsToolsForModel(%q) = false, want true", m)
+		}
+		if !SupportsVisionForModel(m) {
+			t.Errorf("SupportsVisionForModel(%q) = false, want true", m)
+		}
+	}
+}

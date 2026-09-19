@@ -1422,23 +1422,36 @@ func (h *Handler) GetCloudProviderSettings(w http.ResponseWriter, r *http.Reques
 // SettingsPanel.jsx). Saving still goes through the real
 // store.CloudProviderSettings shape (see UpdateCloudProviderSettings).
 type cloudProviderSettingsResponse struct {
-	AnthropicConfigured bool `json:"anthropic_configured"`
-	OpenAIConfigured    bool `json:"openai_configured"`
-	GeminiConfigured    bool `json:"gemini_configured"`
-	NvidiaConfigured    bool `json:"nvidia_configured"`
-	// CloudflareConfigured requires both the API token and account ID to
-	// be set — a token with no account ID (or vice versa) can't build a
-	// working client, see llm.Router.SetCloudProviders.
-	CloudflareConfigured bool `json:"cloudflare_configured"`
+	AnthropicConfigured  bool   `json:"anthropic_configured"`
+	OpenAIConfigured     bool   `json:"openai_configured"`
+	GeminiConfigured     bool   `json:"gemini_configured"`
+	NvidiaConfigured     bool   `json:"nvidia_configured"`
+	CloudflareConfigured bool   `json:"cloudflare_configured"`
+	OSUConfigured        bool   `json:"osu_configured"`
+	OSUBaseURL           string `json:"osu_base_url,omitempty"`
 }
 
 func toCloudProviderSettingsResponse(s store.CloudProviderSettings) cloudProviderSettingsResponse {
+	osuConfigured := s.OSUAPIKey != "" || s.OSUBaseURL != ""
+	if !osuConfigured {
+		if home, err := os.UserHomeDir(); err == nil {
+			if _, err := os.Stat(filepath.Join(home, ".osu-llm", "vllm-api-key")); err == nil {
+				osuConfigured = true
+			}
+		}
+	}
+	baseURL := s.OSUBaseURL
+	if baseURL == "" {
+		baseURL = "http://127.0.0.1:8010/v1"
+	}
 	return cloudProviderSettingsResponse{
 		AnthropicConfigured:  s.AnthropicAPIKey != "",
 		OpenAIConfigured:     s.OpenAIAPIKey != "",
 		GeminiConfigured:     s.GeminiAPIKey != "",
 		NvidiaConfigured:     s.NvidiaAPIKey != "",
 		CloudflareConfigured: s.CloudflareAPIKey != "" && s.CloudflareAccountID != "",
+		OSUConfigured:        osuConfigured,
+		OSUBaseURL:           baseURL,
 	}
 }
 
@@ -1459,6 +1472,8 @@ type cloudProviderSettingsRequest struct {
 	NvidiaAPIKey        *string `json:"nvidia_api_key"`
 	CloudflareAPIKey    *string `json:"cloudflare_api_key"`
 	CloudflareAccountID *string `json:"cloudflare_account_id"`
+	OSUAPIKey           *string `json:"osu_api_key"`
+	OSUBaseURL          *string `json:"osu_base_url"`
 }
 
 // UpdateCloudProviderSettings merges the given fields into the persisted
@@ -1498,6 +1513,12 @@ func (h *Handler) UpdateCloudProviderSettings(w http.ResponseWriter, r *http.Req
 	if req.CloudflareAccountID != nil {
 		settings.CloudflareAccountID = *req.CloudflareAccountID
 	}
+	if req.OSUAPIKey != nil {
+		settings.OSUAPIKey = *req.OSUAPIKey
+	}
+	if req.OSUBaseURL != nil {
+		settings.OSUBaseURL = *req.OSUBaseURL
+	}
 
 	if err := store.SaveCloudProviderSettings(h.DB, settings); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -1510,6 +1531,8 @@ func (h *Handler) UpdateCloudProviderSettings(w http.ResponseWriter, r *http.Req
 		NvidiaAPIKey:        settings.NvidiaAPIKey,
 		CloudflareAPIKey:    settings.CloudflareAPIKey,
 		CloudflareAccountID: settings.CloudflareAccountID,
+		OSUBaseURL:          settings.OSUBaseURL,
+		OSUAPIKey:           settings.OSUAPIKey,
 	})
 	writeJSON(w, toCloudProviderSettingsResponse(settings))
 }
