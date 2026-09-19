@@ -122,6 +122,12 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 			MaxTurns: maxTurns, CommandTimeout: cmdTimeout, ThinkLevel: thinkLevel, AllowCommands: allowCmds, PermissionMode: permissionMode,
 		})
 	}
+	observationSessionID := "interactive"
+	if activeSession != nil {
+		observationSessionID = activeSession.ID
+	}
+	observationStore, _ := DefaultObservationStore(observationSessionID)
+	observations := &ObservationManager{Store: observationStore}
 
 	saveSession := func() {
 		if sessionStore == nil || activeSession == nil {
@@ -192,6 +198,9 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 		sessionMessages = append([]llm.Message{{Role: "system", Content: systemPrompt + rulesPrompt}}, loaded.Messages...)
 		loaded.ClosedAt = nil
 		activeSession = loaded
+		if observationStore != nil {
+			observationStore.SetSession(loaded.ID)
+		}
 		return nil
 	}
 
@@ -369,6 +378,7 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 				continue
 
 			case "/status":
+				sessionMetrics.ObservationEfficiency = observations.Stats()
 				fmt.Println(FormatStatusCard(absWorkingDir, model, len(discoveredRules), sessionMetrics, processMgr))
 				fmt.Println(FormatRuntimeCard(maxTurns, cmdTimeout, thinkLevel, allowCmds, permissionMode, activeSessionID(activeSession)))
 				continue
@@ -422,6 +432,9 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 				if err := sessionStore.Delete(parts[1]); err != nil {
 					fmt.Println(ColorRed(fmt.Sprintf("  %s Delete failed: %v", SymCross, err)))
 				} else {
+					if observationStore != nil {
+						_ = observationStore.DeleteSession(parts[1])
+					}
 					refreshCompletions()
 					fmt.Println(ColorGreen("  " + SymCheck + " Session deleted."))
 				}
@@ -461,6 +474,9 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 					activeSession = sessionStore.New(absWorkingDir, model, InteractiveRuntime{
 						MaxTurns: maxTurns, CommandTimeout: cmdTimeout, ThinkLevel: thinkLevel, AllowCommands: allowCmds, PermissionMode: permissionMode, ExpandedTools: expandedTools,
 					})
+					if observationStore != nil {
+						observationStore.SetSession(activeSession.ID)
+					}
 					saveSession()
 				}
 				fmt.Println(ColorGreen("  " + SymCheck + " Started a new session."))
@@ -620,8 +636,8 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 							if matched.URL != "" {
 								client.BaseURL = matched.URL
 							}
-							if matched.APIKey != "" {
-								client.APIKey = matched.APIKey
+							if resolved := matched.ResolveAPIKey(); resolved != "" {
+								client.APIKey = resolved
 							}
 							applyModelParameters(client, matched.Parameters)
 						}
@@ -731,6 +747,8 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 			&sessionMetrics,
 			&sessionMessages,
 			expandedTools,
+			observations,
+			observationStore,
 		)
 		saveSession()
 		cancel()
@@ -760,20 +778,24 @@ func (r *Runner) runInteractiveTurn(
 	sessionMetrics *SessionMetrics,
 	sessionMessages *[]llm.Message,
 	expandedTools bool,
+	observations *ObservationManager,
+	observationStore *ObservationStore,
 ) {
+	var planBoundary bool
 	for turn := 1; turn <= maxTurns; turn++ {
 		if ctx.Err() != nil {
 			fmt.Println("Turn canceled.")
 			return
 		}
 
-		cfg := DefaultCompactionConfig()
 		contextChars := messageCharacterCount(*sessionMessages)
+		cfg := planBoundaryCompactionConfig(DefaultCompactionConfig(), contextChars, planBoundary)
 		if contextChars >= cfg.MaxTotalChars*3/4 {
 			fmt.Println(ColorYellow(fmt.Sprintf("  Context is at about %d%% of the compaction threshold.", contextChars*100/cfg.MaxTotalChars)))
 		}
 		var compacted bool
-		*sessionMessages, compacted = CompactMessages(*sessionMessages, cfg)
+		*sessionMessages, compacted = OnlineCompactMessages(*sessionMessages, cfg)
+		planBoundary = false
 		if compacted {
 			fmt.Println(ColorYellow("  Older tool output was compacted to preserve context space."))
 		}
@@ -795,7 +817,8 @@ func (r *Runner) runInteractiveTurn(
 				}
 			}
 		}()
-		reply, err := chatWithRetry(ctx, r.LLM, model, *sessionMessages, tools, thinkLevel, func(attempt int, delay time.Duration, retryErr error) {
+		modelMessages := observations.Project(*sessionMessages, turn)
+		reply, err := chatWithRetry(ctx, r.LLM, model, modelMessages, tools, thinkLevel, func(attempt int, delay time.Duration, retryErr error) {
 			fmt.Printf("\r%s\n", ColorYellow(fmt.Sprintf("  Model request failed; retry %d/3 in %s: %v", attempt, delay, retryErr)))
 		})
 		close(indicatorDone)
@@ -852,6 +875,12 @@ func (r *Runner) runInteractiveTurn(
 				*sessionMessages = append(*sessionMessages, llm.Message{Role: "tool", Content: toolResult, ToolCallID: call.ID})
 				continue
 			}
+			if followUp := followUpFromArguments(call.Function.Arguments); followUp != nil && !permissions.Authorize("run_command", "command="+followUp.Command) {
+				toolResult := "Permission denied for the fused follow-up command. The file mutation was not attempted."
+				fmt.Println(FormatToolResult(call.Function.Name, toolResult, previewLines))
+				*sessionMessages = append(*sessionMessages, llm.Message{Role: "tool", Content: toolResult, ToolCallID: call.ID})
+				continue
+			}
 
 			fmt.Println(FormatToolState(call.Function.Name, "running", 0))
 			toolStart := time.Now()
@@ -866,28 +895,34 @@ func (r *Runner) runInteractiveTurn(
 
 			case "write_file":
 				var args struct {
-					Path    string `json:"path"`
-					Content string `json:"content"`
+					Path    string           `json:"path"`
+					Content string           `json:"content"`
+					ThenRun *FollowUpCommand `json:"then_run"`
 				}
 				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
 				toolResult = r.executeWriteFile(fileReader, args.Path, args.Content)
+				toolResult = r.executeFollowUp(ctx, absWorkingDir, toolResult, args.ThenRun, cmdTimeout, allowCmds, true)
 
 			case "edit_file":
 				var args struct {
-					Path    string `json:"path"`
-					Search  string `json:"search"`
-					Replace string `json:"replace"`
+					Path    string           `json:"path"`
+					Search  string           `json:"search"`
+					Replace string           `json:"replace"`
+					ThenRun *FollowUpCommand `json:"then_run"`
 				}
 				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
 				toolResult = r.executeEditFile(fileReader, args.Path, args.Search, args.Replace)
+				toolResult = r.executeFollowUp(ctx, absWorkingDir, toolResult, args.ThenRun, cmdTimeout, allowCmds, true)
 
 			case "patch_file":
 				var args struct {
-					Path string `json:"path"`
-					Diff string `json:"diff"`
+					Path    string           `json:"path"`
+					Diff    string           `json:"diff"`
+					ThenRun *FollowUpCommand `json:"then_run"`
 				}
 				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
 				toolResult = r.executePatchFile(fileReader, args.Path, args.Diff)
+				toolResult = r.executeFollowUp(ctx, absWorkingDir, toolResult, args.ThenRun, cmdTimeout, allowCmds, true)
 
 			case "list_files":
 				var args struct {
@@ -924,6 +959,32 @@ func (r *Runner) runInteractiveTurn(
 				} else {
 					toolResult = content
 				}
+
+			case "read_observation":
+				var args struct {
+					Ref    string `json:"ref"`
+					Offset int    `json:"offset"`
+					Limit  int    `json:"limit"`
+				}
+				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+				if observationStore == nil {
+					toolResult = "Error: observation storage is unavailable."
+				} else if content, readErr := observationStore.Slice(args.Ref, args.Offset, args.Limit); readErr != nil {
+					toolResult = "Error reading observation: " + readErr.Error()
+				} else {
+					toolResult = content
+				}
+
+			case "update_plan":
+				var args struct {
+					Goal      string   `json:"goal"`
+					Completed []string `json:"completed"`
+					Current   string   `json:"current"`
+					Remaining []string `json:"remaining"`
+				}
+				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+				planBoundary = len(args.Completed) > 0
+				toolResult = formatPlanUpdate(args.Goal, args.Completed, args.Current, args.Remaining)
 
 			case "run_command":
 				if !allowCmds {
@@ -1009,12 +1070,13 @@ func (r *Runner) runInteractiveTurn(
 				toolResult = fmt.Sprintf("Error: unknown tool %q", call.Function.Name)
 			}
 
+			outcome := observations.Process(call.Function.Name, call.Function.Arguments, toolResult, turn)
 			fmt.Println(FormatToolState(call.Function.Name, "completed", time.Since(toolStart)))
-			fmt.Println(FormatToolResult(call.Function.Name, toolResult, previewLines))
+			fmt.Println(FormatToolResult(call.Function.Name, outcome.DisplayView, previewLines))
 
 			*sessionMessages = append(*sessionMessages, llm.Message{
 				Role:       "tool",
-				Content:    toolResult,
+				Content:    outcome.ModelView,
 				ToolCallID: call.ID,
 			})
 		}
@@ -1060,6 +1122,19 @@ func parseDirectoryChange(command string) (string, bool) {
 	return "", false
 }
 
+func followUpFromArguments(raw string) *FollowUpCommand {
+	var arguments struct {
+		ThenRun *FollowUpCommand `json:"then_run"`
+	}
+	if json.Unmarshal([]byte(raw), &arguments) != nil {
+		return nil
+	}
+	if arguments.ThenRun == nil || strings.TrimSpace(arguments.ThenRun.Command) == "" {
+		return nil
+	}
+	return arguments.ThenRun
+}
+
 func interactiveTools(allowCommands bool, permissionMode PermissionMode) []llm.Tool {
 	tools := []llm.Tool{
 		readFileTool,
@@ -1067,6 +1142,8 @@ func interactiveTools(allowCommands bool, permissionMode PermissionMode) []llm.T
 		searchFilesTool,
 		webSearchTool,
 		webFetchTool,
+		readObservationTool,
+		updatePlanTool,
 		finishTaskTool,
 	}
 	if permissionMode != PermissionReadOnly {

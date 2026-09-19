@@ -19,12 +19,13 @@ type TurnMetrics struct {
 
 // SessionMetrics aggregates metrics across all turns in a session.
 type SessionMetrics struct {
-	TotalTurns            int           `json:"total_turns"`
-	TotalPromptTokens     int           `json:"total_prompt_tokens"`
-	TotalCompletionTokens int           `json:"total_completion_tokens"`
-	TotalTokens           int           `json:"total_tokens"`
-	TotalDuration         time.Duration `json:"total_duration"`
-	TotalCost             float64       `json:"total_cost"`
+	TotalTurns            int              `json:"total_turns"`
+	TotalPromptTokens     int              `json:"total_prompt_tokens"`
+	TotalCompletionTokens int              `json:"total_completion_tokens"`
+	TotalTokens           int              `json:"total_tokens"`
+	TotalDuration         time.Duration    `json:"total_duration"`
+	TotalCost             float64          `json:"total_cost"`
+	ObservationEfficiency ObservationStats `json:"observation_efficiency"`
 }
 
 // ModelRate defines pricing per 1,000,000 tokens in USD.

@@ -601,6 +601,8 @@ func FormatStatusCard(dir, model string, rulesCount int, sm SessionMetrics, pm *
 		FormatKV("duration", fmt.Sprintf("%.2fs", sm.TotalDuration.Seconds()), 12),
 		FormatKV("cost", costStr, 12),
 		FormatKV("processes", fmt.Sprintf("%d active", procsCount), 12),
+		FormatKV("observations", fmt.Sprintf("%d archived %s %d packed %s %d reduced", sm.ObservationEfficiency.Archived, SymDot, sm.ObservationEfficiency.Packed, SymDot, sm.ObservationEfficiency.Reduced), 12),
+		FormatKV("context saved", fmt.Sprintf("%d bytes", sm.ObservationEfficiency.ProjectedBytesSaved), 12),
 		"",
 	}
 

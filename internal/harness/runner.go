@@ -40,6 +40,11 @@ type Runner struct {
 	CommandTimeout    time.Duration
 }
 
+type FollowUpCommand struct {
+	Command        string `json:"command"`
+	TimeoutSeconds int    `json:"timeout_seconds"`
+}
+
 // NewRunner constructs a Runner with sensible defaults.
 func NewRunner(llmClient LLMClient, defaultWorkingDir, defaultModel string) *Runner {
 	if defaultWorkingDir == "" {
@@ -114,6 +119,8 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 	// Initialize background process manager
 	processMgr := NewProcessManager()
 	defer processMgr.KillAll()
+	observationStore, _ := DefaultObservationStore(fmt.Sprintf("run-%d", time.Now().UnixNano()))
+	observations := &ObservationManager{Store: observationStore}
 
 	emit := func(ev Event) {
 		if onEvent != nil {
@@ -134,6 +141,8 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 		searchFilesTool,
 		webSearchTool,
 		webFetchTool,
+		readObservationTool,
+		updatePlanTool,
 		finishTaskTool,
 	}
 	if allowCmds {
@@ -161,17 +170,21 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 	}
 
 	var taskFinished bool
+	var planBoundary bool
 
 	for turn := 1; turn <= maxTurns; turn++ {
 		emit(Event{Type: EventTurnStart, Turn: turn})
 
 		// Compact context window if messages exceed budget
-		messages, _ = CompactMessages(messages, DefaultCompactionConfig())
+		compactionConfig := planBoundaryCompactionConfig(DefaultCompactionConfig(), messageCharacterCount(messages), planBoundary)
+		messages, _ = OnlineCompactMessages(messages, compactionConfig)
+		planBoundary = false
 
 		turnStart := time.Now()
 		promptTokens := countApproxTokens(messages)
 
-		reply, err := chatWithRetry(ctx, r.LLM, model, messages, tools, req.ThinkLevel, nil)
+		modelMessages := observations.Project(messages, turn)
+		reply, err := chatWithRetry(ctx, r.LLM, model, modelMessages, tools, req.ThinkLevel, nil)
 		turnDuration := time.Since(turnStart)
 		if err != nil {
 			result.Error = fmt.Sprintf("LLM chat error on turn %d: %v", turn, err)
@@ -233,28 +246,34 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 
 			case "write_file":
 				var args struct {
-					Path    string `json:"path"`
-					Content string `json:"content"`
+					Path    string           `json:"path"`
+					Content string           `json:"content"`
+					ThenRun *FollowUpCommand `json:"then_run"`
 				}
 				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
 				toolResult = r.executeWriteFile(fileReader, args.Path, args.Content)
+				toolResult = r.executeFollowUp(ctx, absWorkingDir, toolResult, args.ThenRun, cmdTimeout, allowCmds, false)
 
 			case "edit_file":
 				var args struct {
-					Path    string `json:"path"`
-					Search  string `json:"search"`
-					Replace string `json:"replace"`
+					Path    string           `json:"path"`
+					Search  string           `json:"search"`
+					Replace string           `json:"replace"`
+					ThenRun *FollowUpCommand `json:"then_run"`
 				}
 				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
 				toolResult = r.executeEditFile(fileReader, args.Path, args.Search, args.Replace)
+				toolResult = r.executeFollowUp(ctx, absWorkingDir, toolResult, args.ThenRun, cmdTimeout, allowCmds, false)
 
 			case "patch_file":
 				var args struct {
-					Path string `json:"path"`
-					Diff string `json:"diff"`
+					Path    string           `json:"path"`
+					Diff    string           `json:"diff"`
+					ThenRun *FollowUpCommand `json:"then_run"`
 				}
 				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
 				toolResult = r.executePatchFile(fileReader, args.Path, args.Diff)
+				toolResult = r.executeFollowUp(ctx, absWorkingDir, toolResult, args.ThenRun, cmdTimeout, allowCmds, false)
 
 			case "list_files":
 				var args struct {
@@ -291,6 +310,32 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 				} else {
 					toolResult = content
 				}
+
+			case "read_observation":
+				var args struct {
+					Ref    string `json:"ref"`
+					Offset int    `json:"offset"`
+					Limit  int    `json:"limit"`
+				}
+				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+				if observationStore == nil {
+					toolResult = "Error: observation storage is unavailable."
+				} else if content, readErr := observationStore.Slice(args.Ref, args.Offset, args.Limit); readErr != nil {
+					toolResult = "Error reading observation: " + readErr.Error()
+				} else {
+					toolResult = content
+				}
+
+			case "update_plan":
+				var args struct {
+					Goal      string   `json:"goal"`
+					Completed []string `json:"completed"`
+					Current   string   `json:"current"`
+					Remaining []string `json:"remaining"`
+				}
+				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+				planBoundary = len(args.Completed) > 0
+				toolResult = formatPlanUpdate(args.Goal, args.Completed, args.Current, args.Remaining)
 
 			case "run_command":
 				if !allowCmds {
@@ -377,14 +422,15 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 				toolResult = fmt.Sprintf("Error: unknown tool %q", call.Function.Name)
 			}
 
-			tcRec.Result = toolResult
+			outcome := observations.Process(call.Function.Name, call.Function.Arguments, toolResult, turn)
+			tcRec.Result = outcome.DisplayView
 			turnRec.ToolCalls = append(turnRec.ToolCalls, tcRec)
 
 			emit(Event{Type: EventToolResult, Turn: turn, ToolCall: &tcRec})
 
 			messages = append(messages, llm.Message{
 				Role:       "tool",
-				Content:    toolResult,
+				Content:    outcome.ModelView,
 				ToolCallID: call.ID,
 			})
 		}
@@ -415,6 +461,7 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 	}
 
 	result.DurationMS = time.Since(startTime).Milliseconds()
+	sessionMetrics.ObservationEfficiency = observations.Stats()
 	emit(Event{Type: EventTaskFinished, Result: result, Error: result.Error})
 	return result, nil
 }
@@ -707,6 +754,56 @@ func (r *Runner) executeRunCommandLive(ctx context.Context, root, command string
 		return fmt.Sprintf("Exit code: %d (Error: %v)\nOutput:\n%s", exitCode, runErr, output)
 	}
 	return fmt.Sprintf("Exit code: 0\nOutput:\n%s", output)
+}
+
+func (r *Runner) executeFollowUp(ctx context.Context, root, mutationResult string, followUp *FollowUpCommand, defaultTimeout time.Duration, allowCommands, live bool) string {
+	if followUp == nil {
+		return mutationResult
+	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(mutationResult)), "error") {
+		return mutationResult + "\n\n[Follow-up skipped because the mutation failed.]"
+	}
+	if !allowCommands {
+		return mutationResult + "\n\n[Follow-up skipped because commands are disabled.]"
+	}
+	timeout := defaultTimeout
+	if followUp.TimeoutSeconds > 0 {
+		timeout = time.Duration(followUp.TimeoutSeconds) * time.Second
+	}
+	var commandResult string
+	if live {
+		commandResult = r.executeRunCommandLive(ctx, root, followUp.Command, timeout)
+	} else {
+		commandResult = r.executeRunCommand(ctx, root, followUp.Command, timeout)
+	}
+	return fmt.Sprintf("%s\n\n[Follow-up verification: %s]\n%s", mutationResult, followUp.Command, commandResult)
+}
+
+// formatPlanUpdate renders a plan snapshot as the tool result for update_plan.
+// Completed steps are listed explicitly so they survive into a state checkpoint
+// when older trajectory messages are compacted away.
+func formatPlanUpdate(goal string, completed []string, current string, remaining []string) string {
+	var builder strings.Builder
+	builder.WriteString("[Plan Updated]\n")
+	if trimmed := compactLine(goal, 200); trimmed != "" {
+		builder.WriteString("Goal: " + trimmed + "\n")
+	}
+	writePlanSection(&builder, "Completed", completed)
+	if trimmed := compactLine(current, 200); trimmed != "" {
+		writeCheckpointSection(&builder, "Current", []string{trimmed})
+	}
+	writePlanSection(&builder, "Remaining", remaining)
+	return strings.TrimSpace(builder.String())
+}
+
+func writePlanSection(builder *strings.Builder, title string, steps []string) {
+	var rendered []string
+	for _, step := range steps {
+		if text := compactLine(step, 200); text != "" {
+			rendered = append(rendered, text)
+		}
+	}
+	writeCheckpointSection(builder, title, rendered)
 }
 
 func walkFiles(root string) ([]string, error) {

@@ -54,3 +54,13 @@ func TestInteractiveToolsReadOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestFusedMutationRequiresIndependentCommandApproval(t *testing.T) {
+	controller := NewPermissionController(PermissionAsk, bufio.NewScanner(strings.NewReader("y\nn\n")))
+	if !controller.Authorize("edit_file", "path=main.go") {
+		t.Fatal("mutation approval was rejected")
+	}
+	if controller.Authorize("run_command", "command=go test ./...") {
+		t.Fatal("follow-up command should require and respect its own denial")
+	}
+}
