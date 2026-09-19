@@ -51,19 +51,21 @@ type TurnRecord struct {
 	Turn      int              `json:"turn"`
 	ToolCalls []ToolCallRecord `json:"tool_calls,omitempty"`
 	Response  string           `json:"response,omitempty"`
+	Metrics   *TurnMetrics     `json:"metrics,omitempty"`
 }
 
 // RunResult is the final output of an autonomous harness task run.
 type RunResult struct {
-	Success       bool         `json:"success"`
-	Task          string       `json:"task"`
-	WorkingDir    string       `json:"working_dir"`
-	Model         string       `json:"model"`
-	Turns         int          `json:"turns"`
-	FinalResponse string       `json:"final_response"`
-	History       []TurnRecord `json:"history"`
-	DurationMS    int64        `json:"duration_ms"`
-	Error         string       `json:"error,omitempty"`
+	Success       bool            `json:"success"`
+	Task          string          `json:"task"`
+	WorkingDir    string          `json:"working_dir"`
+	Model         string          `json:"model"`
+	Turns         int             `json:"turns"`
+	FinalResponse string          `json:"final_response"`
+	History       []TurnRecord    `json:"history"`
+	DurationMS    int64           `json:"duration_ms"`
+	Metrics       *SessionMetrics `json:"metrics,omitempty"`
+	Error         string          `json:"error,omitempty"`
 }
 
 // EventType distinguishes streamable harness progress events.
@@ -83,6 +85,7 @@ type Event struct {
 	Turn      int             `json:"turn,omitempty"`
 	ToolCall  *ToolCallRecord `json:"tool_call,omitempty"`
 	Response  string          `json:"response,omitempty"`
+	Metrics   *TurnMetrics    `json:"metrics,omitempty"`
 	Result    *RunResult      `json:"result,omitempty"`
 	Error     string          `json:"error,omitempty"`
 }
