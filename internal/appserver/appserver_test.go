@@ -14,7 +14,7 @@ import (
 
 func TestConfigFromEnvDefaults(t *testing.T) {
 	for _, key := range []string{
-		"FASTLLM_DB", "LLM_BASE_URL", "LLM_API_KEY", "LLM_CHAT_MODEL", "LLM_EMBED_MODEL",
+		"FASTLLM_DB", "LLM_BASE_URL", "LLM_API_KEY", "LLM_CHAT_MODEL",
 		"FASTLLM_FILES_ROOT", "FASTLLM_FILES_WRITE",
 	} {
 		t.Setenv(key, "")
@@ -33,9 +33,6 @@ func TestConfigFromEnvDefaults(t *testing.T) {
 	}
 	if cfg.LLMChatModel != "llama3.1" {
 		t.Errorf("LLMChatModel = %q, want default %q", cfg.LLMChatModel, "llama3.1")
-	}
-	if cfg.LLMEmbedModel != "nomic-embed-text" {
-		t.Errorf("LLMEmbedModel = %q, want default %q", cfg.LLMEmbedModel, "nomic-embed-text")
 	}
 	if cfg.FilesWrite {
 		t.Error("FilesWrite should default to false when FASTLLM_FILES_WRITE is unset")

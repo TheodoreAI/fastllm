@@ -25,9 +25,22 @@ func getenv(key, fallback string) string {
 }
 
 func main() {
+	// If explicit server command is given, start HTTP backend server
+	if len(os.Args) > 1 && os.Args[1] == "server" {
+		runServer(os.Args[2:])
+		return
+	}
+
+	// If explicit run or harness command is given, pass remaining args
 	if len(os.Args) > 1 && (os.Args[1] == "run" || os.Args[1] == "harness" || os.Args[1] == "tui") {
 		os.Exit(harness.RunCLI(os.Args[2:]))
 	}
+
+	// Otherwise, default to launching the interactive TUI REPL
+	os.Exit(harness.RunCLI(os.Args[1:]))
+}
+
+func runServer(args []string) {
 
 	addr := getenv("FASTLLM_ADDR", ":8080")
 

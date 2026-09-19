@@ -97,6 +97,22 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 		systemPrompt = DefaultSystemPrompt
 	}
 
+	// Auto-discover workspace rules (AGENTS.md, CLAUDE.md, etc.)
+	discoveredRules := DiscoverWorkspaceRules(absWorkingDir)
+	if len(discoveredRules) > 0 {
+		systemPrompt += FormatRulesForPrompt(discoveredRules)
+	}
+
+	// Initialize git checkpoint manager and capture initial state
+	checkpointMgr := NewCheckpointManager(absWorkingDir)
+	if checkpointMgr.IsGitRepo() {
+		_, _ = checkpointMgr.CreateCheckpoint(ctx, "task-start: "+req.Task)
+	}
+
+	// Initialize background process manager
+	processMgr := NewProcessManager()
+	defer processMgr.KillAll()
+
 	emit := func(ev Event) {
 		if onEvent != nil {
 			onEvent(ev)
@@ -111,12 +127,13 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 		readFileTool,
 		writeFileTool,
 		editFileTool,
+		patchFileTool,
 		listFilesTool,
 		searchFilesTool,
 		finishTaskTool,
 	}
 	if allowCmds {
-		tools = append(tools, runCommandTool)
+		tools = append(tools, runCommandTool, processStatusTool, killProcessTool)
 	}
 
 	messages := []llm.Message{
@@ -124,11 +141,14 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 		{Role: "user", Content: req.Task},
 	}
 
+	sessionMetrics := &SessionMetrics{}
+
 	result := &RunResult{
 		Task:       req.Task,
 		WorkingDir: absWorkingDir,
 		Model:      model,
 		History:    make([]TurnRecord, 0, maxTurns),
+		Metrics:    sessionMetrics,
 	}
 
 	var taskFinished bool
@@ -136,7 +156,14 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 	for turn := 1; turn <= maxTurns; turn++ {
 		emit(Event{Type: EventTurnStart, Turn: turn})
 
+		// Compact context window if messages exceed budget
+		messages, _ = CompactMessages(messages, DefaultCompactionConfig())
+
+		turnStart := time.Now()
+		promptTokens := countApproxTokens(messages)
+
 		reply, err := r.LLM.Chat(ctx, model, messages, tools, req.ThinkLevel)
+		turnDuration := time.Since(turnStart)
 		if err != nil {
 			result.Error = fmt.Sprintf("LLM chat error on turn %d: %v", turn, err)
 			result.Turns = turn
@@ -145,8 +172,13 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 			return result, err
 		}
 
+		compTokens := countApproxTokens([]llm.Message{reply})
+		turnMetrics := ComputeTurnMetrics(turn, model, promptTokens, compTokens, turnDuration)
+		sessionMetrics.Add(turnMetrics)
+
 		turnRec := TurnRecord{
-			Turn: turn,
+			Turn:    turn,
+			Metrics: &turnMetrics,
 		}
 
 		// If model produced no tool calls, it has finished with a textual answer.
@@ -156,7 +188,7 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 			result.Turns = turn
 			turnRec.Response = reply.Content
 			result.History = append(result.History, turnRec)
-			emit(Event{Type: EventTurnComplete, Turn: turn, Response: reply.Content})
+			emit(Event{Type: EventTurnComplete, Turn: turn, Response: reply.Content, Metrics: &turnMetrics})
 			taskFinished = true
 			break
 		}
@@ -198,6 +230,14 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
 				toolResult = r.executeEditFile(fileReader, args.Path, args.Search, args.Replace)
 
+			case "patch_file":
+				var args struct {
+					Path string `json:"path"`
+					Diff string `json:"diff"`
+				}
+				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+				toolResult = r.executePatchFile(fileReader, args.Path, args.Diff)
+
 			case "list_files":
 				var args struct {
 					Path string `json:"path"`
@@ -220,13 +260,63 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 					var args struct {
 						Command        string `json:"command"`
 						TimeoutSeconds int    `json:"timeout_seconds"`
+						Background     bool   `json:"background"`
 					}
 					_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
-					perCallTimeout := cmdTimeout
-					if args.TimeoutSeconds > 0 {
-						perCallTimeout = time.Duration(args.TimeoutSeconds) * time.Second
+					if args.Background {
+						proc, err := processMgr.Start(args.Command, absWorkingDir)
+						if err != nil {
+							toolResult = fmt.Sprintf("Error starting background process: %v", err)
+						} else {
+							toolResult = fmt.Sprintf("Process started in background with ID %s (PID %d). Check output with process_status.", proc.ID, proc.PID)
+						}
+					} else {
+						perCallTimeout := cmdTimeout
+						if args.TimeoutSeconds > 0 {
+							perCallTimeout = time.Duration(args.TimeoutSeconds) * time.Second
+						}
+						toolResult = r.executeRunCommand(ctx, absWorkingDir, args.Command, perCallTimeout)
 					}
-					toolResult = r.executeRunCommand(ctx, absWorkingDir, args.Command, perCallTimeout)
+				}
+
+			case "process_status":
+				if !allowCmds {
+					toolResult = "Error: process management is disabled for this run."
+				} else {
+					var args struct {
+						ProcessID string `json:"process_id"`
+					}
+					_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+					if args.ProcessID == "" {
+						toolResult = processMgr.FormatProcessTable()
+					} else {
+						proc, out, err := processMgr.Status(args.ProcessID)
+						if err != nil {
+							toolResult = err.Error()
+						} else {
+							status := "RUNNING"
+							if proc.Exited {
+								status = fmt.Sprintf("EXITED (%d)", proc.ExitCode)
+							}
+							toolResult = fmt.Sprintf("Process %s (PID %d): %s\nCommand: %s\nOutput:\n%s",
+								proc.ID, proc.PID, status, proc.Command, out)
+						}
+					}
+				}
+
+			case "kill_process":
+				if !allowCmds {
+					toolResult = "Error: process management is disabled for this run."
+				} else {
+					var args struct {
+						ProcessID string `json:"process_id"`
+					}
+					_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+					if err := processMgr.Kill(args.ProcessID); err != nil {
+						toolResult = fmt.Sprintf("Error killing process %s: %v", args.ProcessID, err)
+					} else {
+						toolResult = fmt.Sprintf("Process %s terminated.", args.ProcessID)
+					}
 				}
 
 			case "finish_task":
@@ -261,7 +351,7 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 		}
 
 		result.History = append(result.History, turnRec)
-		emit(Event{Type: EventTurnComplete, Turn: turn})
+		emit(Event{Type: EventTurnComplete, Turn: turn, Metrics: &turnMetrics})
 
 		if taskFinished {
 			result.Turns = turn
@@ -335,19 +425,70 @@ func (r *Runner) executeEditFile(fileReader *files.Reader, requestedPath, search
 		return fmt.Sprintf("Error: file %q is too large to safely edit with search/replace.", requestedPath)
 	}
 
-	matchCount := strings.Count(existing, search)
-	if matchCount == 0 {
-		return fmt.Sprintf("Error: search block not found in %q. Check whitespace, indentation, or re-read the file.", requestedPath)
-	}
-	if matchCount > 1 {
-		return fmt.Sprintf("Error: search block matches %d times in %q. Include more surrounding lines to make it unique.", matchCount, requestedPath)
+	newContent, err := ResilientReplace(existing, search, replace)
+	if err != nil {
+		return fmt.Sprintf("Error editing %s: %v", requestedPath, err)
 	}
 
-	newContent := strings.Replace(existing, search, replace, 1)
 	if err := fileReader.Write(requestedPath, newContent); err != nil {
 		return "Error applying edit: " + err.Error()
 	}
 	return fmt.Sprintf("Successfully edited %s.", requestedPath)
+}
+
+func (r *Runner) executePatchFile(fileReader *files.Reader, requestedPath, diffText string) string {
+	if strings.TrimSpace(requestedPath) == "" {
+		return "Error: path is required."
+	}
+	if strings.TrimSpace(diffText) == "" {
+		return "Error: diff content cannot be empty."
+	}
+	existing, exists, truncated, err := fileReader.ExistingContent(requestedPath)
+	if err != nil {
+		return "Error checking file: " + err.Error()
+	}
+	if !exists {
+		return fmt.Sprintf("Error: file %q does not exist. Use write_file to create new files.", requestedPath)
+	}
+	if truncated {
+		return fmt.Sprintf("Error: file %q is too large to safely patch.", requestedPath)
+	}
+
+	filesDiff, err := ParseUnifiedDiff(diffText)
+	if err != nil {
+		return fmt.Sprintf("Error parsing unified diff: %v", err)
+	}
+	if len(filesDiff) == 0 || len(filesDiff[0].Hunks) == 0 {
+		return "Error: no valid diff hunks found in provided diff."
+	}
+
+	newContent, err := ApplyPatch(existing, filesDiff[0].Hunks)
+	if err != nil {
+		return fmt.Sprintf("Error applying diff patch to %s: %v", requestedPath, err)
+	}
+
+	if err := fileReader.Write(requestedPath, newContent); err != nil {
+		return "Error saving patched file: " + err.Error()
+	}
+	return fmt.Sprintf("Successfully patched %s (%d hunks applied).", requestedPath, len(filesDiff[0].Hunks))
+}
+
+func countApproxTokens(messages []llm.Message) int {
+	chars := 0
+	for _, m := range messages {
+		chars += len(m.Content)
+		for _, tc := range m.ToolCalls {
+			chars += len(tc.Function.Name) + len(tc.Function.Arguments)
+		}
+	}
+	if chars == 0 {
+		return 1
+	}
+	toks := chars / 4
+	if toks < 1 {
+		toks = 1
+	}
+	return toks
 }
 
 func (r *Runner) executeListFiles(ctx context.Context, root, requestedPath string) string {
