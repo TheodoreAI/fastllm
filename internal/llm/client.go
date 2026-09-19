@@ -136,7 +136,10 @@ type Client struct {
 	// defaults false and is only set true for the local Ollama client
 	// (see New's caller in appserver.go), not the cloud ones New in
 	// router.go's SetCloudProviders constructs.
-	SendThink bool
+	SendThink   bool
+	Temperature *float64
+	TopP        *float64
+	MaxTokens   *int
 }
 
 func New(baseURL, apiKey, chatModel, embedModel string) *Client {
@@ -156,6 +159,9 @@ type chatRequest struct {
 	Tools         []Tool             `json:"tools,omitempty"`
 	Think         string             `json:"think,omitempty"`
 	StreamOptions *chatStreamOptions `json:"stream_options,omitempty"`
+	Temperature   *float64           `json:"temperature,omitempty"`
+	TopP          *float64           `json:"top_p,omitempty"`
+	MaxTokens     *int               `json:"max_tokens,omitempty"`
 }
 
 // chatStreamOptions requests the extra usage-bearing final chunk on a
@@ -404,8 +410,8 @@ var CloudflareModels = []string{
 // OSUModels lists the primary models served from the OSU cluster via vLLM.
 var OSUModels = []string{
 	"muse-glimmer",
-	"meta-models/Muse-Glimmer-30B",
 }
+
 
 type tagsResponse struct {
 	Models []struct {
@@ -772,7 +778,15 @@ func (c *Client) StreamChat(ctx context.Context, model string, messages []Messag
 	if model == "" {
 		model = c.ChatModel
 	}
-	cr := chatRequest{Model: model, Messages: messages, Stream: true, StreamOptions: &chatStreamOptions{IncludeUsage: true}}
+	cr := chatRequest{
+		Model:         model,
+		Messages:      messages,
+		Stream:        true,
+		StreamOptions: &chatStreamOptions{IncludeUsage: true},
+		Temperature:   c.Temperature,
+		TopP:          c.TopP,
+		MaxTokens:     c.MaxTokens,
+	}
 	if c.SendThink {
 		cr.Think = thinkLevel
 	}
@@ -806,6 +820,9 @@ func (c *Client) StreamChat(ctx context.Context, model string, messages []Messag
 	// providers actually send these.
 	rateLimit := parseRateLimitHeaders(resp.Header)
 
+	museFilter := newMuseStreamFilter(onToken, onReasoning)
+	isMuse := IsMuseModel(model) || IsMuseModel(c.ChatModel)
+
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
@@ -823,7 +840,11 @@ func (c *Client) StreamChat(ctx context.Context, model string, messages []Messag
 		}
 		if len(chunk.Choices) > 0 {
 			if chunk.Choices[0].Delta.Content != "" {
-				onToken(chunk.Choices[0].Delta.Content)
+				if isMuse {
+					museFilter.Feed(chunk.Choices[0].Delta.Content)
+				} else {
+					onToken(chunk.Choices[0].Delta.Content)
+				}
 			}
 			if chunk.Choices[0].Delta.Reasoning != "" && onReasoning != nil {
 				onReasoning(chunk.Choices[0].Delta.Reasoning)
@@ -837,6 +858,9 @@ func (c *Client) StreamChat(ctx context.Context, model string, messages []Messag
 				RateLimit:        rateLimit,
 			})
 		}
+	}
+	if isMuse {
+		museFilter.Flush()
 	}
 	return scanner.Err()
 }
@@ -858,7 +882,15 @@ func (c *Client) Chat(ctx context.Context, model string, messages []Message, too
 	if model == "" {
 		model = c.ChatModel
 	}
-	creq := chatRequest{Model: model, Messages: messages, Stream: false, Tools: tools}
+	creq := chatRequest{
+		Model:       model,
+		Messages:    messages,
+		Stream:      false,
+		Tools:       tools,
+		Temperature: c.Temperature,
+		TopP:        c.TopP,
+		MaxTokens:   c.MaxTokens,
+	}
 	if c.SendThink {
 		creq.Think = thinkLevel
 	}
@@ -895,6 +927,11 @@ func (c *Client) Chat(ctx context.Context, model string, messages []Message, too
 	}
 
 	reply := cr.Choices[0].Message
+	if IsMuseModel(model) || IsMuseModel(c.ChatModel) || strings.Contains(reply.Content, "to=user") || strings.Contains(reply.Content, "to=self") {
+		cleaned, _ := CleanMuseContent(reply.Content)
+		reply.Content = cleaned
+	}
+
 	if len(reply.ToolCalls) == 0 && len(tools) > 0 {
 		if call, ok := parseFallbackToolCall(reply.Content, tools); ok {
 			reply.ToolCalls = []ToolCall{call}

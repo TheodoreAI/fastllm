@@ -177,7 +177,7 @@ func stripProviderPrefix(model string) (bare, provider string, ok bool) {
 		return strings.TrimPrefix(model, OSUPrefix), "osu", true
 	case strings.HasPrefix(model, ClusterPrefix):
 		return strings.TrimPrefix(model, ClusterPrefix), "osu", true
-	case model == "muse-glimmer" || model == "muse-glimmer-30b" || model == "meta-models/Muse-Glimmer-30B":
+	case IsMuseModel(model):
 		return model, "osu", true
 	default:
 		return "", "", false
@@ -390,13 +390,20 @@ func (r *Router) ListModels(ctx context.Context) ([]Model, error) {
 		liveModels, err := clouds.osu.ListModels(listCtx)
 		cancel()
 		if err == nil && len(liveModels) > 0 {
+			seen := make(map[string]bool)
 			for _, m := range liveModels {
-				full := OSUPrefix + m.Name
+				canonical := CanonicalOSUModelName(m.Name)
+				if seen[canonical] {
+					continue
+				}
+				seen[canonical] = true
+				full := OSUPrefix + canonical
 				out = append(out, Model{Name: full, SupportsFileTools: SupportsToolsForModel(full), SupportsVision: SupportsVisionForModel(full), Provider: "osu"})
 			}
 		} else {
 			for _, name := range OSUModels {
-				full := OSUPrefix + name
+				canonical := CanonicalOSUModelName(name)
+				full := OSUPrefix + canonical
 				out = append(out, Model{Name: full, SupportsFileTools: SupportsToolsForModel(full), SupportsVision: SupportsVisionForModel(full), Provider: "osu"})
 			}
 		}
