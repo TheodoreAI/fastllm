@@ -1,7 +1,6 @@
 package harness
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -70,6 +69,7 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 	}
 	thinkLevel := initialReq.ThinkLevel
 	permissionMode := PermissionAsk
+	expandedTools := false
 
 	// Initialize Git checkpoint manager and background process manager
 	checkpointMgr := NewCheckpointManager(absWorkingDir)
@@ -84,14 +84,38 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 
 	fileReader := files.New(absWorkingDir, true)
 
-	scanner := bufio.NewScanner(os.Stdin)
-	permissions := NewPermissionController(permissionMode, scanner)
-	tools := interactiveTools(allowCmds, permissionMode)
-
 	sessionMessages := []llm.Message{
 		{Role: "system", Content: systemPrompt + rulesPrompt},
 	}
 	sessionStore, sessionStoreErr := DefaultSessionStore()
+	var completionModels, completionSessions []string
+	refreshCompletions := func() {
+		completionModels = completionModels[:0]
+		if settings != nil {
+			for _, item := range settings.Models {
+				completionModels = append(completionModels, item.ID)
+			}
+		}
+		completionSessions = completionSessions[:0]
+		if sessionStore != nil {
+			if items, err := sessionStore.List(); err == nil {
+				for _, item := range items {
+					completionSessions = append(completionSessions, item.ID)
+				}
+			}
+		}
+	}
+	refreshCompletions()
+	historyPath := filepath.Join(os.TempDir(), "fastllm-history")
+	if sessionStore != nil {
+		historyPath = filepath.Join(filepath.Dir(sessionStore.Dir), "history")
+	}
+	input := newInteractiveInput(historyPath, func(line string, cursor int) []string {
+		return interactiveCompletions(line, cursor, absWorkingDir, completionModels, completionSessions)
+	})
+	defer input.Close()
+	permissions := NewPermissionController(permissionMode, input)
+	tools := interactiveTools(allowCmds, permissionMode)
 	var activeSession *InteractiveSession
 	if sessionStoreErr == nil {
 		activeSession = sessionStore.New(absWorkingDir, model, InteractiveRuntime{
@@ -106,18 +130,20 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 		activeSession.WorkingDir = absWorkingDir
 		activeSession.Model = model
 		activeSession.Runtime = InteractiveRuntime{
-			MaxTurns: maxTurns, CommandTimeout: cmdTimeout, ThinkLevel: thinkLevel, AllowCommands: allowCmds, PermissionMode: permissionMode,
+			MaxTurns: maxTurns, CommandTimeout: cmdTimeout, ThinkLevel: thinkLevel, AllowCommands: allowCmds, PermissionMode: permissionMode, ExpandedTools: expandedTools,
 		}
 		activeSession.Messages = append([]llm.Message(nil), sessionMessages[1:]...)
-		activeSession.Title = sessionTitle(activeSession.Messages)
+		if !activeSession.CustomTitle {
+			activeSession.Title = sessionTitle(activeSession.Messages)
+		}
 		if err := sessionStore.Save(activeSession); err != nil {
 			fmt.Println(ColorYellow(fmt.Sprintf("  %s Session autosave failed: %v", SymCross, err)))
+		} else {
+			refreshCompletions()
 		}
 	}
 	if sessionStoreErr != nil {
 		fmt.Println(ColorYellow(fmt.Sprintf("  %s Session persistence unavailable: %v", SymCross, sessionStoreErr)))
-	} else {
-		saveSession()
 	}
 
 	switchWorkspace := func(newDir string) error {
@@ -138,6 +164,61 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 		return nil
 	}
 
+	loadSession := func(loaded *InteractiveSession) error {
+		resolvedDir, err := resolveInteractiveDirectory(absWorkingDir, loaded.WorkingDir)
+		if err != nil {
+			return err
+		}
+		model = loaded.Model
+		maxTurns = loaded.Runtime.MaxTurns
+		if maxTurns <= 0 {
+			maxTurns = 20
+		}
+		cmdTimeout = loaded.Runtime.CommandTimeout
+		if cmdTimeout <= 0 {
+			cmdTimeout = 60 * time.Second
+		}
+		thinkLevel, allowCmds = loaded.Runtime.ThinkLevel, loaded.Runtime.AllowCommands
+		permissionMode = loaded.Runtime.PermissionMode
+		if permissionMode == "" {
+			permissionMode = PermissionAsk
+		}
+		expandedTools = loaded.Runtime.ExpandedTools
+		permissions.SetMode(permissionMode)
+		tools = interactiveTools(allowCmds, permissionMode)
+		if err := switchWorkspace(resolvedDir); err != nil {
+			return err
+		}
+		sessionMessages = append([]llm.Message{{Role: "system", Content: systemPrompt + rulesPrompt}}, loaded.Messages...)
+		loaded.ClosedAt = nil
+		activeSession = loaded
+		return nil
+	}
+
+	if sessionStore != nil {
+		_, _ = sessionStore.Prune(time.Now().UTC(), 100)
+		var recovery *InteractiveSession
+		if initialReq.ResumeSession != "" {
+			if strings.EqualFold(initialReq.ResumeSession, "last") {
+				recovery, err = sessionStore.Latest()
+			} else {
+				recovery, err = sessionStore.Load(initialReq.ResumeSession)
+			}
+		} else if latest, latestErr := sessionStore.Latest(); latestErr == nil && latest.ClosedAt == nil && len(latest.Messages) > 0 {
+			recovery = latest
+		}
+		if err == nil && recovery != nil {
+			err = loadSession(recovery)
+			if err == nil {
+				fmt.Println(ColorGreen(fmt.Sprintf("  %s Recovered session %s — %s", SymCheck, recovery.ID, recovery.Title)))
+			}
+		}
+		if err != nil {
+			fmt.Println(ColorYellow(fmt.Sprintf("  %s Could not resume session: %v", SymCross, err)))
+		}
+		saveSession()
+	}
+
 	runShellCommand := func(command string) {
 		path, isDirectoryChange := parseDirectoryChange(command)
 		if isDirectoryChange {
@@ -154,15 +235,15 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 	var shellMode bool
 
 	for {
+		prompt := FormatPrompt(model)
 		if shellMode {
-			fmt.Print(FormatShellPrompt(absWorkingDir))
-		} else {
-			fmt.Print(FormatPrompt(model))
+			prompt = FormatShellPrompt(absWorkingDir)
 		}
-		if !scanner.Scan() {
+		rawLine, readErr := input.ReadLine(prompt)
+		if readErr != nil {
 			break
 		}
-		line := strings.TrimSpace(scanner.Text())
+		line := strings.TrimSpace(rawLine)
 		if line == "" {
 			continue
 		}
@@ -218,6 +299,10 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 			cmd := strings.ToLower(parts[0])
 			switch cmd {
 			case "/exit", "/quit":
+				if activeSession != nil {
+					now := time.Now().UTC()
+					activeSession.ClosedAt = &now
+				}
 				saveSession()
 				fmt.Println(ColorGray("\nSession ended. Goodbye!"))
 				return nil
@@ -301,6 +386,47 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 				}
 				continue
 
+			case "/session":
+				target := activeSession
+				var detailErr error
+				if len(parts) > 1 && sessionStore != nil {
+					target, detailErr = sessionStore.Load(parts[1])
+				}
+				if detailErr != nil || target == nil {
+					fmt.Println(ColorRed(fmt.Sprintf("  %s Cannot load session details: %v", SymCross, detailErr)))
+				} else {
+					fmt.Printf("\n%s\n  ID: %s\n  Title: %s\n  Updated: %s\n  Directory: %s\n  Model: %s\n  Messages: %d\n\n", ColorCyan(StyleBold("Session Details")), target.ID, target.Title, target.UpdatedAt.Local().Format(time.RFC1123), target.WorkingDir, target.Model, len(target.Messages))
+				}
+				continue
+
+			case "/rename":
+				if activeSession == nil || sessionStore == nil || len(parts) < 2 {
+					fmt.Println(ColorYellow("  Usage: /rename <new title>"))
+					continue
+				}
+				title := strings.TrimSpace(line[len(parts[0]):])
+				activeSession.Title, activeSession.CustomTitle = title, true
+				saveSession()
+				fmt.Println(ColorGreen("  " + SymCheck + " Session renamed."))
+				continue
+
+			case "/delete-session":
+				if sessionStore == nil || len(parts) < 2 {
+					fmt.Println(ColorYellow("  Usage: /delete-session <session-id>"))
+					continue
+				}
+				if activeSession != nil && parts[1] == activeSession.ID {
+					fmt.Println(ColorYellow("  Start or resume another session before deleting the active session."))
+					continue
+				}
+				if err := sessionStore.Delete(parts[1]); err != nil {
+					fmt.Println(ColorRed(fmt.Sprintf("  %s Delete failed: %v", SymCross, err)))
+				} else {
+					refreshCompletions()
+					fmt.Println(ColorGreen("  " + SymCheck + " Session deleted."))
+				}
+				continue
+
 			case "/resume":
 				if sessionStore == nil || len(parts) < 2 {
 					fmt.Println(ColorYellow("  Usage: /resume <session-id>"))
@@ -311,45 +437,29 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 					fmt.Println(ColorRed(fmt.Sprintf("  %s Cannot resume session: %v", SymCross, err)))
 					continue
 				}
-				resolvedDir, err := resolveInteractiveDirectory(absWorkingDir, loaded.WorkingDir)
-				if err != nil {
-					fmt.Println(ColorRed(fmt.Sprintf("  %s Cannot restore workspace: %v", SymCross, err)))
-					continue
+				if activeSession != nil {
+					now := time.Now().UTC()
+					activeSession.ClosedAt = &now
 				}
 				saveSession()
-				model = loaded.Model
-				maxTurns = loaded.Runtime.MaxTurns
-				if maxTurns <= 0 {
-					maxTurns = 20
-				}
-				cmdTimeout = loaded.Runtime.CommandTimeout
-				if cmdTimeout <= 0 {
-					cmdTimeout = 60 * time.Second
-				}
-				thinkLevel = loaded.Runtime.ThinkLevel
-				allowCmds = loaded.Runtime.AllowCommands
-				permissionMode = loaded.Runtime.PermissionMode
-				if permissionMode == "" {
-					permissionMode = PermissionAsk
-				}
-				permissions.SetMode(permissionMode)
-				tools = interactiveTools(allowCmds, permissionMode)
-				if err := switchWorkspace(resolvedDir); err != nil {
+				if err := loadSession(loaded); err != nil {
 					fmt.Println(ColorRed(fmt.Sprintf("  %s Cannot restore workspace: %v", SymCross, err)))
 					continue
 				}
-				sessionMessages = append([]llm.Message{{Role: "system", Content: systemPrompt + rulesPrompt}}, loaded.Messages...)
-				activeSession = loaded
 				fmt.Println(ColorGreen(fmt.Sprintf("  %s Resumed %s — %s", SymCheck, loaded.ID, loaded.Title)))
 				continue
 
 			case "/new":
+				if activeSession != nil {
+					now := time.Now().UTC()
+					activeSession.ClosedAt = &now
+				}
 				saveSession()
 				sessionMessages = []llm.Message{{Role: "system", Content: systemPrompt + rulesPrompt}}
 				sessionMetrics = SessionMetrics{}
 				if sessionStore != nil {
 					activeSession = sessionStore.New(absWorkingDir, model, InteractiveRuntime{
-						MaxTurns: maxTurns, CommandTimeout: cmdTimeout, ThinkLevel: thinkLevel, AllowCommands: allowCmds, PermissionMode: permissionMode,
+						MaxTurns: maxTurns, CommandTimeout: cmdTimeout, ThinkLevel: thinkLevel, AllowCommands: allowCmds, PermissionMode: permissionMode, ExpandedTools: expandedTools,
 					})
 					saveSession()
 				}
@@ -362,7 +472,7 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 					continue
 				}
 				if len(parts) < 3 {
-					fmt.Println(ColorYellow("  Usage: /set <turns|timeout|think|commands|permissions> <value>"))
+					fmt.Println(ColorYellow("  Usage: /set <turns|timeout|think|commands|permissions|output> <value>"))
 					continue
 				}
 				value := strings.ToLower(parts[2])
@@ -410,6 +520,14 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 						permissionMode = parsed
 						permissions.SetMode(parsed)
 						tools = interactiveTools(allowCmds, permissionMode)
+					}
+				case "output":
+					if value == "expanded" {
+						expandedTools = true
+					} else if value == "compact" {
+						expandedTools = false
+					} else {
+						setErr = fmt.Errorf("output must be compact or expanded")
 					}
 				default:
 					setErr = fmt.Errorf("unknown setting %q", parts[1])
@@ -564,6 +682,10 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 		}
 
 		if line == "exit" || line == "quit" {
+			if activeSession != nil {
+				now := time.Now().UTC()
+				activeSession.ClosedAt = &now
+			}
 			saveSession()
 			fmt.Println("Goodbye!")
 			return nil
@@ -608,14 +730,19 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 			processMgr,
 			&sessionMetrics,
 			&sessionMessages,
+			expandedTools,
 		)
 		saveSession()
 		cancel()
 		signal.Stop(sigChan)
 	}
 
+	if activeSession != nil {
+		now := time.Now().UTC()
+		activeSession.ClosedAt = &now
+	}
 	saveSession()
-	return scanner.Err()
+	return nil
 }
 
 func (r *Runner) runInteractiveTurn(
@@ -632,6 +759,7 @@ func (r *Runner) runInteractiveTurn(
 	processMgr *ProcessManager,
 	sessionMetrics *SessionMetrics,
 	sessionMessages *[]llm.Message,
+	expandedTools bool,
 ) {
 	for turn := 1; turn <= maxTurns; turn++ {
 		if ctx.Err() != nil {
@@ -639,13 +767,39 @@ func (r *Runner) runInteractiveTurn(
 			return
 		}
 
-		// Context compaction to prevent context window explosion
-		*sessionMessages, _ = CompactMessages(*sessionMessages, DefaultCompactionConfig())
+		cfg := DefaultCompactionConfig()
+		contextChars := messageCharacterCount(*sessionMessages)
+		if contextChars >= cfg.MaxTotalChars*3/4 {
+			fmt.Println(ColorYellow(fmt.Sprintf("  Context is at about %d%% of the compaction threshold.", contextChars*100/cfg.MaxTotalChars)))
+		}
+		var compacted bool
+		*sessionMessages, compacted = CompactMessages(*sessionMessages, cfg)
+		if compacted {
+			fmt.Println(ColorYellow("  Older tool output was compacted to preserve context space."))
+		}
 
 		turnStart := time.Now()
 		promptTokens := countApproxTokens(*sessionMessages)
 
-		reply, err := r.LLM.Chat(ctx, model, *sessionMessages, tools, thinkLevel)
+		fmt.Print(ColorGray("\r  Thinking… 0s"))
+		indicatorDone := make(chan struct{})
+		go func() {
+			ticker := time.NewTicker(time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					fmt.Printf(ColorGray("\r  Thinking… %s"), time.Since(turnStart).Round(time.Second))
+				case <-indicatorDone:
+					return
+				}
+			}
+		}()
+		reply, err := chatWithRetry(ctx, r.LLM, model, *sessionMessages, tools, thinkLevel, func(attempt int, delay time.Duration, retryErr error) {
+			fmt.Printf("\r%s\n", ColorYellow(fmt.Sprintf("  Model request failed; retry %d/3 in %s: %v", attempt, delay, retryErr)))
+		})
+		close(indicatorDone)
+		fmt.Print("\r\033[2K")
 		turnDuration := time.Since(turnStart)
 		if err != nil {
 			if ctx.Err() == nil {
@@ -673,19 +827,34 @@ func (r *Runner) runInteractiveTurn(
 		var taskFinished bool
 		var finishSummary string
 		for _, call := range reply.ToolCalls {
+			previewLines := 8
+			if expandedTools {
+				previewLines = 1000000
+			}
 			if ctx.Err() != nil {
 				fmt.Println(ColorYellow("\nTurn canceled."))
 				return
 			}
 
+			normalizedArgs, argErr := normalizeToolArguments(call.Function.Arguments)
+			if argErr != nil {
+				toolResult := argErr.Error()
+				fmt.Println(FormatToolCall(call.Function.Name, summarizeArgs(call.Function.Arguments)))
+				fmt.Println(FormatToolResult(call.Function.Name, toolResult, previewLines))
+				*sessionMessages = append(*sessionMessages, llm.Message{Role: "tool", Content: toolResult, ToolCallID: call.ID})
+				continue
+			}
+			call.Function.Arguments = normalizedArgs
 			fmt.Println(FormatToolCall(call.Function.Name, summarizeArgs(call.Function.Arguments)))
 			if requiresPermission(call.Function.Name) && !permissions.Authorize(call.Function.Name, summarizeArgs(call.Function.Arguments)) {
 				toolResult := "Permission denied by user. Do not retry this action unless the user explicitly asks."
-				fmt.Println(FormatToolResult(call.Function.Name, toolResult, 8))
+				fmt.Println(FormatToolResult(call.Function.Name, toolResult, previewLines))
 				*sessionMessages = append(*sessionMessages, llm.Message{Role: "tool", Content: toolResult, ToolCallID: call.ID})
 				continue
 			}
 
+			fmt.Println(FormatToolState(call.Function.Name, "running", 0))
+			toolStart := time.Now()
 			var toolResult string
 			switch call.Function.Name {
 			case "read_file":
@@ -778,7 +947,7 @@ func (r *Runner) runInteractiveTurn(
 						if args.TimeoutSeconds > 0 {
 							perCallTimeout = time.Duration(args.TimeoutSeconds) * time.Second
 						}
-						toolResult = r.executeRunCommand(ctx, absWorkingDir, args.Command, perCallTimeout)
+						toolResult = r.executeRunCommandLive(ctx, absWorkingDir, args.Command, perCallTimeout)
 					}
 				}
 
@@ -840,7 +1009,8 @@ func (r *Runner) runInteractiveTurn(
 				toolResult = fmt.Sprintf("Error: unknown tool %q", call.Function.Name)
 			}
 
-			fmt.Println(FormatToolResult(call.Function.Name, toolResult, 8))
+			fmt.Println(FormatToolState(call.Function.Name, "completed", time.Since(toolStart)))
+			fmt.Println(FormatToolResult(call.Function.Name, toolResult, previewLines))
 
 			*sessionMessages = append(*sessionMessages, llm.Message{
 				Role:       "tool",

@@ -260,7 +260,15 @@ func FormatToolCall(toolName, argsSummary string) string {
 	}
 
 	summary := ColorWhite(argsSummary)
-	return fmt.Sprintf("\n  %s %s %s", ColorGray(SymCornerTL+SymHLine), badge, summary)
+	return fmt.Sprintf("\n  %s %s %s %s", ColorGray(SymCornerTL+SymHLine), badge, ColorGray("pending"), summary)
+}
+
+func FormatToolState(toolName, state string, elapsed time.Duration) string {
+	detail := state
+	if elapsed > 0 {
+		detail = fmt.Sprintf("%s in %s", state, elapsed.Round(time.Millisecond))
+	}
+	return fmt.Sprintf("  %s  %s %s", ColorGray(SymVLine), ColorCyan(toolName), ColorGray(detail))
 }
 
 // FormatToolResult renders the outcome of a tool execution with structured indentation.
@@ -454,6 +462,9 @@ func FormatHelp() string {
 		{"/status", "Inspect session token usage, latency, cost, and jobs"},
 		{"/sessions", "List saved interactive sessions"},
 		{"/resume <id>", "Resume a saved session"},
+		{"/session [id]", "Show session details"},
+		{"/rename <title>", "Rename the active session"},
+		{"/delete-session <id>", "Delete an inactive saved session"},
 		{"/new", "Save the current session and start a new one"},
 		{"/c, /clear", "Clear conversation context and declutter UI screen"},
 		{"/cls", "Clear terminal screen without resetting context"},
@@ -468,6 +479,7 @@ func FormatHelp() string {
 		{"/set think <level>", "Set off, low, medium, or high reasoning"},
 		{"/set commands <on|off>", "Enable or disable command/process tools"},
 		{"/set permissions <mode>", "Set ask, read-only, or auto tool permissions"},
+		{"/set output <mode>", "Set compact or expanded tool results"},
 	})
 
 	renderSection("Shell & Execution", []cmdEntry{

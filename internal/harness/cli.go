@@ -43,6 +43,7 @@ func RunCLI(args []string) int {
 	noCmdsFlag := fs.Bool("no-commands", false, "Disable the run_command tool")
 	jsonFlag := fs.Bool("json", false, "Output only the final RunResult JSON")
 	quietFlag := fs.Bool("quiet", false, "Suppress turn-by-turn progress output")
+	resumeFlag := fs.String("resume", "", "Resume an interactive session by ID, or 'last'")
 
 	if err := fs.Parse(args); err != nil {
 		return 1
@@ -141,6 +142,7 @@ func RunCLI(args []string) int {
 		AllowCommands:  !*noCmdsFlag,
 		CommandTimeout: time.Duration(*timeoutFlag) * time.Second,
 		ThinkLevel:     *thinkFlag,
+		ResumeSession:  strings.TrimSpace(*resumeFlag),
 	}
 
 	// If no task was specified, launch the interactive TUI REPL

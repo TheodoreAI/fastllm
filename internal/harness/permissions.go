@@ -30,14 +30,21 @@ func ParsePermissionMode(value string) (PermissionMode, error) {
 type PermissionController struct {
 	Mode          PermissionMode
 	SessionGrants map[string]bool
-	Scanner       *bufio.Scanner
+	Input         interactiveInput
 }
 
-func NewPermissionController(mode PermissionMode, scanner *bufio.Scanner) *PermissionController {
+func NewPermissionController(mode PermissionMode, source any) *PermissionController {
 	if mode == "" {
 		mode = PermissionAsk
 	}
-	return &PermissionController{Mode: mode, SessionGrants: make(map[string]bool), Scanner: scanner}
+	var input interactiveInput
+	switch value := source.(type) {
+	case interactiveInput:
+		input = value
+	case *bufio.Scanner:
+		input = &scannerInput{scanner: value}
+	}
+	return &PermissionController{Mode: mode, SessionGrants: make(map[string]bool), Input: input}
 }
 
 func (p *PermissionController) SetMode(mode PermissionMode) {
@@ -64,12 +71,16 @@ func (p *PermissionController) Authorize(toolName, summary string) bool {
 
 	fmt.Println(FormatPermissionPrompt(toolName, summary))
 	for {
-		fmt.Print(ColorYellow("  Allow? [y] once  [a] this tool for session  [n] deny: "))
-		if p.Scanner == nil || !p.Scanner.Scan() {
+		if p.Input == nil {
 			fmt.Println()
 			return false
 		}
-		switch strings.ToLower(strings.TrimSpace(p.Scanner.Text())) {
+		answer, err := p.Input.ReadLine(ColorYellow("  Allow? [y] once  [a] this tool for session  [n] deny: "))
+		if err != nil {
+			fmt.Println()
+			return false
+		}
+		switch strings.ToLower(strings.TrimSpace(answer)) {
 		case "y", "yes":
 			return true
 		case "a", "always", "session":
