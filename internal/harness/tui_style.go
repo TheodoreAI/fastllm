@@ -273,7 +273,7 @@ func FormatToolResult(toolName, result string, maxPreviewLines int) string {
 	lines := strings.Split(trimmed, "\n")
 
 	var b strings.Builder
-	isErr := strings.HasPrefix(trimmed, "Error") || strings.HasPrefix(trimmed, "error")
+	isErr := strings.HasPrefix(trimmed, "Error") || strings.HasPrefix(trimmed, "error") || strings.HasPrefix(trimmed, "Permission denied")
 
 	// Print first few lines of output
 	showCount := len(lines)
@@ -467,6 +467,7 @@ func FormatHelp() string {
 		{"/set timeout <sec>", "Set command timeout (1-3600 seconds)"},
 		{"/set think <level>", "Set off, low, medium, or high reasoning"},
 		{"/set commands <on|off>", "Enable or disable command/process tools"},
+		{"/set permissions <mode>", "Set ask, read-only, or auto tool permissions"},
 	})
 
 	renderSection("Shell & Execution", []cmdEntry{
@@ -500,7 +501,7 @@ func FormatHelp() string {
 	return b.String()
 }
 
-func FormatRuntimeCard(maxTurns int, timeout time.Duration, thinkLevel string, allowCommands bool, sessionID string) string {
+func FormatRuntimeCard(maxTurns int, timeout time.Duration, thinkLevel string, allowCommands bool, permissionMode PermissionMode, sessionID string) string {
 	think := thinkLevel
 	if think == "" {
 		think = "off"
@@ -516,9 +517,24 @@ func FormatRuntimeCard(maxTurns int, timeout time.Duration, thinkLevel string, a
 		FormatKV("timeout", timeout.String(), 12),
 		FormatKV("thinking", think, 12),
 		FormatKV("commands", commands, 12),
+		FormatKV("permissions", string(permissionMode), 12),
 		"",
 	}
 	return FormatCard("Runtime Settings", lines, 74)
+}
+
+func FormatPermissionPrompt(toolName, summary string) string {
+	runes := []rune(summary)
+	if len(runes) > 52 {
+		summary = string(runes[:49]) + "..."
+	}
+	lines := []string{
+		"",
+		FormatKV("tool", toolName, 10),
+		FormatKV("request", summary, 10),
+		"",
+	}
+	return FormatCard("Permission Required", lines, 74)
 }
 
 func FormatSessionsTable(sessions []InteractiveSession, activeID string) string {
