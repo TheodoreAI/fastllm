@@ -26,6 +26,8 @@ func getenv(key, fallback string) string {
 // RunCLI parses CLI flags and executes an autonomous harness task.
 // Returns the exit code (0 for success, 1 for failure).
 func RunCLI(args []string) int {
+	initConsole()
+
 	fs := flag.NewFlagSet("harness", flag.ContinueOnError)
 
 	taskFlag := fs.String("task", "", "Task instruction for the agent to execute")
@@ -161,14 +163,20 @@ func RunCLI(args []string) int {
 	}()
 
 	if !*jsonFlag && !*quietFlag {
-		fmt.Println("==================================================")
-		fmt.Println(" fastllm Autonomous Agent Harness")
-		fmt.Printf(" Task:        %s\n", task)
-		fmt.Printf(" Directory:   %s\n", workDir)
-		fmt.Printf(" Model:       %s\n", model)
-		fmt.Printf(" Endpoint:    %s\n", baseURL)
-		fmt.Printf(" Commands:    %v\n", !*noCmdsFlag)
-		fmt.Println("==================================================")
+		cmdStr := ColorGreen("enabled")
+		if *noCmdsFlag {
+			cmdStr = ColorYellow("disabled")
+		}
+		lines := []string{
+			"",
+			FormatKV("task", task, 10),
+			FormatKV("directory", workDir, 10),
+			FormatKV("model", model, 10),
+			FormatKV("endpoint", baseURL, 10),
+			FormatKV("commands", cmdStr, 10),
+			"",
+		}
+		fmt.Println(FormatCard("fastllm "+SymDot+" autonomous agent task", lines, 74))
 	}
 
 	onEvent := func(ev Event) {
@@ -177,27 +185,18 @@ func RunCLI(args []string) int {
 		}
 		switch ev.Type {
 		case EventTurnStart:
-			fmt.Printf("\n[Turn %d]\n", ev.Turn)
+			// Turn started
 		case EventToolCall:
 			if ev.ToolCall != nil {
-				fmt.Printf("  -> tool: %s %s\n", ev.ToolCall.Name, summarizeArgs(ev.ToolCall.Arguments))
+				fmt.Println(FormatToolCall(ev.ToolCall.Name, summarizeArgs(ev.ToolCall.Arguments)))
 			}
 		case EventToolResult:
 			if ev.ToolCall != nil {
-				lines := strings.Split(strings.TrimSpace(ev.ToolCall.Result), "\n")
-				firstLine := ""
-				if len(lines) > 0 {
-					firstLine = lines[0]
-				}
-				if len(lines) > 1 {
-					fmt.Printf("     result: %s (... %d more lines)\n", firstLine, len(lines)-1)
-				} else {
-					fmt.Printf("     result: %s\n", firstLine)
-				}
+				fmt.Println(FormatToolResult(ev.ToolCall.Name, ev.ToolCall.Result, 4))
 			}
 		case EventTurnComplete:
 			if ev.Metrics != nil {
-				fmt.Printf("  [%s]\n", ev.Metrics.FormatTurnSummary())
+				fmt.Println(FormatTurnSummary(*ev.Metrics))
 			}
 		}
 	}
@@ -215,28 +214,43 @@ func RunCLI(args []string) int {
 	}
 
 	if !*quietFlag {
-		fmt.Println("\n==================================================")
-		if result != nil && result.Success {
-			fmt.Println(" Status:   SUCCESS")
-		} else {
-			fmt.Println(" Status:   FAILED")
+		statusVal := ColorGreen(SymCheck + " SUCCESS")
+		if result == nil || !result.Success {
+			statusVal = ColorRed(SymCross + " FAILED")
 		}
+
+		var lines []string
+		lines = append(lines, "")
+		lines = append(lines, FormatKV("status", statusVal, 10))
+
 		if result != nil {
-			fmt.Printf(" Turns:    %d\n", result.Turns)
-			fmt.Printf(" Duration: %.2fs\n", float64(result.DurationMS)/1000.0)
+			lines = append(lines, FormatKV("turns", fmt.Sprintf("%d", result.Turns), 10))
+			lines = append(lines, FormatKV("duration", fmt.Sprintf("%.2fs", float64(result.DurationMS)/1000.0), 10))
 			if result.Metrics != nil {
-				fmt.Printf(" Metrics:  %s\n", result.Metrics.FormatSessionSummary())
+				costStr := "$0.0000"
+				if result.Metrics.TotalCost > 0 {
+					costStr = fmt.Sprintf("$%.4f", result.Metrics.TotalCost)
+				}
+				tokenSummary := fmt.Sprintf("%d total (%d prompt %s %d completion %s %s)",
+					result.Metrics.TotalTokens, result.Metrics.TotalPromptTokens, SymDot,
+					result.Metrics.TotalCompletionTokens, SymDot, costStr)
+				lines = append(lines, FormatKV("tokens", tokenSummary, 10))
 			}
 			if result.Error != "" {
-				fmt.Printf(" Error:    %s\n", result.Error)
+				lines = append(lines, FormatKV("error", ColorRed(result.Error), 10))
 			}
 			if result.FinalResponse != "" {
-				fmt.Printf("\nResponse:\n%s\n", result.FinalResponse)
+				lines = append(lines, "")
+				lines = append(lines, ColorBrightWhite(StyleBold("Final Response:")))
+				for _, respLine := range strings.Split(result.FinalResponse, "\n") {
+					lines = append(lines, respLine)
+				}
 			}
 		} else if err != nil {
-			fmt.Printf(" Error:    %v\n", err)
+			lines = append(lines, FormatKV("error", ColorRed(err.Error()), 10))
 		}
-		fmt.Println("==================================================")
+		lines = append(lines, "")
+		fmt.Println("\n" + FormatCard("Task Execution Summary", lines, 74))
 	}
 
 	if err != nil || (result != nil && !result.Success) {
