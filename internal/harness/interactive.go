@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -88,15 +90,64 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 		{Role: "system", Content: systemPrompt + rulesPrompt},
 	}
 
+	var shellMode bool
 	scanner := bufio.NewScanner(os.Stdin)
 
 	for {
-		fmt.Print(FormatPrompt(model))
+		if shellMode {
+			fmt.Print(FormatShellPrompt(absWorkingDir))
+		} else {
+			fmt.Print(FormatPrompt(model))
+		}
 		if !scanner.Scan() {
 			break
 		}
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
+			continue
+		}
+
+		// If in shell mode, execute shell commands directly
+		if shellMode {
+			if line == "exit" || line == "quit" || line == "/exit" || line == "/quit" || line == "/shell" || line == "/sh" {
+				shellMode = false
+				fmt.Println(ColorGreen("  " + SymCheck + " Returned to Agent Mode."))
+				continue
+			}
+			if line == "/c" || line == "/clear" {
+				ClearScreen()
+				sessionMessages = []llm.Message{
+					{Role: "system", Content: systemPrompt + rulesPrompt},
+				}
+				fmt.Println(ColorGreen("  " + SymCheck + " Conversation and screen cleared."))
+				continue
+			}
+			if line == "/cls" {
+				ClearScreen()
+				fmt.Println(ColorGreen("  " + SymCheck + " Screen cleared."))
+				continue
+			}
+			if line == "/help" {
+				fmt.Println(FormatHelp())
+				continue
+			}
+			_ = runInteractiveCommand(absWorkingDir, line)
+			continue
+		}
+
+		// In Agent mode: instant shell command execution via !<cmd> or $ <cmd>
+		if strings.HasPrefix(line, "!") {
+			cmdStr := strings.TrimSpace(line[1:])
+			if cmdStr != "" {
+				_ = runInteractiveCommand(absWorkingDir, cmdStr)
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "$ ") {
+			cmdStr := strings.TrimSpace(line[2:])
+			if cmdStr != "" {
+				_ = runInteractiveCommand(absWorkingDir, cmdStr)
+			}
 			continue
 		}
 
@@ -111,6 +162,30 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 
 			case "/help":
 				fmt.Println(FormatHelp())
+				continue
+
+			case "/shell", "/sh":
+				if len(parts) > 1 {
+					cmdStr := strings.TrimSpace(line[len(parts[0]):])
+					_ = runInteractiveCommand(absWorkingDir, cmdStr)
+					continue
+				}
+				shellMode = true
+				fmt.Println(ColorYellow("  " + SymBranch + " Engaged Shell Mode. Type shell commands directly, or 'exit' / '/shell' to return to agent."))
+				continue
+
+			case "/c", "/clear":
+				ClearScreen()
+				sessionMessages = []llm.Message{
+					{Role: "system", Content: systemPrompt + rulesPrompt},
+				}
+				fmt.Println(FormatWelcomeBanner(absWorkingDir, model, configPath, checkpointMgr.IsGitRepo(), len(discoveredRules), allowCmds))
+				fmt.Println(ColorGreen("  " + SymCheck + " Conversation and screen cleared."))
+				continue
+
+			case "/cls":
+				ClearScreen()
+				fmt.Println(ColorGreen("  " + SymCheck + " Screen cleared."))
 				continue
 
 			case "/undo":
@@ -188,13 +263,6 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 						fmt.Println(ColorGreen(fmt.Sprintf("  %s Killed process %s.", SymCheck, parts[1])))
 					}
 				}
-				continue
-
-			case "/clear":
-				sessionMessages = []llm.Message{
-					{Role: "system", Content: systemPrompt + rulesPrompt},
-				}
-				fmt.Println(ColorGreen("  " + SymCheck + " Conversation context cleared."))
 				continue
 
 			case "/model", "/models":
@@ -569,6 +637,59 @@ func applyModelParameters(client *llm.Client, params map[string]interface{}) {
 			i := int(f)
 			client.MaxTokens = &i
 		}
+	}
+}
+
+// runInteractiveCommand executes a shell command with live terminal IO.
+func runInteractiveCommand(dir, command string) error {
+	trimmed := strings.TrimSpace(command)
+	if trimmed == "" {
+		return nil
+	}
+
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.Command("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", trimmed)
+	} else {
+		shell := os.Getenv("SHELL")
+		if shell == "" {
+			shell = "sh"
+		}
+		cmd = exec.Command(shell, "-c", trimmed)
+	}
+	cmd.Dir = dir
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	// Intercept interrupt so Ctrl+C cancels the running child command without terminating the fastllm REPL
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigChan)
+
+	if err := cmd.Start(); err != nil {
+		fmt.Println(ColorRed(fmt.Sprintf("  %s Command error: %v", SymCross, err)))
+		return err
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	select {
+	case <-sigChan:
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		<-done
+		fmt.Println("\n" + ColorYellow("  [Command canceled]"))
+		return nil
+	case err := <-done:
+		if err != nil {
+			fmt.Println(ColorRed(fmt.Sprintf("  %s Command exited with error: %v", SymCross, err)))
+		}
+		return err
 	}
 }
 
