@@ -75,6 +75,11 @@ processes; search the web; fetch public pages; and report a final result.
 Workspace access is confined to the selected directory. Web fetching rejects
 loopback, private, multicast, and link-local destinations.
 
+Interactive sessions autosave under `~/.fastllm/sessions`. Use `/sessions` to
+list them, `/resume <id>` to reopen one, and `/new` to start fresh. Runtime
+settings can be changed without restarting via `/set turns`, `/set timeout`,
+`/set think`, and `/set commands`; `/set` displays their current values.
+
 ## Production build (single binary)
 
 ```

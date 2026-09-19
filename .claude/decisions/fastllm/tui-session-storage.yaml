@@ -1,0 +1,3 @@
+value: Autosaved per-session JSON files under ~/.fastllm/sessions with restrictive permissions, atomic temp-file replacement, and /sessions, /resume, /new commands.
+reason: Keeps the standalone CLI portable and independent of the web SQLite database while preserving provider-agnostic message history; SQLite coupling and one monolithic history file were rejected.
+decided_at: 2026-09-19T18:10:48+00:00

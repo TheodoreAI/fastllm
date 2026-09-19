@@ -87,6 +87,17 @@ func TestHighlightDiff(t *testing.T) {
 	}
 }
 
+func TestFormatMarkdown(t *testing.T) {
+	input := "# Result\n\n- **passed** with `go test`\n\n```go\nfmt.Println(\"ok\")\n```\n\n[docs](https://example.com)"
+	formatted := FormatMarkdown(input)
+	plain := StripANSI(formatted)
+	for _, expected := range []string{"Result", "● passed with go test", "code: go", `fmt.Println("ok")`, "docs (https://example.com)"} {
+		if !strings.Contains(plain, expected) {
+			t.Errorf("formatted Markdown missing %q:\n%s", expected, plain)
+		}
+	}
+}
+
 func TestFormatStatusCardAndModelsTable(t *testing.T) {
 	sm := SessionMetrics{
 		TotalTurns:            3,
@@ -121,8 +132,8 @@ func TestShellPromptAndHelp(t *testing.T) {
 	}
 
 	help := FormatHelp()
-	if !strings.Contains(help, "/shell") || !strings.Contains(help, "/c") || !strings.Contains(help, "!<cmd>") {
-		t.Errorf("expected help to contain /shell, /c, !<cmd>: %s", help)
+	if !strings.Contains(help, "/shell") || !strings.Contains(help, "/sessions") || !strings.Contains(help, "/set turns") {
+		t.Errorf("expected help to contain shell, session, and runtime commands: %s", help)
 	}
 
 	// Ensure ClearScreen does not panic
