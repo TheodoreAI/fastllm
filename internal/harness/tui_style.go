@@ -244,6 +244,8 @@ func FormatToolCall(toolName, argsSummary string) string {
 		badge = ColorYellow("[" + toolName + "]")
 	case "run_command", "process_status", "kill_process":
 		badge = ColorMagenta("[" + toolName + "]")
+	case "web_search", "web_fetch":
+		badge = ColorBlue("[" + toolName + "]")
 	case "finish_task":
 		badge = ColorGreen("[" + toolName + "]")
 	default:
@@ -389,6 +391,11 @@ func FormatHelp() string {
 	renderSection("Background Processes", []cmdEntry{
 		{"/ps", "List active background processes"},
 		{"/kill <id>", "Terminate a background process (e.g. /kill proc-1)"},
+	})
+
+	renderSection("Web Tools", []cmdEntry{
+		{"/search <query>", "Search the public web (DuckDuckGo / Brave)"},
+		{"/fetch <url>", "Fetch and read web page content converted to Markdown"},
 	})
 
 	return b.String()

@@ -10,8 +10,6 @@ import { shortcutLabel } from '../commands'
 // component instead of two near-identical ones is what keeps their feel
 // from drifting apart as either grows.
 export default function CommandPalette({ open = true, mode, files, commands, onOpenFile, onClose }) {
-  if (!open) return null
-
   const [query, setQuery] = useState('')
   const [highlighted, setHighlighted] = useState(0)
   const inputRef = useRef(null)
@@ -19,8 +17,9 @@ export default function CommandPalette({ open = true, mode, files, commands, onO
   useEscapeKey(onClose)
 
   useEffect(() => {
+    if (!open) return
     inputRef.current?.focus()
-  }, [])
+  }, [open])
 
   const items =
     mode === 'files'
@@ -61,6 +60,8 @@ export default function CommandPalette({ open = true, mode, files, commands, onO
       activate(items[highlighted])
     }
   }
+
+  if (!open) return null
 
   return (
     <div className="modal-overlay command-palette-overlay" onClick={onClose}>

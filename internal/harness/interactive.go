@@ -17,6 +17,7 @@ import (
 	"fastllm/internal/config"
 	"fastllm/internal/files"
 	"fastllm/internal/llm"
+	"fastllm/internal/webtools"
 )
 
 // RunInteractive starts an interactive terminal TUI / REPL session.
@@ -80,6 +81,8 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 		patchFileTool,
 		listFilesTool,
 		searchFilesTool,
+		webSearchTool,
+		webFetchTool,
 		finishTaskTool,
 	}
 	if allowCmds {
@@ -338,6 +341,36 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 				}
 				continue
 
+			case "/search":
+				if len(parts) < 2 {
+					fmt.Println(ColorYellow("  Usage: /search <query> (e.g. /search golang context timeout)"))
+				} else {
+					q := strings.TrimSpace(line[len(parts[0]):])
+					fmt.Println(ColorGray(fmt.Sprintf("  Searching the web for %q...", q)))
+					ctxSearch, cancelSearch := context.WithTimeout(context.Background(), 15*time.Second)
+					res := webtools.SearchFormatted(ctxSearch, q, 5)
+					cancelSearch()
+					fmt.Println("\n" + res)
+				}
+				continue
+
+			case "/fetch":
+				if len(parts) < 2 {
+					fmt.Println(ColorYellow("  Usage: /fetch <url> (e.g. /fetch https://go.dev/blog/go1.25)"))
+				} else {
+					u := strings.TrimSpace(parts[1])
+					fmt.Println(ColorGray(fmt.Sprintf("  Fetching %s...", u)))
+					ctxFetch, cancelFetch := context.WithTimeout(context.Background(), 15*time.Second)
+					content, err := webtools.Fetch(ctxFetch, u, 16384)
+					cancelFetch()
+					if err != nil {
+						fmt.Println(ColorRed(fmt.Sprintf("  %s Fetch error: %v", SymCross, err)))
+					} else {
+						fmt.Println("\n" + content)
+					}
+				}
+				continue
+
 			default:
 				fmt.Printf("Unknown command %q. Type /help for available commands.\n", cmd)
 				continue
@@ -507,6 +540,27 @@ func (r *Runner) runInteractiveTurn(
 				}
 				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
 				toolResult = r.executeSearchFiles(ctx, absWorkingDir, args.Pattern, args.Path)
+
+			case "web_search":
+				var args struct {
+					Query      string `json:"query"`
+					MaxResults int    `json:"max_results"`
+				}
+				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+				toolResult = webtools.SearchFormatted(ctx, args.Query, args.MaxResults)
+
+			case "web_fetch":
+				var args struct {
+					URL      string `json:"url"`
+					MaxBytes int    `json:"max_bytes"`
+				}
+				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+				content, err := webtools.Fetch(ctx, args.URL, args.MaxBytes)
+				if err != nil {
+					toolResult = fmt.Sprintf("Error fetching %s: %v", args.URL, err)
+				} else {
+					toolResult = content
+				}
 
 			case "run_command":
 				if !allowCmds {

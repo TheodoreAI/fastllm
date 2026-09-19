@@ -20,6 +20,7 @@ import (
 	"fastllm/internal/files"
 	"fastllm/internal/gitrepo"
 	"fastllm/internal/llm"
+	"fastllm/internal/webtools"
 )
 
 // LLMClient abstracts any LLM client (such as *llm.Router or *llm.Client)
@@ -130,6 +131,8 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 		patchFileTool,
 		listFilesTool,
 		searchFilesTool,
+		webSearchTool,
+		webFetchTool,
 		finishTaskTool,
 	}
 	if allowCmds {
@@ -257,6 +260,27 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 				}
 				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
 				toolResult = r.executeSearchFiles(ctx, absWorkingDir, args.Pattern, args.Path)
+
+			case "web_search":
+				var args struct {
+					Query      string `json:"query"`
+					MaxResults int    `json:"max_results"`
+				}
+				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+				toolResult = webtools.SearchFormatted(ctx, args.Query, args.MaxResults)
+
+			case "web_fetch":
+				var args struct {
+					URL      string `json:"url"`
+					MaxBytes int    `json:"max_bytes"`
+				}
+				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+				content, err := webtools.Fetch(ctx, args.URL, args.MaxBytes)
+				if err != nil {
+					toolResult = fmt.Sprintf("Error fetching %s: %v", args.URL, err)
+				} else {
+					toolResult = content
+				}
 
 			case "run_command":
 				if !allowCmds {

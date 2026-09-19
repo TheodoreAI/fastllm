@@ -1,11 +1,14 @@
 package harness
 
-import "fastllm/internal/llm"
+import (
+	"fastllm/internal/llm"
+	"fastllm/internal/webtools"
+)
 
 // DefaultSystemPrompt directs an autonomous coding harness agent to inspect
 // files before acting, verify changes, and finish concisely.
 const DefaultSystemPrompt = `You are an autonomous AI coding agent executing tasks directly in a project directory.
-You have tools to explore the codebase, edit files, patch diffs, run shell commands, manage background processes, and finish the task.
+You have tools to explore the codebase, edit files, patch diffs, run shell commands, manage background processes, search the web, fetch documentation, and finish the task.
 
 Follow these operational rules:
 1. First, explore the directory or search for relevant files to understand the project structure and context before modifying code.
@@ -15,7 +18,11 @@ Follow these operational rules:
    - Use write_file for creating new files or replacing small files completely.
 3. If commands are allowed, verify your changes by running tests, builds, or scripts with run_command before concluding.
    - For long-running servers or watchers, set background: true and inspect using process_status.
-4. When finished, call finish_task (or state your final answer) explaining what was done and verifying the result.`
+4. Use web_search and web_fetch when you need documentation, API references, library examples, or real-time web information.
+5. When finished, call finish_task (or state your final answer) explaining what was done and verifying the result.`
+
+var webSearchTool = webtools.SearchTool
+var webFetchTool = webtools.FetchTool
 
 var readFileTool = llm.Tool{
 	Type: "function",

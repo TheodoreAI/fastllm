@@ -116,7 +116,7 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useSidebarCollapsed()
   const [sectionOrder, moveSection] = useSectionOrder(DEFAULT_SECTION_ORDER)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
-  const [openFolderSignal, setOpenFolderSignal] = useState(0)
+  const [, setOpenFolderSignal] = useState(0)
 
   useEffect(() => {
     function handleKeyDown(e) {
@@ -142,11 +142,16 @@ export default function App() {
 
   useEffect(() => {
     refreshConversations()
-    refreshModels()
+    fetchModels().then((data) => {
+      setModels(data)
+      if (data && data.length > 0) {
+        setModel((current) => current || data[0].name || data[0].id)
+      }
+    })
     fetchSettings().then(setSettings)
     refreshFileAccessSettings()
     refreshCloudProviderSettings()
-  }, [])
+  }, [setModel])
 
   useEffect(() => {
     const ac = new AbortController()
@@ -293,6 +298,15 @@ export default function App() {
       return
     }
 
+    let promptContent = trimmed
+    if (trimmed.startsWith('/search ')) {
+      const q = trimmed.slice(8).trim()
+      promptContent = `Search the web for "${q}" and summarize the key findings.`
+    } else if (trimmed.startsWith('/fetch ')) {
+      const u = trimmed.slice(7).trim()
+      promptContent = `Fetch and read the web page at "${u}" and summarize its contents.`
+    }
+
     if (mode === 'agent') {
       const userMessage = {
         role: 'user',
@@ -324,7 +338,7 @@ export default function App() {
       }))
 
       const payload = {
-        task: trimmed,
+        task: promptContent,
         conversation_id: conversationId || undefined,
         working_dir: agentConfig?.workingDir?.trim() || fileAccessSettings?.root || undefined,
         model: model || undefined,
@@ -465,7 +479,7 @@ export default function App() {
 
     try {
       await streamChat(
-        trimmed,
+        promptContent,
         model,
         conversationId,
         thinkLevel,
