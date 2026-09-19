@@ -115,13 +115,13 @@ func RunCLI(args []string) int {
 	}
 
 	client := llm.New(baseURL, apiKey, model, "")
-	if strings.Contains(baseURL, "localhost:11434") || strings.Contains(baseURL, "127.0.0.1:11434") {
-		client.SendThink = true
-	}
-	if settings != nil {
-		if matched := settings.FindModel(model); matched != nil {
-			applyModelParameters(client, matched.Parameters)
-		}
+	matched := settings.FindModel(model)
+	// "think" is Ollama's own extension; sending it to a server that does not know
+	// it can 400 the whole request, so this is opt-in via config with port-based
+	// detection as the fallback.
+	client.SendThink = config.ShouldSendThink(matched, baseURL)
+	if matched != nil {
+		applyModelParameters(client, matched.Parameters)
 	}
 
 	runner := NewRunner(client, workDir, model)

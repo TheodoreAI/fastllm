@@ -55,11 +55,11 @@ func TestFormatCard(t *testing.T) {
 }
 
 func TestFormatWelcomeBanner(t *testing.T) {
-	banner := FormatWelcomeBanner("/test/dir", "muse-glimmer", "/test/config.json", true, 2, true)
+	banner := FormatWelcomeBanner("/test/dir", "example-model", "/test/config.json", true, 2, true)
 	if !strings.Contains(banner, "/test/dir") {
 		t.Errorf("banner missing dir: %s", banner)
 	}
-	if !strings.Contains(banner, "muse-glimmer") {
+	if !strings.Contains(banner, "example-model") {
 		t.Errorf("banner missing model: %s", banner)
 	}
 	if !strings.Contains(banner, "AGENTS.md") {
@@ -120,11 +120,11 @@ func TestFormatStatusCardAndModelsTable(t *testing.T) {
 	}
 
 	models := []config.ModelEndpoint{
-		{ID: "muse-glimmer", Name: "Muse Glimmer", URL: "http://localhost:8010/v1"},
+		{ID: "example-model", Name: "Example Model", URL: "http://localhost:8010/v1"},
 		{ID: "llama3.1", Name: "Llama 3.1", URL: "http://localhost:11434/v1"},
 	}
-	table := FormatModelsTable(models, "muse-glimmer", "/config.json")
-	if !strings.Contains(table, "muse-glimmer") || !strings.Contains(table, "Llama 3.1") {
+	table := FormatModelsTable(models, "example-model", "/config.json")
+	if !strings.Contains(table, "example-model") || !strings.Contains(table, "Llama 3.1") {
 		t.Errorf("unexpected models table: %s", table)
 	}
 }

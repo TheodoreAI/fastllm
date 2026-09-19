@@ -24,7 +24,7 @@ func TestMetricsCalculation(t *testing.T) {
 		t.Errorf("invalid format summary: %s", summary)
 	}
 
-	localTm := ComputeTurnMetrics(1, "muse-glimmer-30b", 1000, 500, 2*time.Second)
+	localTm := ComputeTurnMetrics(1, "example-model-30b", 1000, 500, 2*time.Second)
 	if localTm.EstimatedCost != 0.0 {
 		t.Errorf("expected local model to be $0.00, got %f", localTm.EstimatedCost)
 	}
