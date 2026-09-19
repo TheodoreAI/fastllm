@@ -86,6 +86,20 @@ export default function App() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [openFolderSignal, setOpenFolderSignal] = useState(0)
 
+  useEffect(() => {
+    function handleKeyDown(e) {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setCommandPaletteOpen((prev) => !prev)
+      } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'p') {
+        e.preventDefault()
+        setCommandPaletteOpen((prev) => !prev)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
+
   const streamAbortRef = useRef(null)
   const bottomRef = useRef(null)
 
@@ -550,11 +564,13 @@ export default function App() {
         />
       )}
 
-      <CommandPalette
-        open={commandPaletteOpen}
-        onClose={() => setCommandPaletteOpen(false)}
-        commands={commands}
-      />
+      {commandPaletteOpen && (
+        <CommandPalette
+          open={commandPaletteOpen}
+          onClose={() => setCommandPaletteOpen(false)}
+          commands={commands}
+        />
+      )}
 
       <TweakBar
         theme={theme}

@@ -9,7 +9,9 @@ import { shortcutLabel } from '../commands'
 // different source list and a different action per selected row. One
 // component instead of two near-identical ones is what keeps their feel
 // from drifting apart as either grows.
-export default function CommandPalette({ mode, files, commands, onOpenFile, onClose }) {
+export default function CommandPalette({ open = true, mode, files, commands, onOpenFile, onClose }) {
+  if (!open) return null
+
   const [query, setQuery] = useState('')
   const [highlighted, setHighlighted] = useState(0)
   const inputRef = useRef(null)
