@@ -34,15 +34,12 @@ function LoopIcon(props) {
 
 export default function MaxTurnsPicker({ value, onChange, disabled }) {
   const [open, setOpen] = useState(false)
-  const [isCustom, setIsCustom] = useState(false)
   const [customInput, setCustomInput] = useState(String(value))
   const containerRef = useRef(null)
   const customInputRef = useRef(null)
 
   useEffect(() => {
     setCustomInput(String(value))
-    const isPreset = PRESET_OPTIONS.some((opt) => opt.value === value)
-    setIsCustom(!isPreset)
   }, [value])
 
   useEffect(() => {

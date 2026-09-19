@@ -148,6 +148,8 @@ function ToolCallItem({ toolCall }) {
     if (args.path) summary += args.path
     if (args.command) summary += args.command
     if (args.pattern) summary += `pattern: ${args.pattern}`
+    if (args.query) summary += `"${args.query}"`
+    if (args.url) summary += args.url
   } catch {
     summary = toolCall.arguments || ''
   }

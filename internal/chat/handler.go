@@ -30,6 +30,7 @@ import (
 	"fastllm/internal/gitrepo"
 	"fastllm/internal/llm"
 	"fastllm/internal/store"
+	"fastllm/internal/webtools"
 )
 
 // maxToolRounds caps how many tool round-trips a single chat turn gets
@@ -168,6 +169,9 @@ var runTestTool = llm.Tool{
 		},
 	},
 }
+
+var webSearchTool = webtools.SearchTool
+var webFetchTool = webtools.FetchTool
 
 type Handler struct {
 	DB            *sql.DB
@@ -404,7 +408,7 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 	lastReadHash := map[string]string{}
 
 	for round := 0; round < maxToolRounds; round++ {
-		tools := []llm.Tool{readFileTool, listFilesTool, searchFilesTool}
+		tools := []llm.Tool{readFileTool, listFilesTool, searchFilesTool, webSearchTool, webFetchTool}
 		if writesEnabled {
 			tools = append(tools, writeFileTool, editFileTool)
 			if hasGoModule {
@@ -570,6 +574,27 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 					testChecks = append(testChecks, testCheckReport{Passed: false, Output: result.Output})
 				}
 				results[call.ID] = text
+
+			case "web_search":
+				var args struct {
+					Query      string `json:"query"`
+					MaxResults int    `json:"max_results"`
+				}
+				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+				results[call.ID] = webtools.SearchFormatted(ctx, args.Query, args.MaxResults)
+
+			case "web_fetch":
+				var args struct {
+					URL      string `json:"url"`
+					MaxBytes int    `json:"max_bytes"`
+				}
+				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+				content, err := webtools.Fetch(ctx, args.URL, args.MaxBytes)
+				if err != nil {
+					results[call.ID] = fmt.Sprintf("Error fetching %s: %v", args.URL, err)
+				} else {
+					results[call.ID] = content
+				}
 			}
 		}
 

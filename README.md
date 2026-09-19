@@ -1,21 +1,24 @@
 # fastllm
 
-A minimal, fast AnythingLLM-style chat app: Go backend (streaming chat + RAG),
-React frontend, SQLite storage, in-memory vector search. Ships as a single
-binary with the frontend embedded.
+A local LLM chat app and autonomous coding harness. The Go backend streams
+OpenAI-compatible chat and agent runs, the React frontend provides chat and
+agent modes, and SQLite stores conversations and settings. The production
+frontend is embedded into a single executable.
 
-Features: model selection (auto-discovered from Ollama), retrieval-augmented
-chat with per-answer source attribution, pasted-text and file indexing,
-saved skills (named system-prompt presets), and Markdown/LaTeX/syntax-
-highlighted chat rendering.
+FastLLM can use Ollama and configured cloud providers, expose OpenAI- and
+Anthropic-compatible proxy endpoints, run coding tasks against a sandboxed
+workspace, execute commands when enabled, and search or fetch the public web.
+It also includes an interactive terminal UI and a one-shot CLI runner.
 
 ## Architecture
 
 - `cmd/server` — entry point, wires everything together
-- `internal/llm` — OpenAI-compatible client (works with OpenAI, Ollama, LM Studio)
-- `internal/store` — SQLite persistence (messages, documents, chunks)
-- `internal/vector` — in-memory cosine-similarity search over chunk embeddings
-- `internal/chat` — HTTP handlers, including SSE-streamed chat responses
+- `cmd/cli` — standalone agent CLI
+- `internal/llm` — local and cloud model clients and routing
+- `internal/store` — SQLite persistence for conversations, settings, and notes
+- `internal/chat` — chat, compatibility API, and SSE agent handlers
+- `internal/harness` — autonomous tool loop, workspace rules, checkpoints, and TUI
+- `internal/webtools` — public-web search and SSRF-protected page fetching
 - `web` — React (Vite) frontend, embedded into the binary via `go:embed`
 
 ## Run it locally with Ollama (free, local models)
@@ -28,12 +31,14 @@ ollama pull nomic-embed-text
 Ollama exposes an OpenAI-compatible API on `localhost:11434/v1` by default,
 which is what the server points to out of the box.
 
-## Development
+## Development and verification
 
-Backend (hot-reload on save isn't wired up; restart manually or add `air`):
+Backend (hot-reload on save isn't wired up; restart manually or add `air`).
+`cmd/server` starts the interactive terminal UI by default, so pass `server`
+to start the HTTP application:
 
 ```
-go run ./cmd/server
+go run ./cmd/server server
 ```
 
 Frontend (dev server proxies /api to :8080):
@@ -44,12 +49,38 @@ npm install
 npm run dev
 ```
 
+Run the checks used before committing:
+
+```
+go test ./...
+go vet ./...
+cd web
+npm run lint
+npm run build
+```
+
+## Agent CLI
+
+Run a one-shot task in the current workspace:
+
+```
+go run ./cmd/cli --task "inspect the project and fix the failing tests" --dir .
+```
+
+Omit `--task` for the interactive TUI. Useful flags include `--model`,
+`--max-turns`, `--timeout`, `--think`, and `--no-commands`. The agent can read,
+write, patch, search, and list files; run commands and manage background
+processes; search the web; fetch public pages; and report a final result.
+
+Workspace access is confined to the selected directory. Web fetching rejects
+loopback, private, multicast, and link-local destinations.
+
 ## Production build (single binary)
 
 ```
 cd web && npm install && npm run build && cd ..
 go build -o fastllm.exe ./cmd/server
-./fastllm.exe
+./fastllm.exe server
 ```
 
 Visit http://localhost:8080.
@@ -104,14 +135,10 @@ updates on every `npm run build` regardless.
 | `LLM_BASE_URL` | `http://localhost:11434/v1` | OpenAI-compatible API base |
 | `LLM_API_KEY` | (empty) | Bearer token, if required |
 | `LLM_CHAT_MODEL` | `llama3.1` | Chat completion model |
-| `LLM_EMBED_MODEL` | `nomic-embed-text` | Embedding model |
+| `FASTLLM_FILES_ROOT` | (disabled) | Initial sandboxed file-access root |
+| `FASTLLM_FILES_WRITE` | (disabled) | Enable initial file writes when non-empty |
+| `BRAVE_SEARCH_API_KEY` | (empty) | Prefer Brave Search; otherwise use DuckDuckGo |
 
-To use OpenAI instead: set `LLM_BASE_URL=https://api.openai.com/v1`,
-`LLM_API_KEY=sk-...`, `LLM_CHAT_MODEL=gpt-4o-mini`, `LLM_EMBED_MODEL=text-embedding-3-small`.
-
-## Notes on scale
-
-The vector store is a linear-scan in-memory index — fine for thousands of
-chunks, not millions. Swap `internal/vector` for Qdrant or `sqlite-vec` if
-you outgrow it; the `Store` interface usage in `internal/chat/handler.go`
-is the only place that would need to change.
+To use an OpenAI-compatible endpoint instead, set `LLM_BASE_URL`,
+`LLM_API_KEY`, and `LLM_CHAT_MODEL`. Additional cloud-provider credentials can
+be configured from the Settings panel.
