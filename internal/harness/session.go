@@ -16,10 +16,11 @@ import (
 )
 
 type InteractiveRuntime struct {
-	MaxTurns       int           `json:"max_turns"`
-	CommandTimeout time.Duration `json:"command_timeout"`
-	ThinkLevel     string        `json:"think_level"`
-	AllowCommands  bool          `json:"allow_commands"`
+	MaxTurns       int            `json:"max_turns"`
+	CommandTimeout time.Duration  `json:"command_timeout"`
+	ThinkLevel     string         `json:"think_level"`
+	AllowCommands  bool           `json:"allow_commands"`
+	PermissionMode PermissionMode `json:"permission_mode"`
 }
 
 type InteractiveSession struct {

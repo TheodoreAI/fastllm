@@ -9,7 +9,7 @@ import (
 
 func TestSessionStoreRoundTrip(t *testing.T) {
 	store := &SessionStore{Dir: t.TempDir()}
-	session := store.New("/work", "test-model", InteractiveRuntime{MaxTurns: 12, CommandTimeout: 30 * time.Second, ThinkLevel: "high", AllowCommands: true})
+	session := store.New("/work", "test-model", InteractiveRuntime{MaxTurns: 12, CommandTimeout: 30 * time.Second, ThinkLevel: "high", AllowCommands: true, PermissionMode: PermissionAsk})
 	session.Messages = []llm.Message{{Role: "user", Content: "Fix the parser"}, {Role: "assistant", Content: "Done"}}
 	session.Title = sessionTitle(session.Messages)
 	if err := store.Save(session); err != nil {
@@ -24,7 +24,7 @@ func TestSessionStoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Title != "Fix the parser" || loaded.Runtime.MaxTurns != 12 || len(loaded.Messages) != 3 {
+	if loaded.Title != "Fix the parser" || loaded.Runtime.MaxTurns != 12 || loaded.Runtime.PermissionMode != PermissionAsk || len(loaded.Messages) != 3 {
 		t.Fatalf("unexpected loaded session: %+v", loaded)
 	}
 

@@ -19,6 +19,9 @@ Auto-generated — do not edit by hand.
 ### tui-markdown-rendering
 - `Dependency-free ANSI renderer for headings, bullets, quotes, fenced code, inline code, emphasis, links, rules, diffs, and structured tool previews.` — Improves terminal readability without adding a heavy TUI framework or duplicating browser-grade layout behavior. (2026-09-19T18:10:49+00:00)
 
+### tui-permission-model
+- `Three session-scoped modes for model-initiated mutations: ask by default, read-only removes mutating tools, and auto permits autonomous execution. Ask supports once/session-tool/deny; grants are never persisted or restored.` — Ask is the safest usable default, read-only provides a hard capability boundary, and auto preserves unattended workflows; direct user-entered shell commands are already explicit authorization and do not reprompt. (2026-09-19T21:05:55+00:00)
+
 ### tui-runtime-controls
 - `Session-scoped /set controls for max turns, command timeout, thinking level, and command-tool availability; settings autosave with the session.` — Allows safe live tuning without restarting and makes resumed behavior reproducible; global-only config would leak task-specific choices into unrelated work. (2026-09-19T18:10:49+00:00)
 

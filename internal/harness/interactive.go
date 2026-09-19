@@ -69,6 +69,7 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 		cmdTimeout = 60 * time.Second
 	}
 	thinkLevel := initialReq.ThinkLevel
+	permissionMode := PermissionAsk
 
 	// Initialize Git checkpoint manager and background process manager
 	checkpointMgr := NewCheckpointManager(absWorkingDir)
@@ -83,7 +84,9 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 
 	fileReader := files.New(absWorkingDir, true)
 
-	tools := interactiveTools(allowCmds)
+	scanner := bufio.NewScanner(os.Stdin)
+	permissions := NewPermissionController(permissionMode, scanner)
+	tools := interactiveTools(allowCmds, permissionMode)
 
 	sessionMessages := []llm.Message{
 		{Role: "system", Content: systemPrompt + rulesPrompt},
@@ -92,7 +95,7 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 	var activeSession *InteractiveSession
 	if sessionStoreErr == nil {
 		activeSession = sessionStore.New(absWorkingDir, model, InteractiveRuntime{
-			MaxTurns: maxTurns, CommandTimeout: cmdTimeout, ThinkLevel: thinkLevel, AllowCommands: allowCmds,
+			MaxTurns: maxTurns, CommandTimeout: cmdTimeout, ThinkLevel: thinkLevel, AllowCommands: allowCmds, PermissionMode: permissionMode,
 		})
 	}
 
@@ -103,7 +106,7 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 		activeSession.WorkingDir = absWorkingDir
 		activeSession.Model = model
 		activeSession.Runtime = InteractiveRuntime{
-			MaxTurns: maxTurns, CommandTimeout: cmdTimeout, ThinkLevel: thinkLevel, AllowCommands: allowCmds,
+			MaxTurns: maxTurns, CommandTimeout: cmdTimeout, ThinkLevel: thinkLevel, AllowCommands: allowCmds, PermissionMode: permissionMode,
 		}
 		activeSession.Messages = append([]llm.Message(nil), sessionMessages[1:]...)
 		activeSession.Title = sessionTitle(activeSession.Messages)
@@ -149,7 +152,6 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 	}
 
 	var shellMode bool
-	scanner := bufio.NewScanner(os.Stdin)
 
 	for {
 		if shellMode {
@@ -283,7 +285,7 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 
 			case "/status":
 				fmt.Println(FormatStatusCard(absWorkingDir, model, len(discoveredRules), sessionMetrics, processMgr))
-				fmt.Println(FormatRuntimeCard(maxTurns, cmdTimeout, thinkLevel, allowCmds, activeSessionID(activeSession)))
+				fmt.Println(FormatRuntimeCard(maxTurns, cmdTimeout, thinkLevel, allowCmds, permissionMode, activeSessionID(activeSession)))
 				continue
 
 			case "/sessions":
@@ -326,7 +328,12 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 				}
 				thinkLevel = loaded.Runtime.ThinkLevel
 				allowCmds = loaded.Runtime.AllowCommands
-				tools = interactiveTools(allowCmds)
+				permissionMode = loaded.Runtime.PermissionMode
+				if permissionMode == "" {
+					permissionMode = PermissionAsk
+				}
+				permissions.SetMode(permissionMode)
+				tools = interactiveTools(allowCmds, permissionMode)
 				if err := switchWorkspace(resolvedDir); err != nil {
 					fmt.Println(ColorRed(fmt.Sprintf("  %s Cannot restore workspace: %v", SymCross, err)))
 					continue
@@ -342,7 +349,7 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 				sessionMetrics = SessionMetrics{}
 				if sessionStore != nil {
 					activeSession = sessionStore.New(absWorkingDir, model, InteractiveRuntime{
-						MaxTurns: maxTurns, CommandTimeout: cmdTimeout, ThinkLevel: thinkLevel, AllowCommands: allowCmds,
+						MaxTurns: maxTurns, CommandTimeout: cmdTimeout, ThinkLevel: thinkLevel, AllowCommands: allowCmds, PermissionMode: permissionMode,
 					})
 					saveSession()
 				}
@@ -351,11 +358,11 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 
 			case "/set":
 				if len(parts) == 1 {
-					fmt.Println(FormatRuntimeCard(maxTurns, cmdTimeout, thinkLevel, allowCmds, activeSessionID(activeSession)))
+					fmt.Println(FormatRuntimeCard(maxTurns, cmdTimeout, thinkLevel, allowCmds, permissionMode, activeSessionID(activeSession)))
 					continue
 				}
 				if len(parts) < 3 {
-					fmt.Println(ColorYellow("  Usage: /set <turns|timeout|think|commands> <value>"))
+					fmt.Println(ColorYellow("  Usage: /set <turns|timeout|think|commands|permissions> <value>"))
 					continue
 				}
 				value := strings.ToLower(parts[2])
@@ -395,7 +402,15 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 					} else {
 						setErr = fmt.Errorf("commands must be on or off")
 					}
-					tools = interactiveTools(allowCmds)
+					tools = interactiveTools(allowCmds, permissionMode)
+				case "permissions", "permission":
+					var parsed PermissionMode
+					parsed, setErr = ParsePermissionMode(value)
+					if setErr == nil {
+						permissionMode = parsed
+						permissions.SetMode(parsed)
+						tools = interactiveTools(allowCmds, permissionMode)
+					}
 				default:
 					setErr = fmt.Errorf("unknown setting %q", parts[1])
 				}
@@ -403,7 +418,7 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 					fmt.Println(ColorRed(fmt.Sprintf("  %s %v", SymCross, setErr)))
 				} else {
 					saveSession()
-					fmt.Println(FormatRuntimeCard(maxTurns, cmdTimeout, thinkLevel, allowCmds, activeSessionID(activeSession)))
+					fmt.Println(FormatRuntimeCard(maxTurns, cmdTimeout, thinkLevel, allowCmds, permissionMode, activeSessionID(activeSession)))
 				}
 				continue
 
@@ -589,6 +604,7 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 			cmdTimeout,
 			thinkLevel,
 			maxTurns,
+			permissions,
 			processMgr,
 			&sessionMetrics,
 			&sessionMessages,
@@ -612,6 +628,7 @@ func (r *Runner) runInteractiveTurn(
 	cmdTimeout time.Duration,
 	thinkLevel string,
 	maxTurns int,
+	permissions *PermissionController,
 	processMgr *ProcessManager,
 	sessionMetrics *SessionMetrics,
 	sessionMessages *[]llm.Message,
@@ -662,6 +679,12 @@ func (r *Runner) runInteractiveTurn(
 			}
 
 			fmt.Println(FormatToolCall(call.Function.Name, summarizeArgs(call.Function.Arguments)))
+			if requiresPermission(call.Function.Name) && !permissions.Authorize(call.Function.Name, summarizeArgs(call.Function.Arguments)) {
+				toolResult := "Permission denied by user. Do not retry this action unless the user explicitly asks."
+				fmt.Println(FormatToolResult(call.Function.Name, toolResult, 8))
+				*sessionMessages = append(*sessionMessages, llm.Message{Role: "tool", Content: toolResult, ToolCallID: call.ID})
+				continue
+			}
 
 			var toolResult string
 			switch call.Function.Name {
@@ -867,20 +890,23 @@ func parseDirectoryChange(command string) (string, bool) {
 	return "", false
 }
 
-func interactiveTools(allowCommands bool) []llm.Tool {
+func interactiveTools(allowCommands bool, permissionMode PermissionMode) []llm.Tool {
 	tools := []llm.Tool{
 		readFileTool,
-		writeFileTool,
-		editFileTool,
-		patchFileTool,
 		listFilesTool,
 		searchFilesTool,
 		webSearchTool,
 		webFetchTool,
 		finishTaskTool,
 	}
+	if permissionMode != PermissionReadOnly {
+		tools = append(tools, writeFileTool, editFileTool, patchFileTool)
+	}
 	if allowCommands {
-		tools = append(tools, runCommandTool, processStatusTool, killProcessTool)
+		if permissionMode != PermissionReadOnly {
+			tools = append(tools, runCommandTool, killProcessTool)
+		}
+		tools = append(tools, processStatusTool)
 	}
 	return tools
 }

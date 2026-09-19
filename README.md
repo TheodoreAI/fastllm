@@ -78,7 +78,10 @@ loopback, private, multicast, and link-local destinations.
 Interactive sessions autosave under `~/.fastllm/sessions`. Use `/sessions` to
 list them, `/resume <id>` to reopen one, and `/new` to start fresh. Runtime
 settings can be changed without restarting via `/set turns`, `/set timeout`,
-`/set think`, and `/set commands`; `/set` displays their current values.
+`/set think`, `/set commands`, and `/set permissions`; `/set` displays their
+current values. Permission modes are `ask` (the default for model-initiated
+writes and commands), `read-only`, and `auto`. Direct Shell Mode commands are
+already explicit user actions and do not prompt again.
 
 ## Production build (single binary)
 
