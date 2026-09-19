@@ -15,7 +15,7 @@ import (
 func TestConfigFromEnvDefaults(t *testing.T) {
 	for _, key := range []string{
 		"FASTLLM_DB", "LLM_BASE_URL", "LLM_API_KEY", "LLM_CHAT_MODEL", "LLM_EMBED_MODEL",
-		"FASTLLM_FILES_ROOT", "FASTLLM_FILES_WRITE", "FASTLLM_TERMINAL_ENABLED",
+		"FASTLLM_FILES_ROOT", "FASTLLM_FILES_WRITE",
 	} {
 		t.Setenv(key, "")
 		os.Unsetenv(key) // t.Setenv("") still leaves the var *set* to "" — Unsetenv is what getenv's os.Getenv check needs to see the fallback
@@ -40,9 +40,6 @@ func TestConfigFromEnvDefaults(t *testing.T) {
 	if cfg.FilesWrite {
 		t.Error("FilesWrite should default to false when FASTLLM_FILES_WRITE is unset")
 	}
-	if cfg.TerminalEnabled {
-		t.Error("TerminalEnabled should default to false when FASTLLM_TERMINAL_ENABLED is unset")
-	}
 }
 
 func TestConfigFromEnvOverrides(t *testing.T) {
@@ -51,7 +48,6 @@ func TestConfigFromEnvOverrides(t *testing.T) {
 	t.Setenv("LLM_CHAT_MODEL", "custom-model")
 	t.Setenv("FASTLLM_FILES_ROOT", "/some/project")
 	t.Setenv("FASTLLM_FILES_WRITE", "1")
-	t.Setenv("FASTLLM_TERMINAL_ENABLED", "1")
 
 	cfg, err := ConfigFromEnv()
 	if err != nil {
@@ -71,9 +67,6 @@ func TestConfigFromEnvOverrides(t *testing.T) {
 	}
 	if !cfg.FilesWrite {
 		t.Error("FilesWrite should be true when FASTLLM_FILES_WRITE is set to any non-empty value")
-	}
-	if !cfg.TerminalEnabled {
-		t.Error("TerminalEnabled should be true when FASTLLM_TERMINAL_ENABLED is set to any non-empty value")
 	}
 }
 
@@ -99,8 +92,8 @@ func TestDesktopDBPathCreatesAndReturnsUnderUserConfigDir(t *testing.T) {
 }
 
 // TestBuildRegistersRoutesAndReturnsUsableHandles is a smoke test: Build
-// does a lot of setup (DB, vector store, LLM client, file/terminal
-// settings) with nothing here to unit-test individually without a real
+// does a lot of setup (DB, vector store, LLM client, file settings)
+// with nothing here to unit-test individually without a real
 // Ollama/cloud backend, but it should never panic on a fresh in-memory DB,
 // and the mux it hands back should actually route requests — catching the
 // class of bug where a new endpoint gets implemented as a Handler method
@@ -110,12 +103,6 @@ func TestBuildRegistersRoutesAndReturnsUsableHandles(t *testing.T) {
 		DBPath:       ":memory:",
 		LLMBaseURL:   "http://127.0.0.1:0/v1", // never dialed during Build itself
 		LLMChatModel: "test-model",
-		// Left false, /api/terminal/ws's own handler deliberately 404s
-		// (not 403) to look identical to an unregistered route when the
-		// terminal feature is off — see terminal.NewHandler's doc comment.
-		// That's indistinguishable from "route not registered" from here,
-		// so this test needs it enabled to actually exercise routing.
-		TerminalEnabled: true,
 	}
 	built, err := Build(cfg)
 	if err != nil {
@@ -129,12 +116,6 @@ func TestBuildRegistersRoutesAndReturnsUsableHandles(t *testing.T) {
 	if built.Handler == nil {
 		t.Fatal("Built.Handler is nil")
 	}
-	if built.TerminalRegistry == nil {
-		t.Fatal("Built.TerminalRegistry is nil")
-	}
-	if built.TerminalBaseURL == nil {
-		t.Fatal("Built.TerminalBaseURL is nil")
-	}
 
 	for _, route := range []struct {
 		method, path string
@@ -142,8 +123,7 @@ func TestBuildRegistersRoutesAndReturnsUsableHandles(t *testing.T) {
 		{"GET", "/api/conversations"},
 		{"GET", "/api/models"},
 		{"GET", "/api/notes"},
-		{"POST", "/api/editor/test"},
-		{"GET", "/api/terminal/ws"},
+		{"POST", "/api/harness/run"},
 	} {
 		req := httptest.NewRequest(route.method, route.path, nil)
 		rec := httptest.NewRecorder()
@@ -154,22 +134,21 @@ func TestBuildRegistersRoutesAndReturnsUsableHandles(t *testing.T) {
 	}
 }
 
-// TestBuildAppliesFileAndTerminalSettingsFromEnv guards against Build
-// silently discarding the real persisted file-access/terminal settings and
+// TestBuildAppliesFileSettingsFromEnv guards against Build
+// silently discarding the real persisted file-access settings and
 // falling back to the (disabled) zero-value defaults instead — the two look
 // identical unless a test actually seeds a non-default config through cfg
 // and checks it took effect on the built Handler.
-func TestBuildAppliesFileAndTerminalSettingsFromEnv(t *testing.T) {
+func TestBuildAppliesFileSettingsFromEnv(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "fastllm.db")
 	filesRoot := t.TempDir()
 
 	cfg := Config{
-		DBPath:          dbPath,
-		LLMBaseURL:      "http://127.0.0.1:0/v1",
-		LLMChatModel:    "test-model",
-		FilesRoot:       filesRoot,
-		FilesWrite:      true,
-		TerminalEnabled: true,
+		DBPath:       dbPath,
+		LLMBaseURL:   "http://127.0.0.1:0/v1",
+		LLMChatModel: "test-model",
+		FilesRoot:    filesRoot,
+		FilesWrite:   true,
 	}
 	built, err := Build(cfg)
 	if err != nil {
@@ -185,9 +164,6 @@ func TestBuildAppliesFileAndTerminalSettingsFromEnv(t *testing.T) {
 	}
 	if got := built.Handler.Files.GetRoot(); got != filesRoot {
 		t.Errorf("Handler.Files.GetRoot() = %q, want %q — the seeded root, not the zero-value default", got, filesRoot)
-	}
-	if !built.Handler.Terminal.Enabled() {
-		t.Error("Handler.Terminal.Enabled() = false, want true — TerminalEnabled was set in Config")
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,7 +32,6 @@ import (
 	"fastllm/internal/gitrepo"
 	"fastllm/internal/llm"
 	"fastllm/internal/store"
-	"fastllm/internal/terminal"
 	"fastllm/internal/vector"
 )
 
@@ -270,7 +271,6 @@ type Handler struct {
 	LLM      *llm.Router
 	Vector   *vector.Store
 	Files    *files.Reader
-	Terminal *terminal.Gate
 
 	// FolderChooser shows the native "choose a folder" dialog used by
 	// Settings → File access. Defaults to folderpicker.Choose (spawns a
@@ -306,8 +306,8 @@ type Handler struct {
 	writes   map[string]*PendingWrite
 }
 
-func New(db *sql.DB, llmRouter *llm.Router, vec *vector.Store, fileReader *files.Reader, terminalGate *terminal.Gate) *Handler {
-	return &Handler{DB: db, LLM: llmRouter, Vector: vec, Files: fileReader, Terminal: terminalGate, FolderChooser: folderpicker.Choose, Live: NewLiveBroadcaster(), writes: make(map[string]*PendingWrite)}
+func New(db *sql.DB, llmRouter *llm.Router, vec *vector.Store, fileReader *files.Reader) *Handler {
+	return &Handler{DB: db, LLM: llmRouter, Vector: vec, Files: fileReader, FolderChooser: folderpicker.Choose, Live: NewLiveBroadcaster(), writes: make(map[string]*PendingWrite)}
 }
 
 func newWriteID() string {
@@ -1027,15 +1027,48 @@ const listFilesMaxEntries = 500
 
 // listFiles implements the list_files tool: the same git-aware listing
 // (falling back to a plain walk for a non-git folder) that backs the
-// Editor tab's file tree — see walkFiles and gitrepo.ListFiles in
-// editor.go, reused here rather than duplicated so the model and the
-// human editor agree on what "the project's files" means. requestedPath,
-// if non-empty, filters the full listing down to that subdirectory
-// (matched as a path prefix) rather than doing a second, separately-
-// rooted walk — simpler, and root has already been validated/snapshotted
-// by the caller (runFileTools) so nothing here does its own sandbox
-// escape checking; filtering an already-sandboxed list can't introduce
-// one.
+var walkIgnoredDirs = map[string]bool{
+	".git":         true,
+	"node_modules": true,
+	"dist":         true,
+	"build":        true,
+	"vendor":       true,
+}
+
+// walkFiles lists every file under root (relative paths, forward
+// slashes) for the non-git-repo fallback, skipping common
+// build/dependency directories that have no .gitignore to exclude them.
+func walkFiles(root string) ([]string, error) {
+	var out []string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if path == root {
+			return nil
+		}
+		if d.IsDir() {
+			if walkIgnoredDirs[d.Name()] {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		out = append(out, filepath.ToSlash(rel))
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// listFiles implements the list_files tool: lists every file under the
+// project root (relative paths, forward slashes).
 func (h *Handler) listFiles(ctx context.Context, root, requestedPath string) string {
 	all, err := gitrepo.ListFiles(ctx, root)
 	if errors.Is(err, gitrepo.ErrNotARepo) {
@@ -1481,61 +1514,8 @@ func (h *Handler) UpdateCloudProviderSettings(w http.ResponseWriter, r *http.Req
 	writeJSON(w, toCloudProviderSettingsResponse(settings))
 }
 
-// GetEditorSettings returns the persisted editor preferences — currently
-// just which local model is pinned for inline AI completion (see
-// internal/chat.EditorComplete), settable from the Model panel in the
-// chat sidebar since that's where the rest of the app's model picking
-// already lives.
-func (h *Handler) GetEditorSettings(w http.ResponseWriter, r *http.Request) {
-	settings, err := store.GetEditorSettings(h.DB)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, settings)
-}
 
-// UpdateEditorSettings persists the given editor preferences. No live
-// in-memory state to reconfigure afterward (unlike
-// UpdateTerminalSettings/UpdateCloudProviderSettings) — EditorComplete
-// reads store.GetEditorSettings fresh on every request, so a saved change
-// applies to the very next completion with nothing else to wire up.
-func (h *Handler) UpdateEditorSettings(w http.ResponseWriter, r *http.Request) {
-	var settings store.EditorSettings
-	if err := json.NewDecoder(r.Body).Decode(&settings); err != nil {
-		http.Error(w, "invalid editor settings payload", http.StatusBadRequest)
-		return
-	}
-	if err := store.SaveEditorSettings(h.DB, settings); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	writeJSON(w, settings)
-}
 
-func (h *Handler) GetTerminalSettings(w http.ResponseWriter, r *http.Request) {
-	settings, err := store.GetTerminalSettings(h.DB)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, settings)
-}
-
-func (h *Handler) UpdateTerminalSettings(w http.ResponseWriter, r *http.Request) {
-	var settings store.TerminalSettings
-	if err := json.NewDecoder(r.Body).Decode(&settings); err != nil {
-		http.Error(w, "invalid terminal settings payload", http.StatusBadRequest)
-		return
-	}
-	if err := store.SaveTerminalSettings(h.DB, settings); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	h.Terminal.SetEnabled(settings.Enabled)
-	h.Terminal.SetInjectEnv(settings.InjectLiveChatEnv)
-	writeJSON(w, settings)
-}
 
 // BrowseForFolder shows a native OS folder-picker dialog on the machine
 // running the server and returns the chosen absolute path. This exists

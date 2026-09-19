@@ -10,7 +10,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -18,9 +17,7 @@ import (
 	"fastllm/internal/appserver"
 	"fastllm/internal/chat"
 	"fastllm/internal/folderpicker"
-	"fastllm/internal/lsp"
 	"fastllm/internal/screenshot"
-	"fastllm/internal/terminal"
 	"fastllm/web"
 
 	"github.com/wailsapp/wails/v2"
@@ -89,37 +86,29 @@ func main() {
 
 	// Some routes can't work over Wails' in-process AssetServer bridge,
 	// since it's not backed by an actual TCP connection:
-	//   - /api/terminal/ws: websocket.Accept needs a real http.Hijacker,
-	//     and the handler's loopback check (net/terminal/handler.go) needs
-	//     a real r.RemoteAddr — neither exists on the in-process bridge.
 	//   - /api/chat: SSE streaming needs a real http.Flusher to push each
 	//     token as it arrives; the in-process bridge doesn't implement
-	//     that either, so the handler's w.(http.Flusher) assertion fails
+	//     that, so the handler's w.(http.Flusher) assertion fails
 	//     and the request 500s with "streaming unsupported".
 	// So this opens one extra loopback-only listener serving the exact
-	// same mux (identical routes, identical settings) purely so those
+	// same mux (identical routes, identical settings) purely so streaming
 	// routes have somewhere real to connect to. The frontend learns the
-	// port via the bound terminalBridge below (api.js's terminalWSHost
-	// and apiOrigin) and only routes those two kinds of request through
-	// it — everything else still goes through the in-process bridge.
+	// port via the bound terminalBridge below (api.js's apiOrigin) and
+	// routes streaming requests through it — everything else still goes
+	// through the in-process bridge.
 	termListener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		log.Fatalf("listen for terminal bridge: %v", err)
+		log.Fatalf("listen for stream bridge: %v", err)
 	}
 	defer termListener.Close()
 	go func() {
 		if err := http.Serve(termListener, corsAllowLoopback(built.Mux)); err != nil {
-			log.Printf("terminal bridge server stopped: %v", err)
+			log.Printf("stream bridge server stopped: %v", err)
 		}
 	}()
 	bridge := &terminalBridge{port: termListener.Addr().(*net.TCPAddr).Port}
-	// Settings → Terminal's "point local AI CLIs at fastllm" toggle (see
-	// terminal.BaseURLHolder) needs this same address — the terminal bridge
-	// listener above is the one loopback port a spawned shell can actually
-	// reach fastllm's own /v1/chat/completions proxy through.
-	built.TerminalBaseURL.Set(fmt.Sprintf("http://127.0.0.1:%d", bridge.port))
 
-	app := &desktopApp{registry: built.TerminalRegistry, lspRegistry: built.LSPRegistry, handler: built.Handler}
+	app := &desktopApp{handler: built.Handler}
 
 	err = wails.Run(&options.App{
 		Title:  appTitle,
@@ -205,14 +194,10 @@ func (b *terminalBridge) TerminalPort() int {
 	return b.port
 }
 
-// desktopApp holds the state the Wails lifecycle hooks need to clean up —
-// mirrors what cmd/server's quitHandler does on POST /api/quit, since
-// there's no HTTP request driving shutdown here, just the window closing.
+// desktopApp holds the state the Wails lifecycle hooks need.
 type desktopApp struct {
-	ctx         context.Context
-	registry    *terminal.Registry
-	lspRegistry *lsp.Registry
-	handler     *chat.Handler
+	ctx     context.Context
+	handler *chat.Handler
 }
 
 func (a *desktopApp) startup(ctx context.Context) {
@@ -260,14 +245,8 @@ func (a *desktopApp) beforeClose(ctx context.Context) (prevent bool) {
 	return false
 }
 
-// shutdown tears down every live terminal session so a closed desktop
-// window can never leave an orphaned powershell.exe behind — same
-// guarantee cmd/server's quitHandler provides, plus the Job Object
-// kill-on-close safety net in internal/terminal for the case where the
-// whole process dies before this even runs.
+// shutdown runs when the window closes.
 func (a *desktopApp) shutdown(ctx context.Context) {
-	a.registry.CloseAll()
-	a.lspRegistry.CloseAll()
 }
 
 // screenshotHandler captures fastllm's own native window (see

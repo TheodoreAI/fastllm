@@ -12,28 +12,12 @@
 // bindings working. Desktop-only (isWails()), matching TopBar's own gating
 // — there's no folder-open/quit concept in the browser build.
 export function buildCommands({
-  setEditorSidebarCollapsed,
-  setTerminalPaneCollapsed,
   setSidebarCollapsed,
   setOpenFolderSignal,
   setQuitConfirmOpen,
   isWails,
 }) {
   const commands = [
-    {
-      id: 'toggle-editor-sidebar',
-      label: 'Toggle Files Sidebar',
-      key: 'b',
-      shift: false,
-      run: () => setEditorSidebarCollapsed((c) => !c),
-    },
-    {
-      id: 'toggle-terminal',
-      label: 'Toggle Terminal',
-      key: 'j',
-      shift: false,
-      run: () => setTerminalPaneCollapsed((c) => !c),
-    },
     {
       id: 'toggle-model-settings',
       label: 'Toggle Model Settings',
