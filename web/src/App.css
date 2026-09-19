@@ -843,7 +843,8 @@ body {
 
 /* ---------- window chrome ---------- */
 
-.app {
+.app,
+.app-shell {
   position: relative;
   display: flex;
   flex-direction: column;
@@ -855,16 +856,19 @@ body {
   border: 1px solid var(--border-strong);
 }
 
-/* Holds everything the offline banner used to overlay (rail, editor/chat,
-   right sidebar) — a normal flex row now that .app itself is a column, so
-   the banner sits above it as its own full-width strip instead of an
-   absolutely-positioned overlay competing with the rail's icon buttons
-   for the same pixels. */
 .app-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.main-row {
   flex: 1;
   display: flex;
   flex-direction: row;
   min-height: 0;
+  overflow: hidden;
 }
 
 /* Replaces cmd/desktop's native Windows menu bar (see TopBar.jsx's doc
@@ -5446,4 +5450,507 @@ body.picking-mode #tweak-bar-panel {
   padding: 1px 5px;
   border-radius: 3px;
   white-space: nowrap;
+}
+
+/* ---------- Header Navigation & View Mode Switcher ---------- */
+
+.header-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 16px;
+  background: var(--bg-titlebar);
+  border-bottom: 1px solid var(--border);
+  gap: 16px;
+  flex: 0 0 auto;
+}
+
+.header-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 0.9375rem;
+  color: var(--text);
+  user-select: none;
+}
+
+.brand-logo {
+  font-size: 1.125rem;
+  color: var(--accent);
+}
+
+.brand-title {
+  letter-spacing: -0.02em;
+}
+
+.view-mode-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: color-mix(in srgb, var(--bg-window), var(--text) 4%);
+  padding: 3px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+
+.view-mode-tab {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  padding: 4px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  user-select: none;
+}
+
+.view-mode-tab:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.view-mode-tab.is-active {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.btn-settings-icon,
+.btn-quit-icon {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 1rem;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.btn-settings-icon:hover,
+.btn-quit-icon:hover {
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+  color: var(--text);
+}
+
+.btn-quit-icon:hover {
+  color: var(--danger);
+}
+
+/* ---------- Autonomous Harness Panel ---------- */
+
+.harness-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg-chat);
+}
+
+.harness-header {
+  padding: 14px 20px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 0 0 auto;
+}
+
+.harness-config-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.harness-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 180px;
+}
+
+.harness-field-sm {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 90px;
+}
+
+.harness-field-checkbox {
+  display: flex;
+  align-items: center;
+  height: 32px;
+}
+
+.harness-field-checkbox label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8125rem;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+
+.harness-field label,
+.harness-field-sm label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+
+.harness-field input,
+.harness-field select,
+.harness-field-sm input {
+  background: var(--bg-input);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  padding: 6px 10px;
+  font-size: 0.8125rem;
+  outline: none;
+  height: 32px;
+  box-sizing: border-box;
+}
+
+.harness-field input:focus,
+.harness-field select:focus,
+.harness-field-sm input:focus {
+  border-color: var(--accent);
+}
+
+.harness-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.harness-task-input {
+  width: 100%;
+  background: var(--bg-input);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: 0.875rem;
+  line-height: 1.45;
+  resize: vertical;
+  outline: none;
+  box-sizing: border-box;
+  min-height: 64px;
+}
+
+.harness-task-input:focus {
+  border-color: var(--accent);
+}
+
+.harness-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.harness-run-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 8px 16px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 0.15s;
+}
+
+.harness-run-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.harness-run-btn:not(:disabled):hover {
+  filter: brightness(1.1);
+}
+
+.harness-stop-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--danger);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 8px 16px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 0.15s;
+}
+
+.harness-stop-btn:hover {
+  filter: brightness(1.1);
+}
+
+.harness-feed {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.harness-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--text-dim);
+}
+
+.harness-empty-state h3 {
+  margin: 0 0 8px 0;
+  font-size: 1.125rem;
+  color: var(--text);
+}
+
+.harness-empty-state p {
+  margin: 0;
+  max-width: 480px;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--text-faint);
+}
+
+.harness-turn-card {
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  border-radius: var(--radius);
+  overflow: hidden;
+  transition: border-color 0.15s;
+}
+
+.harness-turn-card.is-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.harness-turn-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  background: color-mix(in srgb, var(--bg-panel), var(--text) 3%);
+  cursor: pointer;
+  user-select: none;
+  border-bottom: 1px solid var(--border);
+}
+
+.harness-turn-badge {
+  font-size: 0.75rem;
+  font-weight: 700;
+  background: var(--bg-bubble);
+  color: var(--text);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+}
+
+.harness-turn-running {
+  font-size: 0.75rem;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.harness-turn-metrics {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  margin-left: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.harness-collapse-indicator {
+  font-size: 0.6875rem;
+  color: var(--text-faint);
+  margin-left: 6px;
+}
+
+.harness-turn-content {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.harness-tool-calls {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.harness-tool-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-window);
+  overflow: hidden;
+}
+
+.harness-tool-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 0.8125rem;
+}
+
+.harness-tool-line:hover {
+  background: color-mix(in srgb, var(--bg-window), var(--text) 4%);
+}
+
+.harness-tool-name {
+  font-weight: 600;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: var(--accent);
+}
+
+.harness-tool-args {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: var(--text-dim);
+  font-size: 0.75rem;
+}
+
+.harness-tool-spin {
+  font-size: 0.75rem;
+  color: var(--warning);
+  font-style: italic;
+}
+
+.harness-tool-done {
+  font-size: 0.75rem;
+  color: var(--success);
+  font-weight: 700;
+}
+
+.harness-tool-details {
+  padding: 10px;
+  border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-window), var(--bg-panel) 50%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.harness-subhead {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+}
+
+.harness-tool-block pre {
+  margin: 4px 0 0 0;
+  padding: 8px;
+  background: var(--bg-input);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 250px;
+}
+
+.harness-final-result {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  overflow: hidden;
+}
+
+.harness-final-result.is-success {
+  border-color: var(--success);
+}
+
+.harness-final-result.is-failure {
+  border-color: var(--danger);
+}
+
+.harness-final-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  background: color-mix(in srgb, var(--bg-panel), var(--text) 4%);
+  border-bottom: 1px solid var(--border);
+}
+
+.harness-status-pill {
+  font-weight: 700;
+  font-size: 0.8125rem;
+}
+
+.harness-final-result.is-success .harness-status-pill {
+  color: var(--success);
+}
+
+.harness-final-result.is-failure .harness-status-pill {
+  color: var(--danger);
+}
+
+.harness-final-meta {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.harness-final-body {
+  padding: 16px 20px;
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+
+.harness-error-banner {
+  background: color-mix(in srgb, var(--danger) 15%, transparent);
+  border: 1px solid var(--danger);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  font-size: 0.8125rem;
+  line-height: 1.4;
 }
