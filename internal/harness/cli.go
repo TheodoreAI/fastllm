@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"fastllm/internal/config"
 	"fastllm/internal/llm"
 )
 
@@ -29,8 +30,8 @@ func RunCLI(args []string) int {
 
 	taskFlag := fs.String("task", "", "Task instruction for the agent to execute")
 	dirFlag := fs.String("dir", ".", "Target working directory (sandboxed root)")
-	modelFlag := fs.String("model", "", "Model name (defaults to LLM_CHAT_MODEL or llama3.1)")
-	urlFlag := fs.String("url", "", "LLM API base URL (defaults to LLM_BASE_URL or http://localhost:11434/v1)")
+	modelFlag := fs.String("model", "", "Model name (defaults to config default_model or llama3.1)")
+	urlFlag := fs.String("url", "", "LLM API base URL (defaults to model endpoint URL or http://localhost:11434/v1)")
 	keyFlag := fs.String("key", "", "LLM API key (defaults to LLM_API_KEY)")
 	maxTurnsFlag := fs.Int("max-turns", 20, "Maximum tool execution turns")
 	timeoutFlag := fs.Int("timeout", 60, "Command timeout in seconds for run_command")
@@ -49,19 +50,46 @@ func RunCLI(args []string) int {
 		task = strings.Join(fs.Args(), " ")
 	}
 
-	baseURL := strings.TrimSpace(*urlFlag)
-	if baseURL == "" {
-		baseURL = getenv("LLM_BASE_URL", "http://localhost:11434/v1")
+	workDir, err := filepath.Abs(*dirFlag)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error resolving working dir %q: %v\n", *dirFlag, err)
+		return 1
 	}
 
-	apiKey := strings.TrimSpace(*keyFlag)
-	if apiKey == "" {
-		apiKey = getenv("LLM_API_KEY", "")
-	}
+	// Load settings from .fastllm/config.json or ~/.fastllm/config.json
+	settings, _, _ := config.LoadSettings(workDir)
 
 	model := strings.TrimSpace(*modelFlag)
 	if model == "" {
-		model = getenv("LLM_CHAT_MODEL", "llama3.1")
+		if env := os.Getenv("LLM_CHAT_MODEL"); env != "" {
+			model = env
+		} else if settings != nil && settings.DefaultModel != "" {
+			model = settings.DefaultModel
+		} else {
+			model = "llama3.1"
+		}
+	}
+
+	baseURL := strings.TrimSpace(*urlFlag)
+	apiKey := strings.TrimSpace(*keyFlag)
+
+	// If model matches a configured endpoint, apply its URL and APIKey if not explicitly passed
+	if settings != nil {
+		if matched := settings.FindModel(model); matched != nil {
+			if baseURL == "" && os.Getenv("LLM_BASE_URL") == "" && matched.URL != "" {
+				baseURL = matched.URL
+			}
+			if apiKey == "" && os.Getenv("LLM_API_KEY") == "" && matched.APIKey != "" {
+				apiKey = matched.APIKey
+			}
+		}
+	}
+
+	if baseURL == "" {
+		baseURL = getenv("LLM_BASE_URL", "http://localhost:11434/v1")
+	}
+	if apiKey == "" {
+		apiKey = getenv("LLM_API_KEY", "")
 	}
 
 	// Auto-route Muse Glimmer or OSU cluster models to the cluster tunnel (port 8010)
@@ -87,12 +115,6 @@ func RunCLI(args []string) int {
 			}
 		}
 		model = strings.TrimPrefix(strings.TrimPrefix(model, "osu:"), "cluster:")
-	}
-
-	workDir, err := filepath.Abs(*dirFlag)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error resolving working dir %q: %v\n", *dirFlag, err)
-		return 1
 	}
 
 	client := llm.New(baseURL, apiKey, model, "")

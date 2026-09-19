@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"fastllm/internal/config"
 	"fastllm/internal/files"
 	"fastllm/internal/llm"
 )
@@ -27,9 +28,16 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 		return fmt.Errorf("resolve working dir: %w", err)
 	}
 
+	// Load configuration (.fastllm/config.json or ~/.fastllm/config.json)
+	settings, configPath, _ := config.LoadSettings(absWorkingDir)
+
 	model := initialReq.Model
 	if model == "" {
-		model = r.DefaultModel
+		if settings != nil && settings.DefaultModel != "" {
+			model = settings.DefaultModel
+		} else {
+			model = r.DefaultModel
+		}
 	}
 
 	systemPrompt := initialReq.SystemPrompt
@@ -61,22 +69,27 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 	fmt.Println("  fastllm Interactive Agent REPL")
 	fmt.Printf("  Directory:   %s\n", absWorkingDir)
 	fmt.Printf("  Model:       %s\n", model)
+	if configPath != "" {
+		fmt.Printf("  Config:      %s\n", configPath)
+	}
 	fmt.Printf("  Git Repo:    %v\n", checkpointMgr.IsGitRepo())
 	fmt.Printf("  Rules:       %d rule file(s) discovered\n", len(discoveredRules))
 	fmt.Printf("  Commands:    %v\n", allowCmds)
 	fmt.Println("----------------------------------------------------------------")
 	fmt.Println("  Slash Commands:")
-	fmt.Println("    /help          - Show command reference")
-	fmt.Println("    /undo          - Rollback working tree to pre-turn checkpoint")
-	fmt.Println("    /diff          - Inspect git diff of current changes")
-	fmt.Println("    /status        - View session metrics, tokens, cost, and procs")
-	fmt.Println("    /model <name>  - Switch model on the fly")
-	fmt.Println("    /dir <path>    - Switch working directory")
-	fmt.Println("    /rules         - Inspect loaded workspace rules")
-	fmt.Println("    /ps            - List active background processes")
-	fmt.Println("    /kill <id>     - Kill a background process")
-	fmt.Println("    /clear         - Reset conversation context")
-	fmt.Println("    exit, quit     - Exit interactive session")
+	fmt.Println("    /help                 - Show command reference")
+	fmt.Println("    /models, /model       - List available models & endpoints")
+	fmt.Println("    /model <name>         - Switch active model")
+	fmt.Println("    /models add <id> <url>- Add a new model endpoint to config")
+	fmt.Println("    /undo                 - Rollback working tree to pre-turn checkpoint")
+	fmt.Println("    /diff                 - Inspect git diff of current changes")
+	fmt.Println("    /status               - View session metrics, tokens, cost, and procs")
+	fmt.Println("    /dir <path>           - Switch working directory")
+	fmt.Println("    /rules                - Inspect loaded workspace rules")
+	fmt.Println("    /ps                   - List active background processes")
+	fmt.Println("    /kill <id>            - Kill a background process")
+	fmt.Println("    /clear                - Reset conversation context")
+	fmt.Println("    exit, quit            - Exit interactive session")
 	fmt.Println("================================================================")
 
 	fileReader := files.New(absWorkingDir, true)
@@ -208,13 +221,69 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 				fmt.Println("Conversation context cleared.")
 				continue
 
-			case "/model":
-				if len(parts) < 2 {
-					fmt.Printf("Current model: %s\nUsage: /model <name>\n", model)
-				} else {
-					model = parts[1]
-					fmt.Printf("Switched model to: %s\n", model)
+			case "/model", "/models":
+				if len(parts) == 1 || (len(parts) == 2 && parts[1] == "list") {
+					fmt.Printf("\nConfigured Models (from %s):\n", configPath)
+					if settings != nil && len(settings.Models) > 0 {
+						for _, m := range settings.Models {
+							marker := "  "
+							if strings.EqualFold(m.ID, model) {
+								marker = "* "
+							}
+							desc := m.Name
+							if desc == "" {
+								desc = m.ID
+							}
+							fmt.Printf("  %s%-18s %-32s [%s]\n", marker, m.ID, desc, m.URL)
+						}
+					} else {
+						fmt.Println("  (no models configured)")
+					}
+					fmt.Println("\nUsage:")
+					fmt.Println("  /model <name>              - Switch active model")
+					fmt.Println("  /models add <id> <url>     - Add a new model endpoint")
+					if configPath != "" {
+						fmt.Printf("  Config file: %s\n", configPath)
+					}
+					continue
 				}
+
+				if len(parts) >= 4 && strings.ToLower(parts[1]) == "add" {
+					newID := parts[2]
+					newURL := parts[3]
+					if settings == nil {
+						settings = config.DefaultSettings()
+					}
+					settings.AddOrUpdateModel(config.ModelEndpoint{
+						ID:   newID,
+						Name: newID,
+						URL:  newURL,
+					})
+					if err := config.SaveSettings(configPath, settings); err != nil {
+						fmt.Printf("Error saving to %s: %v\n", configPath, err)
+					} else {
+						fmt.Printf("Added model %q (%s) to %s\n", newID, newURL, configPath)
+					}
+					continue
+				}
+
+				targetModel := parts[1]
+				model = targetModel
+				if settings != nil {
+					if matched := settings.FindModel(targetModel); matched != nil {
+						fmt.Printf("Switched model to: %s (%s, URL: %s)\n", matched.ID, matched.Name, matched.URL)
+						if client, ok := r.LLM.(*llm.Client); ok {
+							if matched.URL != "" {
+								client.BaseURL = matched.URL
+							}
+							if matched.APIKey != "" {
+								client.APIKey = matched.APIKey
+							}
+						}
+						continue
+					}
+				}
+				fmt.Printf("Switched model to: %s\n", model)
 				continue
 
 			case "/dir":
@@ -230,6 +299,7 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 						checkpointMgr = NewCheckpointManager(absWorkingDir)
 						discoveredRules = DiscoverWorkspaceRules(absWorkingDir)
 						rulesPrompt = FormatRulesForPrompt(discoveredRules)
+						settings, configPath, _ = config.LoadSettings(absWorkingDir)
 						sessionMessages = []llm.Message{
 							{Role: "system", Content: systemPrompt + rulesPrompt},
 						}
