@@ -1,6 +1,8 @@
 fastllm.exe
 fastllm.exe~
 fastllm
+fastllm-cli.exe
+fastllm-cli
 .fastllm.launched
 fastllm.db
 fastllm.log
@@ -11,6 +13,7 @@ fastllm.log
 # all packages at once.
 /server
 /desktop
+/cli
 web/node_modules/
 web/dist/
 .env

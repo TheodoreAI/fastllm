@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"fastllm/internal/appserver"
+	"fastllm/internal/harness"
 	"fastllm/internal/lsp"
 	"fastllm/internal/terminal"
 )
@@ -28,6 +29,10 @@ func getenv(key, fallback string) string {
 }
 
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "run" || os.Args[1] == "harness") {
+		os.Exit(harness.RunCLI(os.Args[2:]))
+	}
+
 	addr := getenv("FASTLLM_ADDR", ":8080")
 
 	cfg, err := appserver.ConfigFromEnv()
