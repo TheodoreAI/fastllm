@@ -113,3 +113,18 @@ func TestFormatStatusCardAndModelsTable(t *testing.T) {
 		t.Errorf("unexpected models table: %s", table)
 	}
 }
+
+func TestShellPromptAndHelp(t *testing.T) {
+	prompt := FormatShellPrompt("C:/Users/mateo/go/fastllm")
+	if !strings.Contains(prompt, "shell: fastllm") || !strings.Contains(prompt, "fastllm") {
+		t.Errorf("unexpected shell prompt: %s", prompt)
+	}
+
+	help := FormatHelp()
+	if !strings.Contains(help, "/shell") || !strings.Contains(help, "/c") || !strings.Contains(help, "!<cmd>") {
+		t.Errorf("expected help to contain /shell, /c, !<cmd>: %s", help)
+	}
+
+	// Ensure ClearScreen does not panic
+	ClearScreen()
+}

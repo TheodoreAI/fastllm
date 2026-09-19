@@ -289,6 +289,11 @@ export default function App() {
     if (!trimmed && pendingImages.length === 0) return
     if (streaming) return
 
+    if (trimmed === '/c' || trimmed === '/clear') {
+      startNewChat()
+      return
+    }
+
     if (mode === 'agent') {
       const userMessage = {
         role: 'user',

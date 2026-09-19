@@ -3,6 +3,7 @@ package harness
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -114,6 +115,25 @@ func FormatPrompt(model string) string {
 		return fmt.Sprintf("\n%s %s %s ", brand, badge, chevron)
 	}
 	return fmt.Sprintf("\n%s %s ", brand, chevron)
+}
+
+// FormatShellPrompt generates the prompt displayed when Shell Mode is active.
+func FormatShellPrompt(dir string) string {
+	brand := ColorYellow(StyleBold("fastllm"))
+	base := filepath.Base(dir)
+	if base == "" || base == "." {
+		base = dir
+	}
+	badge := ColorGray("[") + ColorYellow("shell: "+base) + ColorGray("]")
+	chevron := ColorYellow(StyleBold(SymPrompt))
+	return fmt.Sprintf("\n%s %s %s ", brand, badge, chevron)
+}
+
+// ClearScreen clears the terminal display and scrollback buffer.
+func ClearScreen() {
+	if ColorsEnabled() {
+		fmt.Print("\033[2J\033[H\033[3J")
+	}
 }
 
 // FormatDivider produces a horizontal rule with an optional label.
@@ -342,9 +362,16 @@ func FormatHelp() string {
 	renderSection("Session & Control", []cmdEntry{
 		{"/help", "Display this command reference"},
 		{"/status", "Inspect session token usage, latency, cost, and jobs"},
-		{"/clear", "Reset conversation context history"},
+		{"/c, /clear", "Clear conversation context and declutter UI screen"},
+		{"/cls", "Clear terminal screen without resetting context"},
 		{"/dir <path>", "Switch active working directory and reload workspace rules"},
 		{"/exit, /quit", "Exit the interactive session"},
+	})
+
+	renderSection("Shell & Execution", []cmdEntry{
+		{"/shell, /sh", "Toggle interactive Shell Mode (run host terminal commands)"},
+		{"/sh <cmd>", "Execute a shell command in working dir (e.g. /sh ls -la)"},
+		{"!<cmd>, $ <cmd>", "Execute command immediately (e.g. !git status, !go test)"},
 	})
 
 	renderSection("Models & Endpoints", []cmdEntry{
