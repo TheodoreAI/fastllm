@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import MessageContent from './MessageContent'
 import AgentExecutionBlock from './AgentExecutionBlock'
+import MaxTurnsPicker from './MaxTurnsPicker'
 
 // Small inline icon set replacing the emoji ChatPanel used to render
 // directly — emoji render inconsistently across platforms/fonts, while
@@ -420,25 +421,19 @@ export default function ChatPanel({
 
           {executionMode === 'agent' && (
             <div className="composer-agent-options">
-              <label className="composer-agent-opt" title="Maximum autonomous tool turns">
-                <span>Turns</span>
-                <input
-                  type="number"
-                  min="1"
-                  max="100"
-                  value={maxTurns}
-                  onChange={(e) => setMaxTurns(e.target.value)}
-                  disabled={streaming}
-                />
-              </label>
-              <label className="composer-agent-opt-checkbox" title="Allow running shell commands">
+              <MaxTurnsPicker
+                value={maxTurns}
+                onChange={setMaxTurns}
+                disabled={streaming}
+              />
+              <label className="composer-agent-opt-checkbox" title="Allow running shell commands (run_command)">
                 <input
                   type="checkbox"
                   checked={allowCommands}
                   onChange={(e) => setAllowCommands(e.target.checked)}
                   disabled={streaming}
                 />
-                <span>Shell</span>
+                <span>Shell commands</span>
               </label>
             </div>
           )}
