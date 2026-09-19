@@ -16,6 +16,15 @@ Auto-generated — do not edit by hand.
 ### shell-mode
 - `Integrated Shell Mode (/shell, /sh) and inline execution (!cmd, $ cmd) with live terminal IO, plus /c conversation and screen clearing` — Allows running interactive host commands directly inside the TUI without leaving the REPL, and keeps terminal UI uncluttered (2026-09-19T17:01:29+00:00)
 
+### tui-markdown-rendering
+- `Dependency-free ANSI renderer for headings, bullets, quotes, fenced code, inline code, emphasis, links, rules, diffs, and structured tool previews.` — Improves terminal readability without adding a heavy TUI framework or duplicating browser-grade layout behavior. (2026-09-19T18:10:49+00:00)
+
+### tui-runtime-controls
+- `Session-scoped /set controls for max turns, command timeout, thinking level, and command-tool availability; settings autosave with the session.` — Allows safe live tuning without restarting and makes resumed behavior reproducible; global-only config would leak task-specific choices into unrelated work. (2026-09-19T18:10:49+00:00)
+
+### tui-session-storage
+- `Autosaved per-session JSON files under ~/.fastllm/sessions with restrictive permissions, atomic temp-file replacement, and /sessions, /resume, /new commands.` — Keeps the standalone CLI portable and independent of the web SQLite database while preserving provider-agnostic message history; SQLite coupling and one monolithic history file were rejected. (2026-09-19T18:10:48+00:00)
+
 ### tui-styling
 - `Native zero-overhead modern ANSI/Unicode styling engine with Windows VT support, rounded cards, colored diffs, and structured tool blocks` — Zero new external dependencies, preserves fast streaming REPL responsiveness, provides clean monochrome/accent aesthetics matching web UI without emojis (2026-09-19T16:50:03+00:00)
 

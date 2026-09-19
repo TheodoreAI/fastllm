@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"fastllm/internal/config"
@@ -37,24 +38,29 @@ const (
 
 // Geometric Unicode symbols (strictly no emojis)
 const (
-	SymPrompt    = "❯"
-	SymCheck     = "✓"
-	SymCross     = "✗"
-	SymDot       = "·"
-	SymBullet    = "●"
-	SymBranch    = "◈"
-	SymCornerTL  = "╭"
-	SymCornerTR  = "╮"
-	SymCornerBL  = "╰"
-	SymCornerBR  = "╯"
-	SymHLine     = "─"
-	SymVLine     = "│"
-	SymTeeL      = "├"
-	SymTeeR      = "┤"
-	SymArrowR    = "→"
+	SymPrompt   = "❯"
+	SymCheck    = "✓"
+	SymCross    = "✗"
+	SymDot      = "·"
+	SymBullet   = "●"
+	SymBranch   = "◈"
+	SymCornerTL = "╭"
+	SymCornerTR = "╮"
+	SymCornerBL = "╰"
+	SymCornerBR = "╯"
+	SymHLine    = "─"
+	SymVLine    = "│"
+	SymTeeL     = "├"
+	SymTeeR     = "┤"
+	SymArrowR   = "→"
 )
 
 var ansiRegexp = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
+var (
+	markdownBoldRegexp = regexp.MustCompile(`\*\*([^*]+)\*\*`)
+	markdownCodeRegexp = regexp.MustCompile("`([^`]+)`")
+	markdownLinkRegexp = regexp.MustCompile(`\[([^]]+)\]\(([^)]+)\)`)
+)
 
 // ColorsEnabled checks if the terminal supports ANSI colors.
 func ColorsEnabled() bool {
@@ -77,6 +83,7 @@ func applyStyle(code, s string) string {
 func StyleBold(s string) string        { return applyStyle(ansiBold, s) }
 func StyleDim(s string) string         { return applyStyle(ansiDim, s) }
 func StyleItalic(s string) string      { return applyStyle(ansiItalic, s) }
+func StyleUnderline(s string) string   { return applyStyle(ansiUnderline, s) }
 func ColorRed(s string) string         { return applyStyle(ansiBrightRed, s) }
 func ColorGreen(s string) string       { return applyStyle(ansiBrightGreen, s) }
 func ColorYellow(s string) string      { return applyStyle(ansiBrightYellow, s) }
@@ -279,7 +286,12 @@ func FormatToolResult(toolName, result string, maxPreviewLines int) string {
 		if len(line) > 100 {
 			line = line[:97] + "..."
 		}
-		b.WriteString(fmt.Sprintf("  %s  %s\n", ColorGray(SymVLine), ColorGray(line)))
+		if toolName == "patch_file" || toolName == "edit_file" {
+			line = HighlightDiff(line)
+		} else {
+			line = ColorGray(line)
+		}
+		b.WriteString(fmt.Sprintf("  %s  %s\n", ColorGray(SymVLine), line))
 	}
 
 	// Bottom line with status indicator
@@ -299,6 +311,82 @@ func FormatToolResult(toolName, result string, maxPreviewLines int) string {
 
 	b.WriteString(fmt.Sprintf("  %s %s", ColorGray(SymCornerBL+SymHLine), statusText))
 	return b.String()
+}
+
+// FormatMarkdown renders the Markdown structures that are most useful in a
+// terminal without attempting to emulate a browser layout engine.
+func FormatMarkdown(markdown string) string {
+	lines := strings.Split(strings.TrimSpace(markdown), "\n")
+	var out []string
+	inCodeBlock := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") {
+			inCodeBlock = !inCodeBlock
+			if inCodeBlock {
+				language := strings.TrimSpace(strings.TrimPrefix(trimmed, "```"))
+				label := "code"
+				if language != "" {
+					label += ": " + language
+				}
+				out = append(out, FormatDivider(label, 70))
+			} else {
+				out = append(out, FormatDivider("", 70))
+			}
+			continue
+		}
+		if inCodeBlock {
+			out = append(out, "  "+ColorBrightWhite(line))
+			continue
+		}
+		if isMarkdownRule(trimmed) {
+			out = append(out, FormatDivider("", 70))
+			continue
+		}
+		switch {
+		case strings.HasPrefix(trimmed, "### "):
+			out = append(out, ColorCyan(StyleBold(strings.TrimSpace(trimmed[4:]))))
+		case strings.HasPrefix(trimmed, "## "):
+			out = append(out, "\n"+ColorCyan(StyleBold(strings.TrimSpace(trimmed[3:]))))
+		case strings.HasPrefix(trimmed, "# "):
+			out = append(out, "\n"+ColorBrightWhite(StyleBold(strings.TrimSpace(trimmed[2:]))))
+		case strings.HasPrefix(trimmed, "> "):
+			out = append(out, ColorGray(SymVLine+" "+renderInlineMarkdown(strings.TrimSpace(trimmed[2:]))))
+		case strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "* "):
+			out = append(out, "  "+ColorCyan(SymBullet)+" "+renderInlineMarkdown(strings.TrimSpace(trimmed[2:])))
+		default:
+			out = append(out, renderInlineMarkdown(line))
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+func isMarkdownRule(line string) bool {
+	compact := strings.ReplaceAll(line, " ", "")
+	if len(compact) < 3 {
+		return false
+	}
+	for _, marker := range []byte{'-', '*', '_'} {
+		if strings.Trim(compact, string(marker)) == "" {
+			return true
+		}
+	}
+	return false
+}
+
+func renderInlineMarkdown(line string) string {
+	line = markdownLinkRegexp.ReplaceAllStringFunc(line, func(match string) string {
+		parts := markdownLinkRegexp.FindStringSubmatch(match)
+		return StyleUnderline(parts[1]) + ColorGray(" ("+parts[2]+")")
+	})
+	line = markdownBoldRegexp.ReplaceAllStringFunc(line, func(match string) string {
+		parts := markdownBoldRegexp.FindStringSubmatch(match)
+		return StyleBold(parts[1])
+	})
+	return markdownCodeRegexp.ReplaceAllStringFunc(line, func(match string) string {
+		parts := markdownCodeRegexp.FindStringSubmatch(match)
+		return ColorYellow(parts[1])
+	})
 }
 
 // FormatTurnSummary formats the metrics at the completion of a turn into a sleek divider.
@@ -364,10 +452,21 @@ func FormatHelp() string {
 	renderSection("Session & Control", []cmdEntry{
 		{"/help", "Display this command reference"},
 		{"/status", "Inspect session token usage, latency, cost, and jobs"},
+		{"/sessions", "List saved interactive sessions"},
+		{"/resume <id>", "Resume a saved session"},
+		{"/new", "Save the current session and start a new one"},
 		{"/c, /clear", "Clear conversation context and declutter UI screen"},
 		{"/cls", "Clear terminal screen without resetting context"},
 		{"/dir <path>", "Switch active working directory and reload workspace rules"},
 		{"/exit, /quit", "Exit the interactive session"},
+	})
+
+	renderSection("Runtime Settings", []cmdEntry{
+		{"/set", "Show current session runtime settings"},
+		{"/set turns <1-100>", "Set maximum agent tool turns per prompt"},
+		{"/set timeout <sec>", "Set command timeout (1-3600 seconds)"},
+		{"/set think <level>", "Set off, low, medium, or high reasoning"},
+		{"/set commands <on|off>", "Enable or disable command/process tools"},
 	})
 
 	renderSection("Shell & Execution", []cmdEntry{
@@ -399,6 +498,49 @@ func FormatHelp() string {
 	})
 
 	return b.String()
+}
+
+func FormatRuntimeCard(maxTurns int, timeout time.Duration, thinkLevel string, allowCommands bool, sessionID string) string {
+	think := thinkLevel
+	if think == "" {
+		think = "off"
+	}
+	commands := "off"
+	if allowCommands {
+		commands = "on"
+	}
+	lines := []string{
+		"",
+		FormatKV("session", sessionID, 12),
+		FormatKV("max turns", fmt.Sprintf("%d", maxTurns), 12),
+		FormatKV("timeout", timeout.String(), 12),
+		FormatKV("thinking", think, 12),
+		FormatKV("commands", commands, 12),
+		"",
+	}
+	return FormatCard("Runtime Settings", lines, 74)
+}
+
+func FormatSessionsTable(sessions []InteractiveSession, activeID string) string {
+	if len(sessions) == 0 {
+		return ColorGray("  No saved sessions.")
+	}
+	lines := []string{"", ColorGray("  UPDATED           ID                         TITLE")}
+	lines = append(lines, ColorGray("  "+strings.Repeat(SymHLine, 70)))
+	for _, session := range sessions {
+		marker := " "
+		if session.ID == activeID {
+			marker = SymBullet
+		}
+		title := session.Title
+		if VisualLen(title) > 28 {
+			title = string([]rune(title)[:25]) + "..."
+		}
+		line := fmt.Sprintf("  %s %-16s %-26s %s", marker, session.UpdatedAt.Local().Format("2006-01-02 15:04"), session.ID, title)
+		lines = append(lines, line)
+	}
+	lines = append(lines, "")
+	return FormatCard("Saved Sessions", lines, 86)
 }
 
 // FormatStatusCard renders a comprehensive session metrics and environment card.

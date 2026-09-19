@@ -1,0 +1,3 @@
+value: Session-scoped /set controls for max turns, command timeout, thinking level, and command-tool availability; settings autosave with the session.
+reason: Allows safe live tuning without restarting and makes resumed behavior reproducible; global-only config would leak task-specific choices into unrelated work.
+decided_at: 2026-09-19T18:10:49+00:00

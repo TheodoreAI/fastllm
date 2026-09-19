@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -268,7 +269,13 @@ func summarizeArgs(rawJSON string) string {
 		return rawJSON
 	}
 	parts := make([]string, 0, len(m))
-	for k, v := range m {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		v := m[k]
 		if k == "content" || k == "replace" {
 			str, _ := v.(string)
 			parts = append(parts, fmt.Sprintf("%s=[%d bytes]", k, len(str)))

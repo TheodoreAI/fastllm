@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -53,6 +54,13 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 	rulesPrompt := FormatRulesForPrompt(discoveredRules)
 
 	allowCmds := r.AllowCommands
+	maxTurns := initialReq.MaxTurns
+	if maxTurns <= 0 {
+		maxTurns = r.DefaultMaxTurns
+	}
+	if maxTurns <= 0 {
+		maxTurns = 20
+	}
 	cmdTimeout := initialReq.CommandTimeout
 	if cmdTimeout <= 0 {
 		cmdTimeout = r.CommandTimeout
@@ -60,6 +68,7 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 	if cmdTimeout <= 0 {
 		cmdTimeout = 60 * time.Second
 	}
+	thinkLevel := initialReq.ThinkLevel
 
 	// Initialize Git checkpoint manager and background process manager
 	checkpointMgr := NewCheckpointManager(absWorkingDir)
@@ -74,23 +83,38 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 
 	fileReader := files.New(absWorkingDir, true)
 
-	tools := []llm.Tool{
-		readFileTool,
-		writeFileTool,
-		editFileTool,
-		patchFileTool,
-		listFilesTool,
-		searchFilesTool,
-		webSearchTool,
-		webFetchTool,
-		finishTaskTool,
-	}
-	if allowCmds {
-		tools = append(tools, runCommandTool, processStatusTool, killProcessTool)
-	}
+	tools := interactiveTools(allowCmds)
 
 	sessionMessages := []llm.Message{
 		{Role: "system", Content: systemPrompt + rulesPrompt},
+	}
+	sessionStore, sessionStoreErr := DefaultSessionStore()
+	var activeSession *InteractiveSession
+	if sessionStoreErr == nil {
+		activeSession = sessionStore.New(absWorkingDir, model, InteractiveRuntime{
+			MaxTurns: maxTurns, CommandTimeout: cmdTimeout, ThinkLevel: thinkLevel, AllowCommands: allowCmds,
+		})
+	}
+
+	saveSession := func() {
+		if sessionStore == nil || activeSession == nil {
+			return
+		}
+		activeSession.WorkingDir = absWorkingDir
+		activeSession.Model = model
+		activeSession.Runtime = InteractiveRuntime{
+			MaxTurns: maxTurns, CommandTimeout: cmdTimeout, ThinkLevel: thinkLevel, AllowCommands: allowCmds,
+		}
+		activeSession.Messages = append([]llm.Message(nil), sessionMessages[1:]...)
+		activeSession.Title = sessionTitle(activeSession.Messages)
+		if err := sessionStore.Save(activeSession); err != nil {
+			fmt.Println(ColorYellow(fmt.Sprintf("  %s Session autosave failed: %v", SymCross, err)))
+		}
+	}
+	if sessionStoreErr != nil {
+		fmt.Println(ColorYellow(fmt.Sprintf("  %s Session persistence unavailable: %v", SymCross, sessionStoreErr)))
+	} else {
+		saveSession()
 	}
 
 	switchWorkspace := func(newDir string) error {
@@ -116,6 +140,8 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 		if isDirectoryChange {
 			if err := switchWorkspace(path); err != nil {
 				fmt.Println(ColorRed(fmt.Sprintf("  %s Cannot change directory: %v", SymCross, err)))
+			} else {
+				saveSession()
 			}
 			return
 		}
@@ -152,6 +178,7 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 					{Role: "system", Content: systemPrompt + rulesPrompt},
 				}
 				fmt.Println(ColorGreen("  " + SymCheck + " Conversation and screen cleared."))
+				saveSession()
 				continue
 			}
 			if line == "/cls" {
@@ -189,6 +216,7 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 			cmd := strings.ToLower(parts[0])
 			switch cmd {
 			case "/exit", "/quit":
+				saveSession()
 				fmt.Println(ColorGray("\nSession ended. Goodbye!"))
 				return nil
 
@@ -213,6 +241,7 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 				}
 				fmt.Println(FormatWelcomeBanner(absWorkingDir, model, configPath, checkpointMgr.IsGitRepo(), len(discoveredRules), allowCmds))
 				fmt.Println(ColorGreen("  " + SymCheck + " Conversation and screen cleared."))
+				saveSession()
 				continue
 
 			case "/cls":
@@ -254,6 +283,128 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 
 			case "/status":
 				fmt.Println(FormatStatusCard(absWorkingDir, model, len(discoveredRules), sessionMetrics, processMgr))
+				fmt.Println(FormatRuntimeCard(maxTurns, cmdTimeout, thinkLevel, allowCmds, activeSessionID(activeSession)))
+				continue
+
+			case "/sessions":
+				if sessionStore == nil {
+					fmt.Println(ColorYellow("  Session persistence is unavailable."))
+					continue
+				}
+				sessions, err := sessionStore.List()
+				if err != nil {
+					fmt.Println(ColorRed(fmt.Sprintf("  %s Cannot list sessions: %v", SymCross, err)))
+				} else {
+					fmt.Println(FormatSessionsTable(sessions, activeSessionID(activeSession)))
+				}
+				continue
+
+			case "/resume":
+				if sessionStore == nil || len(parts) < 2 {
+					fmt.Println(ColorYellow("  Usage: /resume <session-id>"))
+					continue
+				}
+				loaded, err := sessionStore.Load(parts[1])
+				if err != nil {
+					fmt.Println(ColorRed(fmt.Sprintf("  %s Cannot resume session: %v", SymCross, err)))
+					continue
+				}
+				resolvedDir, err := resolveInteractiveDirectory(absWorkingDir, loaded.WorkingDir)
+				if err != nil {
+					fmt.Println(ColorRed(fmt.Sprintf("  %s Cannot restore workspace: %v", SymCross, err)))
+					continue
+				}
+				saveSession()
+				model = loaded.Model
+				maxTurns = loaded.Runtime.MaxTurns
+				if maxTurns <= 0 {
+					maxTurns = 20
+				}
+				cmdTimeout = loaded.Runtime.CommandTimeout
+				if cmdTimeout <= 0 {
+					cmdTimeout = 60 * time.Second
+				}
+				thinkLevel = loaded.Runtime.ThinkLevel
+				allowCmds = loaded.Runtime.AllowCommands
+				tools = interactiveTools(allowCmds)
+				if err := switchWorkspace(resolvedDir); err != nil {
+					fmt.Println(ColorRed(fmt.Sprintf("  %s Cannot restore workspace: %v", SymCross, err)))
+					continue
+				}
+				sessionMessages = append([]llm.Message{{Role: "system", Content: systemPrompt + rulesPrompt}}, loaded.Messages...)
+				activeSession = loaded
+				fmt.Println(ColorGreen(fmt.Sprintf("  %s Resumed %s — %s", SymCheck, loaded.ID, loaded.Title)))
+				continue
+
+			case "/new":
+				saveSession()
+				sessionMessages = []llm.Message{{Role: "system", Content: systemPrompt + rulesPrompt}}
+				sessionMetrics = SessionMetrics{}
+				if sessionStore != nil {
+					activeSession = sessionStore.New(absWorkingDir, model, InteractiveRuntime{
+						MaxTurns: maxTurns, CommandTimeout: cmdTimeout, ThinkLevel: thinkLevel, AllowCommands: allowCmds,
+					})
+					saveSession()
+				}
+				fmt.Println(ColorGreen("  " + SymCheck + " Started a new session."))
+				continue
+
+			case "/set":
+				if len(parts) == 1 {
+					fmt.Println(FormatRuntimeCard(maxTurns, cmdTimeout, thinkLevel, allowCmds, activeSessionID(activeSession)))
+					continue
+				}
+				if len(parts) < 3 {
+					fmt.Println(ColorYellow("  Usage: /set <turns|timeout|think|commands> <value>"))
+					continue
+				}
+				value := strings.ToLower(parts[2])
+				var setErr error
+				switch strings.ToLower(parts[1]) {
+				case "turns":
+					var parsed int
+					parsed, setErr = strconv.Atoi(value)
+					if setErr == nil && (parsed < 1 || parsed > 100) {
+						setErr = fmt.Errorf("turns must be between 1 and 100")
+					}
+					if setErr == nil {
+						maxTurns = parsed
+					}
+				case "timeout":
+					var seconds int
+					seconds, setErr = strconv.Atoi(value)
+					if setErr == nil && (seconds < 1 || seconds > 3600) {
+						setErr = fmt.Errorf("timeout must be between 1 and 3600 seconds")
+					}
+					if setErr == nil {
+						cmdTimeout = time.Duration(seconds) * time.Second
+					}
+				case "think":
+					if value == "off" {
+						thinkLevel = ""
+					} else if value == "low" || value == "medium" || value == "high" {
+						thinkLevel = value
+					} else {
+						setErr = fmt.Errorf("think must be off, low, medium, or high")
+					}
+				case "commands":
+					if value == "on" {
+						allowCmds = true
+					} else if value == "off" {
+						allowCmds = false
+					} else {
+						setErr = fmt.Errorf("commands must be on or off")
+					}
+					tools = interactiveTools(allowCmds)
+				default:
+					setErr = fmt.Errorf("unknown setting %q", parts[1])
+				}
+				if setErr != nil {
+					fmt.Println(ColorRed(fmt.Sprintf("  %s %v", SymCross, setErr)))
+				} else {
+					saveSession()
+					fmt.Println(FormatRuntimeCard(maxTurns, cmdTimeout, thinkLevel, allowCmds, activeSessionID(activeSession)))
+				}
 				continue
 
 			case "/rules":
@@ -341,10 +492,12 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 							}
 							applyModelParameters(client, matched.Parameters)
 						}
+						saveSession()
 						continue
 					}
 				}
 				fmt.Println(ColorGreen(fmt.Sprintf("  %s Switched model to: %s", SymCheck, model)))
+				saveSession()
 				continue
 
 			case "/dir":
@@ -353,6 +506,8 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 				} else {
 					if err := switchWorkspace(strings.TrimSpace(line[len(parts[0]):])); err != nil {
 						fmt.Printf("Invalid directory %q: %v\n", parts[1], err)
+					} else {
+						saveSession()
 					}
 				}
 				continue
@@ -394,6 +549,7 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 		}
 
 		if line == "exit" || line == "quit" {
+			saveSession()
 			fmt.Println("Goodbye!")
 			return nil
 		}
@@ -431,15 +587,18 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 			absWorkingDir,
 			allowCmds,
 			cmdTimeout,
-			initialReq.ThinkLevel,
+			thinkLevel,
+			maxTurns,
 			processMgr,
 			&sessionMetrics,
 			&sessionMessages,
 		)
+		saveSession()
 		cancel()
 		signal.Stop(sigChan)
 	}
 
+	saveSession()
 	return scanner.Err()
 }
 
@@ -452,15 +611,11 @@ func (r *Runner) runInteractiveTurn(
 	allowCmds bool,
 	cmdTimeout time.Duration,
 	thinkLevel string,
+	maxTurns int,
 	processMgr *ProcessManager,
 	sessionMetrics *SessionMetrics,
 	sessionMessages *[]llm.Message,
 ) {
-	maxTurns := r.DefaultMaxTurns
-	if maxTurns <= 0 {
-		maxTurns = 20
-	}
-
 	for turn := 1; turn <= maxTurns; turn++ {
 		if ctx.Err() != nil {
 			fmt.Println("Turn canceled.")
@@ -489,7 +644,7 @@ func (r *Runner) runInteractiveTurn(
 		// If no tools called, print reply and return control to the prompt
 		if len(reply.ToolCalls) == 0 {
 			if reply.Content != "" {
-				fmt.Printf("\n%s\n", reply.Content)
+				fmt.Printf("\n%s\n", FormatMarkdown(reply.Content))
 			}
 			fmt.Println(FormatTurnSummary(metrics))
 			*sessionMessages = append(*sessionMessages, reply)
@@ -662,7 +817,7 @@ func (r *Runner) runInteractiveTurn(
 				toolResult = fmt.Sprintf("Error: unknown tool %q", call.Function.Name)
 			}
 
-			fmt.Println(FormatToolResult(call.Function.Name, toolResult, 4))
+			fmt.Println(FormatToolResult(call.Function.Name, toolResult, 8))
 
 			*sessionMessages = append(*sessionMessages, llm.Message{
 				Role:       "tool",
@@ -677,10 +832,12 @@ func (r *Runner) runInteractiveTurn(
 			lines := []string{
 				"",
 				FormatKV("status", ColorGreen(SymCheck+" completed"), 10),
-				FormatKV("summary", finishSummary, 10),
 				"",
 			}
 			fmt.Println("\n" + FormatCard("Task Complete", lines, 74))
+			if strings.TrimSpace(finishSummary) != "" {
+				fmt.Println("\n" + FormatMarkdown(finishSummary))
+			}
 			return
 		}
 	}
@@ -708,6 +865,31 @@ func parseDirectoryChange(command string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func interactiveTools(allowCommands bool) []llm.Tool {
+	tools := []llm.Tool{
+		readFileTool,
+		writeFileTool,
+		editFileTool,
+		patchFileTool,
+		listFilesTool,
+		searchFilesTool,
+		webSearchTool,
+		webFetchTool,
+		finishTaskTool,
+	}
+	if allowCommands {
+		tools = append(tools, runCommandTool, processStatusTool, killProcessTool)
+	}
+	return tools
+}
+
+func activeSessionID(session *InteractiveSession) string {
+	if session == nil {
+		return "(not persisted)"
+	}
+	return session.ID
 }
 
 func resolveInteractiveDirectory(currentDir, requested string) (string, error) {
