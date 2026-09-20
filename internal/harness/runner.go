@@ -44,6 +44,7 @@ type Runner struct {
 	// reliably cuts context but can cost extra turns on short tasks, so it is
 	// opt-in until it is shown to pay for itself on long ones.
 	EnableObservations bool
+	agents             *AgentManager
 }
 
 // SwitchModel reconfigures the runner's direct LLM client for a configured
@@ -55,6 +56,9 @@ func (r *Runner) SwitchModel(endpoint *config.ModelEndpoint) error {
 	}
 	if strings.TrimSpace(endpoint.URL) == "" {
 		return fmt.Errorf("model %q has no endpoint URL", endpoint.ID)
+	}
+	if active := r.agents.ActiveCount(); active > 0 {
+		return fmt.Errorf("cannot switch model while %d child agent(s) are running", active)
 	}
 
 	client, ok := r.LLM.(*llm.Client)
@@ -84,7 +88,7 @@ func NewRunner(llmClient LLMClient, defaultWorkingDir, defaultModel string) *Run
 	if defaultWorkingDir == "" {
 		defaultWorkingDir, _ = os.Getwd()
 	}
-	return &Runner{
+	r := &Runner{
 		LLM:               llmClient,
 		DefaultWorkingDir: defaultWorkingDir,
 		DefaultModel:      defaultModel,
@@ -92,6 +96,8 @@ func NewRunner(llmClient LLMClient, defaultWorkingDir, defaultModel string) *Run
 		AllowCommands:     true,
 		CommandTimeout:    60 * time.Second,
 	}
+	r.agents = NewAgentManager(r, 3, 2)
+	return r
 }
 
 // Run executes an autonomous task to completion or until max turns are reached.
@@ -129,9 +135,16 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 	}
 
 	allowCmds := r.AllowCommands
-	if req.AllowCommands != allowCmds && req.Task != "" {
-		allowCmds = req.AllowCommands
+	if req.AllowCommands {
+		allowCmds = true
 	}
+	readOnly := req.PermissionMode == PermissionReadOnly || (req.AgentDepth > 0 && req.PermissionMode == PermissionAsk)
+	if readOnly {
+		allowCmds = false
+	}
+	req.WorkingDir = absWorkingDir
+	req.Model = model
+	req.AllowCommands = allowCmds
 
 	systemPrompt := req.SystemPrompt
 	if strings.TrimSpace(systemPrompt) == "" {
@@ -171,15 +184,21 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 	// Available tools
 	tools := []llm.Tool{
 		readFileTool,
-		writeFileTool,
-		editFileTool,
-		patchFileTool,
 		listFilesTool,
 		searchFilesTool,
+		globFilesTool,
 		webSearchTool,
 		webFetchTool,
 		updatePlanTool,
 		finishTaskTool,
+	}
+	if !readOnly {
+		tools = append(tools, writeFileTool, editFileTool, patchFileTool)
+	}
+	if readOnly {
+		tools = append(tools, agentStatusTool, sendAgentMessageTool)
+	} else {
+		tools = append(tools, r.agents.Tools(req.AgentDepth)...)
 	}
 	if r.EnableObservations {
 		tools = append(tools, readObservationTool)
@@ -212,6 +231,7 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 	var planBoundary bool
 
 	for turn := 1; turn <= maxTurns; turn++ {
+		drainAgentInbox(&messages, req.AgentInbox)
 		emit(Event{Type: EventTurnStart, Turn: turn})
 
 		// Compact context window if messages exceed budget
@@ -329,6 +349,17 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 				}
 				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
 				toolResult = r.executeSearchFiles(ctx, absWorkingDir, args.Pattern, args.Path)
+
+			case "glob_files":
+				var args struct {
+					Pattern string `json:"pattern"`
+					Path    string `json:"path"`
+				}
+				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+				toolResult = r.executeGlobFiles(ctx, absWorkingDir, args.Pattern, args.Path)
+
+			case "spawn_agent", "agent_status", "send_agent_message", "cancel_agent":
+				toolResult = r.executeAgentTool(req, call.Function.Name, call.Function.Arguments)
 
 			case "web_search":
 				var args struct {
@@ -714,6 +745,93 @@ scan:
 		res += fmt.Sprintf("\n\n[truncated to %d matches]", maxMatches)
 	}
 	return res
+}
+
+func (r *Runner) executeGlobFiles(ctx context.Context, root, patternValue, requestedPath string) string {
+	patternValue = strings.TrimSpace(strings.ReplaceAll(patternValue, "\\", "/"))
+	if patternValue == "" {
+		return "Error: pattern must not be empty."
+	}
+	re, err := compileGlob(patternValue)
+	if err != nil {
+		return "Error: invalid glob pattern: " + err.Error()
+	}
+	all, err := gitrepo.ListFiles(ctx, root)
+	if errors.Is(err, gitrepo.ErrNotARepo) {
+		all, err = walkFiles(root)
+	}
+	if err != nil {
+		return "Error listing files: " + err.Error()
+	}
+
+	prefix := path.Clean(strings.Trim(strings.ReplaceAll(requestedPath, "\\", "/"), "/"))
+	var matches []string
+	for _, file := range all {
+		if prefix != "" && prefix != "." && file != prefix && !strings.HasPrefix(file, prefix+"/") {
+			continue
+		}
+		candidate := file
+		if prefix != "" && prefix != "." {
+			candidate = strings.TrimPrefix(strings.TrimPrefix(file, prefix), "/")
+		}
+		if re.MatchString(candidate) {
+			matches = append(matches, file)
+		}
+	}
+	if len(matches) == 0 {
+		return "(no files matched)"
+	}
+	const maxGlobEntries = 200
+	truncated := len(matches) > maxGlobEntries
+	if truncated {
+		matches = matches[:maxGlobEntries]
+	}
+	result := strings.Join(matches, "\n")
+	if truncated {
+		result += fmt.Sprintf("\n\n[truncated to %d entries]", maxGlobEntries)
+	}
+	return result
+}
+
+func compileGlob(glob string) (*regexp.Regexp, error) {
+	var b strings.Builder
+	b.WriteString("^")
+	for i := 0; i < len(glob); i++ {
+		switch glob[i] {
+		case '*':
+			if i+1 < len(glob) && glob[i+1] == '*' {
+				i++
+				if i+1 < len(glob) && glob[i+1] == '/' {
+					i++
+					b.WriteString("(?:.*/)?")
+				} else {
+					b.WriteString(".*")
+				}
+			} else {
+				b.WriteString("[^/]*")
+			}
+		case '?':
+			b.WriteString("[^/]")
+		case '[':
+			end := strings.IndexByte(glob[i+1:], ']')
+			if end < 0 {
+				return nil, fmt.Errorf("unterminated character class")
+			}
+			end += i + 1
+			class := glob[i+1 : end]
+			if strings.HasPrefix(class, "!") {
+				class = "^" + class[1:]
+			}
+			b.WriteByte('[')
+			b.WriteString(class)
+			b.WriteByte(']')
+			i = end
+		default:
+			b.WriteString(regexp.QuoteMeta(string(glob[i])))
+		}
+	}
+	b.WriteString("$")
+	return regexp.Compile(b.String())
 }
 
 func (r *Runner) executeRunCommand(ctx context.Context, root, command string, timeout time.Duration) string {

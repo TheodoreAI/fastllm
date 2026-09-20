@@ -45,6 +45,12 @@ type RunRequest struct {
 
 	// InitialMessages provides previous conversation turns for multi-turn context.
 	InitialMessages []InitialMessage `json:"initial_messages,omitempty"`
+
+	// AgentDepth and AgentInbox are internal orchestration state. They are not
+	// part of the public API payload.
+	AgentDepth     int            `json:"-"`
+	AgentInbox     <-chan string  `json:"-"`
+	PermissionMode PermissionMode `json:"permission_mode,omitempty"`
 }
 
 // InitialMessage represents a prior conversation turn.

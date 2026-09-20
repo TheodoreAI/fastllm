@@ -1,11 +1,117 @@
 package harness
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+func TestInteractiveShellSupportsLS(t *testing.T) {
+	cmd := newInteractiveShellCommand("ls")
+	cmd.Dir = t.TempDir()
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("ls failed: %v\n%s", err, out)
+	}
+}
+
+func TestTeaShellDirectoryChangePersists(t *testing.T) {
+	root := t.TempDir()
+	child := filepath.Join(root, "child")
+	if err := os.Mkdir(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	m := &teaModel{workingDir: root}
+	if cmd := m.handleShellSubmit("cd child"); cmd != nil {
+		t.Fatal("directory changes should complete synchronously")
+	}
+	if m.workingDir != child {
+		t.Fatalf("working directory = %q; want %q", m.workingDir, child)
+	}
+	if !strings.Contains(m.historyText.String(), child) {
+		t.Fatalf("history does not report changed directory: %q", m.historyText.String())
+	}
+}
+
+func TestAgentPromptDoesNotAddBlankLines(t *testing.T) {
+	got := stripANSI(formatSubmittedPrompt("okay in laymens terms"))
+	if got != "\nYOU  okay in laymens terms\n" {
+		t.Fatalf("formatted prompt = %q; want labeled compact prompt", got)
+	}
+}
+
+func TestAssistantAnswerHasVisibleBoundary(t *testing.T) {
+	got := stripANSI(formatAssistantAnswer("The answer is 42.", 80))
+	if !strings.Contains(got, "\nASSISTANT\nThe answer is 42.\n") {
+		t.Fatalf("assistant answer lacks a visible boundary: %q", got)
+	}
+}
+
+func TestCopyTranscriptStripsANSI(t *testing.T) {
+	styled := formatSubmittedPrompt("question") + formatAssistantAnswer("answer", 80)
+	plain := StripANSI(styled)
+	if strings.Contains(plain, "\x1b[") || !strings.Contains(plain, "YOU  question") || !strings.Contains(plain, "ASSISTANT\nanswer") {
+		t.Fatalf("unexpected plain transcript: %q", plain)
+	}
+}
+
+func TestTaskFinishedRendersToolProvidedFinalAnswer(t *testing.T) {
+	ta := textarea.New()
+	vp := viewport.New(80, 10)
+	m := &teaModel{input: ta, viewport: vp, ready: true, width: 80}
+
+	updated, _ := m.Update(teaAgentEventMsg(Event{
+		Type: EventTaskFinished,
+		Result: &RunResult{
+			Turns:         2,
+			FinalResponse: "Finished through the tool.",
+		},
+	}))
+	m = updated.(*teaModel)
+
+	plain := StripANSI(m.historyText.String())
+	if !strings.Contains(plain, "ASSISTANT\nFinished through the tool.") {
+		t.Fatalf("final answer was not rendered: %q", plain)
+	}
+	if m.lastResponse != "Finished through the tool." {
+		t.Fatalf("last response = %q", m.lastResponse)
+	}
+}
+
+func TestMouseWheelScrollsViewportWithoutChangingPromptHistory(t *testing.T) {
+	ta := textarea.New()
+	ta.Focus()
+	vp := viewport.New(80, 3)
+	vp.SetContent("one\ntwo\nthree\nfour\nfive\nsix")
+	vp.GotoBottom()
+
+	m := &teaModel{
+		input:         ta,
+		viewport:      vp,
+		promptHistory: []string{"first", "second"},
+		historyIdx:    -1,
+		ready:         true,
+	}
+	initialOffset := m.viewport.YOffset
+
+	updated, _ := m.Update(tea.MouseMsg{
+		X: 1, Y: 1, Type: tea.MouseWheelUp, Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress,
+	})
+	m = updated.(*teaModel)
+
+	if m.historyIdx != -1 || m.input.Value() != "" {
+		t.Fatalf("mouse wheel changed prompt history: index=%d input=%q", m.historyIdx, m.input.Value())
+	}
+	if m.viewport.YOffset >= initialOffset {
+		t.Fatalf("mouse wheel did not scroll viewport: before=%d after=%d", initialOffset, m.viewport.YOffset)
+	}
+}
 
 func TestPromptHistoryNavigation(t *testing.T) {
 	ta := textarea.New()

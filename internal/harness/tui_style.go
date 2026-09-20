@@ -263,11 +263,11 @@ func FormatWelcomeBanner(dir, model, configPath string, isGit bool, rulesCount i
 func FormatToolCall(toolName, argsSummary string) string {
 	var badge string
 	switch toolName {
-	case "read_file", "list_files", "search_files":
+	case "read_file", "list_files", "search_files", "glob_files":
 		badge = ColorCyan("[" + toolName + "]")
 	case "write_file", "edit_file", "patch_file":
 		badge = ColorYellow("[" + toolName + "]")
-	case "run_command", "process_status", "kill_process":
+	case "run_command", "process_status", "kill_process", "spawn_agent", "agent_status", "send_agent_message", "cancel_agent":
 		badge = ColorMagenta("[" + toolName + "]")
 	case "web_search", "web_fetch":
 		badge = ColorBlue("[" + toolName + "]")

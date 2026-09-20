@@ -8,7 +8,7 @@ import (
 // DefaultSystemPrompt directs an autonomous coding harness agent to inspect
 // files before acting, verify changes, and finish concisely.
 const DefaultSystemPrompt = `You are an autonomous AI coding agent executing tasks directly in a project directory.
-You have tools to explore the codebase, edit files, patch diffs, run shell commands, manage background processes, search the web, fetch documentation, and finish the task.
+You have tools to explore the codebase, edit files, patch diffs, run shell commands, manage background processes, delegate bounded subtasks to child agents, search the web, fetch documentation, and finish the task.
 
 Follow these operational rules:
 1. First, explore the directory or search for relevant files to understand the project structure and context before modifying code.
@@ -21,7 +21,8 @@ Follow these operational rules:
    - For long-running servers or watchers, set background: true and inspect using process_status.
    - Large outputs may be archived. Use read_observation with the provided reference to retrieve exact line ranges.
 4. Use web_search and web_fetch when you need documentation, API references, library examples, or real-time web information.
-5. When finished, call finish_task (or state your final answer) explaining what was done and verifying the result.`
+5. Use spawn_agent only for concrete independent subtasks. Continue useful work while it runs, then retrieve its result with agent_status. Do not finish while required child work is still pending.
+6. When finished, call finish_task (or state your final answer) explaining what was done and verifying the result.`
 
 var webSearchTool = webtools.SearchTool
 var webFetchTool = webtools.FetchTool
@@ -200,6 +201,53 @@ var searchFilesTool = llm.Tool{
 		},
 	},
 }
+
+var globFilesTool = llm.Tool{
+	Type: "function",
+	Function: llm.ToolFunction{
+		Name:        "glob_files",
+		Description: "Find project files by glob pattern. Supports *, ?, character classes, and ** across directories.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"pattern": map[string]any{"type": "string", "description": "Glob such as **/*.go or internal/**/test_*.go."},
+				"path":    map[string]any{"type": "string", "description": "Optional subdirectory to search."},
+			},
+			"required": []string{"pattern"},
+		},
+	},
+}
+
+var spawnAgentTool = llm.Tool{Type: "function", Function: llm.ToolFunction{
+	Name: "spawn_agent", Description: "Start an isolated child agent asynchronously for a bounded subtask.",
+	Parameters: map[string]any{"type": "object", "properties": map[string]any{
+		"task":        map[string]any{"type": "string", "description": "Concrete task for the child agent."},
+		"working_dir": map[string]any{"type": "string", "description": "Optional directory within the current workspace."},
+		"model":       map[string]any{"type": "string", "description": "Optional model override when the client routes models to endpoints; direct clients must use the parent's active model."},
+		"max_turns":   map[string]any{"type": "integer", "description": "Maximum child turns, from 1 to 20."},
+	}, "required": []string{"task"}},
+}}
+
+var agentStatusTool = llm.Tool{Type: "function", Function: llm.ToolFunction{
+	Name: "agent_status", Description: "Inspect one child agent, or list all child agents when agent_id is omitted.",
+	Parameters: map[string]any{"type": "object", "properties": map[string]any{
+		"agent_id": map[string]any{"type": "string", "description": "Child agent ID."},
+	}},
+}}
+
+var sendAgentMessageTool = llm.Tool{Type: "function", Function: llm.ToolFunction{
+	Name: "send_agent_message", Description: "Queue guidance for a running child agent to receive before its next model turn.",
+	Parameters: map[string]any{"type": "object", "properties": map[string]any{
+		"agent_id": map[string]any{"type": "string"}, "message": map[string]any{"type": "string"},
+	}, "required": []string{"agent_id", "message"}},
+}}
+
+var cancelAgentTool = llm.Tool{Type: "function", Function: llm.ToolFunction{
+	Name: "cancel_agent", Description: "Cancel a running child agent.",
+	Parameters: map[string]any{"type": "object", "properties": map[string]any{
+		"agent_id": map[string]any{"type": "string"},
+	}, "required": []string{"agent_id"}},
+}}
 
 var runCommandTool = llm.Tool{
 	Type: "function",

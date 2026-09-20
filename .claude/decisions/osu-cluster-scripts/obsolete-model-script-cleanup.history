@@ -1,0 +1,4 @@
+- decided_at: 2026-09-20T14:54:49+00:00
+  event: initial
+  value: Archive model-specific scripts when their checkpoints and derived artifacts are absent; retain generic launchers and recoverable diagnostics.
+  reason: A dated archive removes active-directory clutter without irreversible deletion; generic scripts and diagnostics remain useful across models.

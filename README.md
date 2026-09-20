@@ -69,8 +69,13 @@ go run ./cmd/cli --task "inspect the project and fix the failing tests" --dir .
 
 Omit `--task` for the interactive TUI. Useful flags include `--model`,
 `--max-turns`, `--timeout`, `--think`, and `--no-commands`. The agent can read,
-write, patch, search, and list files; run commands and manage background
-processes; search the web; fetch public pages; and report a final result.
+write, patch, regex-search, and glob files; run commands and manage background
+processes; delegate bounded work to asynchronous child agents; search the web;
+fetch public pages; and report a final result. Child-agent tools support spawn,
+status/result inspection, follow-up messages, and cancellation. Delegation is
+limited to three concurrent children and two levels deep. The TUI header and
+`/status` show known/active child counts and aggregate child token usage;
+`agent_status` reports per-agent tokens and results.
 
 Workspace access is confined to the selected directory. Web fetching rejects
 loopback, private, multicast, and link-local destinations.
