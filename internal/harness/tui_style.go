@@ -478,6 +478,7 @@ func FormatHelp() string {
 		{"/new", "Save the current session and start a new one"},
 		{"/c, /clear", "Clear conversation context and declutter UI screen"},
 		{"/cls", "Clear terminal screen without resetting context"},
+		{"/copy, /yank", "Copy last response to OS clipboard (/copy all for full log)"},
 		{"/dir <path>", "Switch active working directory and reload workspace rules"},
 		{"/exit, /quit", "Exit the interactive session"},
 	})
