@@ -33,6 +33,7 @@ type InteractiveSession struct {
 	Model       string             `json:"model"`
 	Runtime     InteractiveRuntime `json:"runtime"`
 	Messages    []llm.Message      `json:"messages"`
+	Metrics     SessionMetrics     `json:"metrics,omitempty"`
 	ClosedAt    *time.Time         `json:"closed_at,omitempty"`
 	CustomTitle bool               `json:"custom_title,omitempty"`
 }

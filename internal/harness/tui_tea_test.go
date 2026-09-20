@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"fastllm/internal/llm"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -244,5 +247,110 @@ func TestAddPromptHistory(t *testing.T) {
 	m.addPromptHistory("cmd 2")
 	if len(m.promptHistory) != 2 || m.promptHistory[1] != "cmd 2" {
 		t.Fatalf("expected [cmd 1, cmd 2], got %v", m.promptHistory)
+	}
+}
+
+func TestTeaInitialMessagesCarryConversationContext(t *testing.T) {
+	m := &teaModel{sessionMessages: []llm.Message{
+		{Role: "user", Content: "first question"},
+		{Role: "assistant", Content: "first answer"},
+		{Role: "tool", Content: "old tool output"},
+	}}
+	got := m.initialMessages()
+	if len(got) != 2 || got[0].Role != "user" || got[0].Content != "first question" || got[1].Role != "assistant" {
+		t.Fatalf("initial messages = %#v", got)
+	}
+}
+
+func TestTeaRuntimeSettingsValidateAndPersistValues(t *testing.T) {
+	m := &teaModel{sessionGrants: map[string]bool{"write_file": true}}
+	for _, tc := range []struct{ name, value string }{
+		{"turns", "42"}, {"timeout", "90"}, {"think", "high"},
+		{"commands", "off"}, {"permissions", "read-only"}, {"output", "expanded"},
+	} {
+		if err := m.setRuntimeValue(tc.name, tc.value); err != nil {
+			t.Fatalf("set %s: %v", tc.name, err)
+		}
+	}
+	if m.maxTurns != 42 || m.commandTimeout != 90*time.Second || m.thinkLevel != "high" || m.allowCommands || m.permissionMode != PermissionReadOnly || !m.expandedTools {
+		t.Fatalf("unexpected runtime state: %+v", m.runtimeSettings())
+	}
+	if len(m.sessionGrants) != 0 {
+		t.Fatal("changing permission mode must clear session grants")
+	}
+	if err := m.setRuntimeValue("turns", "101"); err == nil {
+		t.Fatal("expected invalid turn limit to fail")
+	}
+}
+
+func TestTeaSessionRoundTripIncludesMetricsAndMessages(t *testing.T) {
+	store := &SessionStore{Dir: t.TempDir()}
+	m := &teaModel{
+		workingDir: t.TempDir(), modelName: "test-model", sessionStore: store,
+		maxTurns: 20, commandTimeout: time.Minute, allowCommands: true,
+		permissionMode: PermissionAsk, sessionGrants: make(map[string]bool),
+		sessionMessages: []llm.Message{{Role: "user", Content: "remember this"}, {Role: "assistant", Content: "remembered"}},
+		sessionMetrics:  SessionMetrics{TotalTurns: 2, TotalTokens: 123},
+	}
+	m.activeSession = store.New(m.workingDir, m.modelName, m.runtimeSettings())
+	if err := m.saveSession(); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.Load(m.activeSession.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Messages) != 2 || loaded.Metrics.TotalTokens != 123 || loaded.Runtime.PermissionMode != PermissionAsk {
+		t.Fatalf("loaded session = %+v", loaded)
+	}
+}
+
+func TestTeaCompactSessionContextTrimsUnboundedTranscript(t *testing.T) {
+	store := &SessionStore{Dir: t.TempDir()}
+	cfg := DefaultCompactionConfig()
+	m := &teaModel{
+		workingDir: t.TempDir(), modelName: "test-model", sessionStore: store,
+		maxTurns: 20, commandTimeout: time.Minute, allowCommands: true,
+		permissionMode: PermissionAsk, sessionGrants: make(map[string]bool),
+	}
+	// Well past the budget, and long enough that KeepRecentMessages cannot hold it all.
+	turn := strings.Repeat("x", 4000)
+	for i := 0; i < 40; i++ {
+		m.sessionMessages = append(m.sessionMessages,
+			llm.Message{Role: "user", Content: turn},
+			llm.Message{Role: "assistant", Content: turn})
+	}
+	m.activeSession = store.New(m.workingDir, m.modelName, m.runtimeSettings())
+
+	before := messageCharacterCount(m.sessionMessages)
+	if before <= cfg.MaxTotalChars {
+		t.Fatalf("fixture is inside budget (%d <= %d); test proves nothing", before, cfg.MaxTotalChars)
+	}
+
+	notice := m.compactSessionContext()
+	after := messageCharacterCount(m.sessionMessages)
+	if after >= before {
+		t.Fatalf("transcript not compacted: %d -> %d", before, after)
+	}
+	if notice == "" {
+		t.Fatal("expected a compaction notice")
+	}
+
+	// The compacted transcript is what persists and what gets replayed.
+	loaded, err := store.Load(m.activeSession.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if messageCharacterCount(loaded.Messages) != after {
+		t.Fatalf("saved session not compacted: %d != %d", messageCharacterCount(loaded.Messages), after)
+	}
+}
+
+func TestTeaCompactSessionContextQuietWellInsideBudget(t *testing.T) {
+	m := &teaModel{sessionMessages: []llm.Message{
+		{Role: "user", Content: "hi"}, {Role: "assistant", Content: "hello"},
+	}}
+	if notice := m.compactSessionContext(); notice != "" {
+		t.Fatalf("expected no notice for a short transcript, got %q", notice)
 	}
 }
