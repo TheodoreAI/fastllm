@@ -3,12 +3,12 @@ package harness
 import (
 	"context"
 	"encoding/json"
+	"fastllm/internal/files"
+	"fastllm/internal/llm"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"fastllm/internal/files"
-	"fastllm/internal/llm"
 )
 
 type mockLLM struct {

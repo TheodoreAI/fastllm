@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -130,6 +131,10 @@ type Client struct {
 	// (to=self / to=user). It is an endpoint property set by the composition
 	// root from user config, never inferred from a model name.
 	ChannelFraming bool
+
+	usageMu   sync.Mutex
+	lastUsage Usage
+	hasUsage  bool
 	// SendThink controls whether StreamChat/Chat include the "think"
 	// field on outgoing requests — Ollama's own extension for picking a
 	// reasoning effort level, not part of the OpenAI chat-completions
@@ -861,6 +866,15 @@ type chatResponse struct {
 	Choices []struct {
 		Message Message `json:"message"`
 	} `json:"choices"`
+	// Usage is what the server actually counted. Without it the caller can
+	// only estimate from the visible reply, which badly undercounts a
+	// tool-call turn (little or no content) and misses reasoning tokens
+	// entirely on models that stream a separate reasoning channel.
+	Usage *struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+		TotalTokens      int `json:"total_tokens"`
+	} `json:"usage"`
 }
 
 // Chat sends a single non-streaming completion request with the given
@@ -870,6 +884,30 @@ type chatResponse struct {
 // tool calls (which arrive as accumulated JSON, awkward to stream) are
 // resolved before the user-facing streamed answer begins. If model is
 // empty, c.ChatModel is used.
+// LastUsage returns the token counts the server reported for the most recent
+// completion on this client, and whether any were reported at all. Callers
+// should fall back to their own estimate when ok is false.
+func (c *Client) LastUsage() (Usage, bool) {
+	c.usageMu.Lock()
+	defer c.usageMu.Unlock()
+	return c.lastUsage, c.hasUsage
+}
+
+func (c *Client) recordUsage(u *struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}) {
+	c.usageMu.Lock()
+	defer c.usageMu.Unlock()
+	if u == nil || (u.PromptTokens == 0 && u.CompletionTokens == 0) {
+		c.hasUsage = false
+		return
+	}
+	c.lastUsage = Usage{PromptTokens: u.PromptTokens, CompletionTokens: u.CompletionTokens, TotalTokens: u.TotalTokens}
+	c.hasUsage = true
+}
+
 func (c *Client) Chat(ctx context.Context, model string, messages []Message, tools []Tool, thinkLevel string) (Message, error) {
 	if model == "" {
 		model = c.ChatModel
@@ -918,6 +956,7 @@ func (c *Client) Chat(ctx context.Context, model string, messages []Message, too
 		return Message{}, fmt.Errorf("llm: empty response")
 	}
 
+	c.recordUsage(cr.Usage)
 	reply := cr.Choices[0].Message
 	if c.ChannelFraming || HasChannelMarkers(reply.Content) {
 		cleaned, _ := SplitChannelContent(reply.Content)
