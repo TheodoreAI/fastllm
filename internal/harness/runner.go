@@ -33,7 +33,11 @@ type LLMClient interface {
 
 // Runner drives autonomous agent tasks against a sandboxed directory.
 type Runner struct {
-	LLM               LLMClient
+	LLM LLMClient
+	// routeModel is the prefixed name the router needs for the active
+	// provider-tagged model; empty when the active model is a plain
+	// OpenAI-compatible endpoint.
+	routeModel        string
 	DefaultWorkingDir string
 	DefaultModel      string
 	DefaultMaxTurns   int
@@ -54,14 +58,29 @@ func (r *Runner) SwitchModel(endpoint *config.ModelEndpoint) error {
 	if endpoint == nil {
 		return errors.New("model endpoint is not configured")
 	}
-	if strings.TrimSpace(endpoint.URL) == "" {
-		return fmt.Errorf("model %q has no endpoint URL", endpoint.ID)
-	}
 	if active := r.agents.ActiveCount(); active > 0 {
 		return fmt.Errorf("cannot switch model while %d child agent(s) are running", active)
 	}
 
-	client, ok := r.LLM.(*llm.Client)
+	// A provider-tagged endpoint is served by one of the router's native
+	// clients, which builds its own URL and speaks its own wire format. Such an
+	// endpoint legitimately has no URL of its own, so it must be routed before
+	// the URL check below rejects it.
+	if routed, ok := routedModelID(endpoint); ok {
+		if _, isRouter := r.LLM.(*llm.Router); !isRouter {
+			return fmt.Errorf("model %q needs the %s provider, which this client cannot reach", endpoint.ID, endpoint.Provider)
+		}
+		r.DefaultModel = endpoint.ID
+		r.routeModel = routed
+		return nil
+	}
+	r.routeModel = ""
+
+	if strings.TrimSpace(endpoint.URL) == "" {
+		return fmt.Errorf("model %q has no endpoint URL", endpoint.ID)
+	}
+
+	client, ok := localClient(r.LLM)
 	if !ok {
 		return fmt.Errorf("model switching is not supported by %T", r.LLM)
 	}
@@ -100,6 +119,18 @@ func NewRunner(llmClient LLMClient, defaultWorkingDir, defaultModel string) *Run
 	return r
 }
 
+// localClient reaches the direct OpenAI-compatible client, whether the runner
+// holds one outright or holds a router that wraps one.
+func localClient(client LLMClient) (*llm.Client, bool) {
+	switch c := client.(type) {
+	case *llm.Client:
+		return c, true
+	case *llm.Router:
+		return c.Local, c.Local != nil
+	}
+	return nil, false
+}
+
 // Run executes an autonomous task to completion or until max turns are reached.
 func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (*RunResult, error) {
 	startTime := time.Now()
@@ -116,6 +147,13 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 	model := req.Model
 	if model == "" {
 		model = r.DefaultModel
+	}
+	// Callers name the model the way the user sees it; the router dispatches on
+	// a prefixed name. Translating here keeps the display name in sessions,
+	// /status and the model picker while still reaching the native client.
+	routed := model
+	if r.routeModel != "" && model == r.DefaultModel {
+		routed = r.routeModel
 	}
 
 	maxTurns := req.MaxTurns
@@ -245,7 +283,7 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 		promptTokens := countApproxTokens(messages)
 
 		modelMessages := observations.Project(messages, turn)
-		reply, err := chatWithRetry(ctx, r.LLM, model, modelMessages, tools, req.ThinkLevel, nil)
+		reply, err := chatWithRetry(ctx, r.LLM, routed, modelMessages, tools, req.ThinkLevel, nil)
 		turnDuration := time.Since(turnStart)
 		if err != nil {
 			result.Error = fmt.Sprintf("LLM chat error on turn %d: %v", turn, err)
@@ -529,7 +567,7 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 				Role:    "system",
 				Content: "Turn budget exhausted. Stop calling tools and provide your final response summarizing what was done and what remains.",
 			})
-			finalReply, err := chatWithRetry(ctx, r.LLM, model, messages, nil, req.ThinkLevel, nil)
+			finalReply, err := chatWithRetry(ctx, r.LLM, routed, messages, nil, req.ThinkLevel, nil)
 			if err == nil && finalReply.Content != "" {
 				result.FinalResponse = finalReply.Content
 			}

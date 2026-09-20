@@ -1,6 +1,8 @@
 package harness
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -399,5 +401,86 @@ func TestPermissionPromptEnterAndEscDeny(t *testing.T) {
 		if m.pendingPermission != nil || cmd == nil {
 			t.Fatalf("%v did not clear the prompt or resume the event loop", key.Type)
 		}
+	}
+}
+
+// failingLLM always errors, the way an unreachable endpoint does.
+type failingLLM struct{ err error }
+
+func (f *failingLLM) Chat(ctx context.Context, model string, messages []llm.Message, tools []llm.Tool, thinkLevel string) (llm.Message, error) {
+	return llm.Message{}, f.err
+}
+
+func collectFinishEvents(t *testing.T, m *teaModel) []Event {
+	t.Helper()
+	var finishes []Event
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case ev, ok := <-m.eventChan:
+			if !ok {
+				return finishes
+			}
+			if ev.Type == EventTaskFinished {
+				finishes = append(finishes, ev)
+			}
+		case <-deadline:
+			t.Fatal("timed out draining events")
+		}
+	}
+}
+
+// A failed turn must be reported once. The runner emits EventTaskFinished and
+// also returns the error, so synthesizing a second one printed every failure
+// twice: "Task failed: LLM chat error on turn 1: ..." then "Task failed: ...".
+func TestFailedTurnIsReportedExactlyOnce(t *testing.T) {
+	tmp := t.TempDir()
+	ta := textarea.New()
+	m := &teaModel{
+		runner:     NewRunner(&failingLLM{err: errors.New("dial tcp 127.0.0.1:8003: connection refused")}, tmp, "test-model"),
+		workingDir: tmp, modelName: "test-model",
+		input: ta, viewport: viewport.New(80, 10), ready: true, width: 80,
+		maxTurns: 3, commandTimeout: time.Minute,
+		permissionMode: PermissionAuto, sessionGrants: make(map[string]bool),
+		permissionChan: make(chan teaPermissionRequestMsg),
+	}
+
+	m.handleAgentSubmit("do something")
+	finishes := collectFinishEvents(t, m)
+
+	if len(finishes) != 1 {
+		var msgs []string
+		for _, ev := range finishes {
+			msgs = append(msgs, ev.Error)
+		}
+		t.Fatalf("got %d finish events, want 1:\n  %s", len(finishes), strings.Join(msgs, "\n  "))
+	}
+	if !strings.Contains(finishes[0].Error, "connection refused") {
+		t.Fatalf("error text lost: %q", finishes[0].Error)
+	}
+}
+
+// The fallback still has to fire for failures that happen before the turn loop
+// starts, which return without emitting anything at all.
+func TestPreflightFailureStillReportsOnce(t *testing.T) {
+	tmp := t.TempDir()
+	ta := textarea.New()
+	m := &teaModel{
+		runner:     NewRunner(&failingLLM{err: errors.New("unused")}, tmp, "test-model"),
+		workingDir: string([]byte{0}), modelName: "test-model",
+		input: ta, viewport: viewport.New(80, 10), ready: true, width: 80,
+		maxTurns: 3, commandTimeout: time.Minute,
+		permissionMode: PermissionAuto, sessionGrants: make(map[string]bool),
+		permissionChan: make(chan teaPermissionRequestMsg),
+	}
+
+	m.handleAgentSubmit("do something")
+	finishes := collectFinishEvents(t, m)
+
+	if len(finishes) != 1 {
+		t.Fatalf("preflight failure produced %d finish events, want 1", len(finishes))
+	}
+	if finishes[0].Error == "" {
+		t.Fatal("preflight failure was reported with no error text")
 	}
 }

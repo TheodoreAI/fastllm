@@ -956,10 +956,21 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 				}
 			}
 		}
+		// Run reports a failed turn by emitting EventTaskFinished and returning
+		// the same error, so synthesizing one unconditionally printed every
+		// failure twice — once with the runner's "LLM chat error on turn N"
+		// wording and once with the bare error. The fallback still matters for
+		// failures that happen before the loop starts (an unresolvable working
+		// directory, say), which return without emitting anything. emit is
+		// synchronous on this goroutine, so a plain flag is enough.
+		finished := false
 		_, err := m.runner.Run(ctx, req, func(ev Event) {
+			if ev.Type == EventTaskFinished {
+				finished = true
+			}
 			m.eventChan <- ev
 		})
-		if err != nil {
+		if err != nil && !finished {
 			m.eventChan <- Event{
 				Type:  EventTaskFinished,
 				Error: err.Error(),

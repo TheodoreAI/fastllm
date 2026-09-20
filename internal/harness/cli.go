@@ -140,8 +140,21 @@ func RunCLI(args []string) int {
 		applyModelParameters(client, matched.Parameters)
 	}
 
-	runner := NewRunner(client, workDir, model)
+	// Wrap the direct client in a router so provider-tagged endpoints reach the
+	// native Anthropic/Gemini clients. Those speak their own wire formats —
+	// Gemini's thought signatures, for one — which an OpenAI-compatible request
+	// cannot carry, so without this the agent loop breaks on the second turn of
+	// any tool-using conversation.
+	router := llm.NewRouter(client, CloudConfigFromSettings(settings))
+
+	runner := NewRunner(router, workDir, model)
 	runner.EnableObservations = *obsFlag
+	// Route the startup model too, not just later /model switches.
+	if matched != nil {
+		if err := runner.SwitchModel(matched); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+		}
+	}
 
 	req := RunRequest{
 		Task:           task,
