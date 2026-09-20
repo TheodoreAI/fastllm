@@ -331,9 +331,16 @@ func FormatToolResult(toolName, result string, maxPreviewLines int) string {
 	return b.String()
 }
 
-// FormatMarkdown renders the Markdown structures that are most useful in a
-// terminal without attempting to emulate a browser layout engine.
+// FormatMarkdown renders Markdown structures with a default width of 76 characters.
 func FormatMarkdown(markdown string) string {
+	return FormatMarkdownWidth(markdown, 76)
+}
+
+// FormatMarkdownWidth renders Markdown structures wrapped cleanly to the specified terminal width.
+func FormatMarkdownWidth(markdown string, width int) string {
+	if width <= 0 {
+		width = 76
+	}
 	lines := strings.Split(strings.TrimSpace(markdown), "\n")
 	var out []string
 	inCodeBlock := false
@@ -347,9 +354,9 @@ func FormatMarkdown(markdown string) string {
 				if language != "" {
 					label += ": " + language
 				}
-				out = append(out, FormatDivider(label, 70))
+				out = append(out, FormatDivider(label, width))
 			} else {
-				out = append(out, FormatDivider("", 70))
+				out = append(out, FormatDivider("", width))
 			}
 			continue
 		}
@@ -358,7 +365,7 @@ func FormatMarkdown(markdown string) string {
 			continue
 		}
 		if isMarkdownRule(trimmed) {
-			out = append(out, FormatDivider("", 70))
+			out = append(out, FormatDivider("", width))
 			continue
 		}
 		switch {
@@ -369,14 +376,68 @@ func FormatMarkdown(markdown string) string {
 		case strings.HasPrefix(trimmed, "# "):
 			out = append(out, "\n"+ColorBrightWhite(StyleBold(strings.TrimSpace(trimmed[2:]))))
 		case strings.HasPrefix(trimmed, "> "):
-			out = append(out, ColorGray(SymVLine+" "+renderInlineMarkdown(strings.TrimSpace(trimmed[2:]))))
+			quoteText := renderInlineMarkdown(strings.TrimSpace(trimmed[2:]))
+			quoteLines := wrapLine(quoteText, width-4)
+			for _, ql := range quoteLines {
+				out = append(out, ColorGray(SymVLine+" ")+ql)
+			}
 		case strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "* "):
-			out = append(out, "  "+ColorCyan(SymBullet)+" "+renderInlineMarkdown(strings.TrimSpace(trimmed[2:])))
+			itemText := renderInlineMarkdown(strings.TrimSpace(trimmed[2:]))
+			itemLines := wrapLine(itemText, width-4)
+			for i, il := range itemLines {
+				if i == 0 {
+					out = append(out, "  "+ColorCyan(SymBullet)+" "+il)
+				} else {
+					out = append(out, "    "+il)
+				}
+			}
 		default:
-			out = append(out, renderInlineMarkdown(line))
+			rendered := renderInlineMarkdown(line)
+			if strings.TrimSpace(rendered) == "" {
+				out = append(out, "")
+			} else {
+				out = append(out, wrapLine(rendered, width)...)
+			}
 		}
 	}
 	return strings.Join(out, "\n")
+}
+
+// wrapLine breaks a line of text into multiple lines wrapped at the specified visual width.
+func wrapLine(text string, width int) []string {
+	if width <= 0 || VisualLen(text) <= width {
+		return []string{text}
+	}
+
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		return []string{""}
+	}
+
+	var lines []string
+	var current strings.Builder
+	currentLen := 0
+
+	for _, word := range words {
+		wLen := VisualLen(word)
+		if currentLen == 0 {
+			current.WriteString(word)
+			currentLen = wLen
+		} else if currentLen+1+wLen <= width {
+			current.WriteString(" ")
+			current.WriteString(word)
+			currentLen += 1 + wLen
+		} else {
+			lines = append(lines, current.String())
+			current.Reset()
+			current.WriteString(word)
+			currentLen = wLen
+		}
+	}
+	if currentLen > 0 {
+		lines = append(lines, current.String())
+	}
+	return lines
 }
 
 func isMarkdownRule(line string) bool {
