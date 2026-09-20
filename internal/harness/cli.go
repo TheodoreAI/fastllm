@@ -45,6 +45,7 @@ func RunCLI(args []string) int {
 	quietFlag := fs.Bool("quiet", false, "Suppress turn-by-turn progress output")
 	obsFlag := fs.Bool("on-observations", false, "Archive large tool output and send the model an evidence receipt or packed handle instead of the full text")
 	resumeFlag := fs.String("resume", "", "Resume an interactive session by ID, or 'last'")
+	importFlag := fs.Bool("import-conversations", false, "Import conversations from the legacy web database into the TUI session store, then exit")
 
 	if err := fs.Parse(args); err != nil {
 		return 1
@@ -73,6 +74,10 @@ func RunCLI(args []string) int {
 		} else {
 			model = "llama3.1"
 		}
+	}
+
+	if *importFlag {
+		return runConversationImport(workDir, model, *maxTurnsFlag, time.Duration(*timeoutFlag)*time.Second, !*noCmdsFlag, *thinkFlag)
 	}
 
 	baseURL := strings.TrimSpace(*urlFlag)
@@ -291,4 +296,46 @@ func summarizeArgs(rawJSON string) string {
 		}
 	}
 	return strings.Join(parts, " ")
+}
+
+// runConversationImport drains the legacy web database into the TUI session
+// store. It is a migration path, not a sync: imports are idempotent, so running
+// it again after using the web UI brings across only what is new.
+func runConversationImport(workDir, model string, maxTurns int, timeout time.Duration, allowCommands bool, thinkLevel string) int {
+	if OpenLegacyConversations == nil {
+		fmt.Fprintln(os.Stderr, "This build cannot read the legacy database.")
+		return 1
+	}
+	src, closeSrc, err := OpenLegacyConversations()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Cannot open the legacy database: %v\n", err)
+		return 1
+	}
+	if closeSrc != nil {
+		defer func() { _ = closeSrc() }()
+	}
+
+	store, err := DefaultSessionStore()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Cannot open the session store: %v\n", err)
+		return 1
+	}
+
+	runtime := InteractiveRuntime{
+		MaxTurns:       maxTurns,
+		CommandTimeout: timeout,
+		ThinkLevel:     thinkLevel,
+		AllowCommands:  allowCommands,
+		PermissionMode: PermissionAsk,
+	}
+	report, err := ImportLegacyConversations(src, store, workDir, model, runtime)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Import failed after %s: %v\n", report.String(), err)
+		return 1
+	}
+	fmt.Printf("%s Conversation import: %s\n", SymCheck, report.String())
+	if len(report.Imported) > 0 {
+		fmt.Println(ColorGray("  Open them with /sessions and /resume <id> in the TUI."))
+	}
+	return 0
 }

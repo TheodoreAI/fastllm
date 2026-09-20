@@ -545,6 +545,8 @@ func FormatHelp() string {
 		{"/rename <title>", "Rename the active session"},
 		{"/delete-session <id>", "Delete an inactive saved session"},
 		{"/new", "Save the current session and start a new one"},
+		{"/conversations", "List conversations in the legacy web database"},
+		{"/import <id|all>", "Import legacy web conversations as sessions"},
 		{"/c, /clear", "Clear conversation context and declutter UI screen"},
 		{"/cls", "Clear terminal screen without resetting context"},
 		{"/copy, /yank", "Copy last response to OS clipboard (/copy all for full log)"},
@@ -747,4 +749,36 @@ func formatCharCount(chars int) string {
 	default:
 		return fmt.Sprintf("%d chars", chars)
 	}
+}
+
+// FormatLegacyConversationsTable renders the conversations still held in the
+// legacy web database, marking the ones already pulled into the session store.
+func FormatLegacyConversationsTable(conversations []LegacyConversation, imported map[string]bool) string {
+	if len(conversations) == 0 {
+		return ColorGray("  No conversations in the legacy database.")
+	}
+	lines := []string{"", ColorGray("      ID      UPDATED           TITLE")}
+	lines = append(lines, ColorGray("  "+strings.Repeat(SymHLine, 70)))
+	for _, conv := range conversations {
+		marker := " "
+		if imported[legacyOrigin(conv.ID)] {
+			marker = SymBullet
+		}
+		title := conv.Title
+		if strings.TrimSpace(title) == "" {
+			title = "(untitled)"
+		}
+		if VisualLen(title) > 34 {
+			title = string([]rune(title)[:31]) + "..."
+		}
+		updated := "-"
+		if !conv.UpdatedAt.IsZero() {
+			updated = conv.UpdatedAt.Local().Format("2006-01-02 15:04")
+		}
+		lines = append(lines, fmt.Sprintf("  %s %-7d %-16s %s", marker, conv.ID, updated, title))
+	}
+	lines = append(lines, "")
+	lines = append(lines, ColorGray("  "+SymBullet+" already imported   ·   /import <id>   ·   /import all"))
+	lines = append(lines, "")
+	return FormatCard("Legacy Web Conversations", lines, 86)
 }

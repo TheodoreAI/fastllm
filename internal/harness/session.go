@@ -36,6 +36,9 @@ type InteractiveSession struct {
 	Metrics     SessionMetrics     `json:"metrics,omitempty"`
 	ClosedAt    *time.Time         `json:"closed_at,omitempty"`
 	CustomTitle bool               `json:"custom_title,omitempty"`
+	// ImportedFrom tags a session recovered from the legacy SQLite store so a
+	// repeated import skips it instead of duplicating it.
+	ImportedFrom string `json:"imported_from,omitempty"`
 }
 
 type SessionStore struct {
@@ -50,12 +53,17 @@ func DefaultSessionStore() (*SessionStore, error) {
 	return &SessionStore{Dir: filepath.Join(home, ".fastllm", "sessions")}, nil
 }
 
-func (s *SessionStore) New(workingDir, model string, runtime InteractiveRuntime) *InteractiveSession {
+// newSessionID mints a store-unique id ordered by the supplied timestamp.
+func newSessionID(at time.Time) string {
 	var random [4]byte
 	_, _ = rand.Read(random[:])
+	return at.UTC().Format("20060102-150405000") + "-" + hex.EncodeToString(random[:])
+}
+
+func (s *SessionStore) New(workingDir, model string, runtime InteractiveRuntime) *InteractiveSession {
 	now := time.Now().UTC()
 	return &InteractiveSession{
-		ID:         now.Format("20060102-150405000") + "-" + hex.EncodeToString(random[:]),
+		ID:         newSessionID(now),
 		Title:      "New session",
 		CreatedAt:  now,
 		UpdatedAt:  now,

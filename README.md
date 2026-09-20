@@ -158,3 +158,8 @@ updates on every `npm run build` regardless.
 To use an OpenAI-compatible endpoint instead, set `LLM_BASE_URL`,
 `LLM_API_KEY`, and `LLM_CHAT_MODEL`. Additional cloud-provider credentials can
 be configured from the Settings panel.
+
+## License
+
+This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE) file for details.
+
