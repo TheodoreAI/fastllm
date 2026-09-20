@@ -11,7 +11,7 @@ import (
 // LegacyConversation is one conversation recovered from the pre-TUI SQLite store
 // that backed the web frontend. It is a plain value so that this package stays
 // free of any database dependency; internal/legacystore supplies the concrete
-// reader and cmd/cli wires the two together.
+// reader and cmd/server wires the two together.
 type LegacyConversation struct {
 	ID        int64
 	Title     string

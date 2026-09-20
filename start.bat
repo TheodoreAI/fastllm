@@ -25,14 +25,14 @@ for /f %%S in ('powershell -NoProfile -Command ^
 
 if "%PORT_STATUS%"=="RUNNING_CURRENT" (
     echo fastllm API server listening on http://localhost:8080
-echo For the interactive UI, run: fastllm-cli.exe
+echo For the interactive UI, run: fastllm.exe (no arguments)
     exit /b 0
 )
 
 if "%PORT_STATUS%"=="RUNNING_OTHER" (
     echo Port 8080 is in use by something other than fastllm.exe — opening it as-is.
     echo fastllm API server listening on http://localhost:8080
-echo For the interactive UI, run: fastllm-cli.exe
+echo For the interactive UI, run: fastllm.exe (no arguments)
     exit /b 0
 )
 
@@ -77,4 +77,4 @@ powershell -NoProfile -Command ^
     "}"
 
 echo fastllm API server listening on http://localhost:8080
-echo For the interactive UI, run: fastllm-cli.exe
+echo For the interactive UI, run: fastllm.exe (no arguments)
