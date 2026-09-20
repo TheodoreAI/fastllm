@@ -5,6 +5,7 @@ package appserver
 
 import (
 	"database/sql"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -16,7 +17,6 @@ import (
 	"fastllm/internal/files"
 	"fastllm/internal/llm"
 	"fastllm/internal/store"
-	"fastllm/web"
 )
 
 // Config holds environment-derived settings.
@@ -134,10 +134,37 @@ func Build(cfg Config) (*Built, error) {
 	mux.HandleFunc("GET /api/live/stream", handler.LiveStream)
 	mux.HandleFunc("PUT /api/live/target", handler.SetLiveTarget)
 
-	mux.Handle("/", http.FileServer(http.FS(web.FS())))
+	// The browser frontend is gone: the terminal UI is the interface now. The
+	// root still answers rather than 404ing, so anyone opening the old bookmark
+	// learns where the UI went instead of seeing a bare error.
+	mux.HandleFunc("GET /", rootNotice)
 
 	return &Built{Mux: mux, DB: db, Handler: handler}, nil
 }
+
+// rootNotice explains that this server is headless and points at the API it
+// still serves.
+func rootNotice(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, headlessNotice)
+}
+
+const headlessNotice = `fastllm is running headless.
+
+The browser UI has been replaced by the terminal UI; run "fastllm-cli" to use it.
+
+This server still provides:
+  POST /api/chat                 PUT  /api/notes
+  POST /api/harness/run          GET  /api/models
+  GET  /api/conversations        GET  /api/settings
+  POST /v1/chat/completions      GET  /v1/models
+  POST /v1/messages
+`
 
 // DesktopDBPath returns the path to fastllm.db in the user's config directory,
 // creating the directory if it does not already exist.

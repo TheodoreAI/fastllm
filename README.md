@@ -1,9 +1,9 @@
 # fastllm
 
-A local LLM chat app and autonomous coding harness. The Go backend streams
-OpenAI-compatible chat and agent runs, the React frontend provides chat and
-agent modes, and SQLite stores conversations and settings. The production
-frontend is embedded into a single executable.
+A local LLM chat app and autonomous coding harness. The interactive terminal
+UI (`cmd/cli`) is the interface; a headless Go server (`cmd/server`) streams
+OpenAI-compatible chat and agent runs and stores conversations in SQLite.
+Each ships as a single self-contained executable.
 
 FastLLM can use Ollama and configured cloud providers, expose OpenAI- and
 Anthropic-compatible proxy endpoints, run coding tasks against a sandboxed
@@ -19,7 +19,6 @@ It also includes an interactive terminal UI and a one-shot CLI runner.
 - `internal/chat` — chat, compatibility API, and SSE agent handlers
 - `internal/harness` — autonomous tool loop, workspace rules, checkpoints, and TUI
 - `internal/webtools` — public-web search and SSRF-protected page fetching
-- `web` — React (Vite) frontend, embedded into the binary via `go:embed`
 
 ## Run it locally with Ollama (free, local models)
 
@@ -41,12 +40,10 @@ to start the HTTP application:
 go run ./cmd/server server
 ```
 
-Frontend (dev server proxies /api to :8080):
+Terminal UI:
 
 ```
-cd web
-npm install
-npm run dev
+go run ./cmd/cli
 ```
 
 Run the checks used before committing:
@@ -54,9 +51,7 @@ Run the checks used before committing:
 ```
 go test ./...
 go vet ./...
-cd web
-npm run lint
-npm run build
+gofmt -l .
 ```
 
 ## Agent CLI
@@ -94,12 +89,12 @@ already explicit user actions and do not prompt again.
 ## Production build (single binary)
 
 ```
-cd web && npm install && npm run build && cd ..
-go build -o fastllm.exe ./cmd/server
-./fastllm.exe server
+go build -o fastllm-cli.exe ./cmd/cli     # terminal UI
+go build -o fastllm.exe ./cmd/server      # headless API server
 ```
 
-Visit http://localhost:8080.
+`build-all.sh` / `build-all.bat` build both. The server listens on
+http://localhost:8080 and serves the API only — there is no browser UI.
 
 `cmd/server/rsrc_windows_*.syso` embed the app icon (`cmd/server/icon/fastllm.ico`)
 into `fastllm.exe` on Windows builds — `go build` picks them up automatically,
@@ -113,34 +108,21 @@ go run github.com/tc-hib/go-winres@latest simply --icon icon/fastllm.ico
 ## Launching like a regular app (Windows)
 
 Double-click `start-fastllm.vbs` (or the Desktop shortcut it's used to create)
-to start the server with no console window and auto-open the browser. It:
+to start the headless API server with no console window. It:
 
 - detects an already-running `fastllm.exe` and checks whether the exe file
   on disk is newer than that process's start time (i.e. it was rebuilt
-  while running) — if current, just opens the browser; if stale, stops it
-  first so the next step actually picks up the new build. A port held by
-  something other than our own exe is left untouched.
-- checks whether Go/frontend source is newer than the last build (comparing
-  file timestamps) and rebuilds only what's stale — a pull with backend
-  changes rebuilds `fastllm.exe`; frontend changes rebuild `web/dist` too
-  (and then the backend, since it embeds `web/dist`); nothing stale means
-  it skips straight to launch, no build overhead
+  while running) — if current, it reports the port; if stale, it stops the
+  process first so the next step actually picks up the new build. A port
+  held by something other than our own exe is left untouched.
+- checks whether Go source is newer than the last build (comparing file
+  timestamps) and rebuilds only when stale; otherwise it skips straight to
+  launch, no build overhead
 - if a rebuild fails, it prints the build output and pauses instead of
   launching a stale/missing binary
 
-See `start.bat` for the underlying logic. The Settings page shows the
-running build's version and build time (see below) if you ever need to
-confirm you're not looking at a stale instance.
-
-## Version / build tracking
-
-The Settings page (gear icon) shows an "About" section with the app version
-(from `web/package.json`'s `version` field) and the exact build timestamp,
-baked in at frontend build time via `vite.config.js`'s `define` — useful for
-confirming you're running the build you think you are, especially after the
-launcher rebuilds things automatically. Bump `web/package.json`'s `version`
-manually when you want the number to mean something; the build timestamp
-updates on every `npm run build` regardless.
+See `start.bat` for the underlying logic. For interactive use, run
+`fastllm-cli` rather than this launcher.
 
 ## Configuration (env vars)
 

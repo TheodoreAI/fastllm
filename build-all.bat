@@ -4,17 +4,14 @@ setlocal
 set "APPDIR=%~dp0"
 cd /d "%APPDIR%"
 
-echo Building frontend...
-pushd web
-call npm run build
+echo Building fastllm-cli.exe (terminal UI)...
+go build -o fastllm-cli.exe .\cmd\cli
 if errorlevel 1 (
-    echo Frontend build failed. See output above.
-    popd
+    echo cmd/cli build failed. See output above.
     exit /b 1
 )
-popd
 
-echo Building fastllm.exe (browser/server mode)...
+echo Building fastllm.exe (headless API server)...
 go build -o fastllm.exe .\cmd\server
 if errorlevel 1 (
     echo cmd/server build failed. See output above.
@@ -30,7 +27,13 @@ if exist "%INSTALLED%" (
     go build -o "%INSTALLED%" .\cmd\server
     if errorlevel 1 echo   (skipped: it is probably locked by a running fastllm session)
 )
+set "INSTALLEDCLI=%USERPROFILE%\.local\bin\fastllm-cli.exe"
+if exist "%INSTALLEDCLI%" (
+    go build -o "%INSTALLEDCLI%" .\cmd\cli
+    if errorlevel 1 echo   (skipped: it is probably locked by a running fastllm session)
+)
 
 echo.
 echo Done:
-echo   %APPDIR%fastllm.exe
+echo   %APPDIR%fastllm-cli.exe   (terminal UI)
+echo   %APPDIR%fastllm.exe       (headless API server)

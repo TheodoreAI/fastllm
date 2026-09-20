@@ -15,9 +15,6 @@ fastllm.log
 # all packages at once.
 /server
 /cli
-web/node_modules/
-# web/dist is governed by web/.gitignore, which keeps the directory itself
-# (web/embed.go does //go:embed all:dist) while ignoring the build output.
 .env
 fastllm_terminal_test.exe
 

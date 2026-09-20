@@ -1,7 +1,7 @@
 // Command server runs the fastllm backend: a chat API backed by an
 // OpenAI-compatible LLM, SQLite persistence, and an in-memory vector
-// index for retrieval-augmented answers. It also serves the built
-// React frontend from web/dist when present. All the actual wiring
+// index for retrieval-augmented answers. It is headless — the terminal
+// UI in cmd/cli replaced the browser frontend. All the actual wiring
 // (DB, LLM client, routes) lives in internal/appserver.
 package main
 
