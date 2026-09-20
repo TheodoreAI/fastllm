@@ -967,12 +967,12 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 }
 
 func formatSubmittedPrompt(input string) string {
-	label := lipgloss.NewStyle().Bold(true).Foreground(tuiColorCyan).Render("YOU")
+	label := lipgloss.NewStyle().Bold(true).Foreground(tuiColorCyan).Render(SymBullet + " YOU")
 	return "\n" + label + "  " + styleUserPrompt.Render(input) + "\n"
 }
 
 func formatAssistantAnswer(response string, width int) string {
-	label := lipgloss.NewStyle().Bold(true).Foreground(tuiColorGreen).Render("ASSISTANT")
+	label := lipgloss.NewStyle().Bold(true).Foreground(tuiColorGreen).Render(SymBullet + " ASSISTANT")
 	return "\n" + label + "\n" + FormatMarkdownWidth(response, width) + "\n\n"
 }
 

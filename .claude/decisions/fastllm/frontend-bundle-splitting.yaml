@@ -1,3 +1,3 @@
-value: Lazy-load MessageContent and use Vite 8 Rolldown codeSplitting groups capped at 300 KB for React, Markdown, KaTeX, highlighting, and remaining vendor modules.
-reason: Reduces the initial app chunk from 864 KB to 82 KB, defers markdown-only code and CSS until needed, and removes the large-chunk warning; raising the warning threshold would not improve loading and manualChunks is deprecated in Vite 8.
-decided_at: 2026-09-19T17:54:57+00:00
+value: Obsolete -- no bundler in this project. The Vite/Rolldown code-splitting setup was deleted along with web/ when the React frontend was removed; see fastllm / frontend.
+reason: Superseded by the frontend removal on 2026-09-20. Kept as a tombstone rather than left stating live policy, so a future session does not go looking for vite.config.js or try to re-tune chunk sizes for a bundler that is no longer part of the repo.
+decided_at: 2026-09-20T16:46:31+00:00

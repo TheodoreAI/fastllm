@@ -44,14 +44,14 @@ func TestTeaShellDirectoryChangePersists(t *testing.T) {
 
 func TestAgentPromptDoesNotAddBlankLines(t *testing.T) {
 	got := stripANSI(formatSubmittedPrompt("okay in laymens terms"))
-	if got != "\nYOU  okay in laymens terms\n" {
+	if got != "\n\u25cf YOU  okay in laymens terms\n" {
 		t.Fatalf("formatted prompt = %q; want labeled compact prompt", got)
 	}
 }
 
 func TestAssistantAnswerHasVisibleBoundary(t *testing.T) {
 	got := stripANSI(formatAssistantAnswer("The answer is 42.", 80))
-	if !strings.Contains(got, "\nASSISTANT\nThe answer is 42.\n") {
+	if !strings.Contains(got, "\n\u25cf ASSISTANT\nThe answer is 42.\n") {
 		t.Fatalf("assistant answer lacks a visible boundary: %q", got)
 	}
 }
@@ -59,7 +59,7 @@ func TestAssistantAnswerHasVisibleBoundary(t *testing.T) {
 func TestCopyTranscriptStripsANSI(t *testing.T) {
 	styled := formatSubmittedPrompt("question") + formatAssistantAnswer("answer", 80)
 	plain := StripANSI(styled)
-	if strings.Contains(plain, "\x1b[") || !strings.Contains(plain, "YOU  question") || !strings.Contains(plain, "ASSISTANT\nanswer") {
+	if strings.Contains(plain, "\x1b[") || !strings.Contains(plain, "\u25cf YOU  question") || !strings.Contains(plain, "\u25cf ASSISTANT\nanswer") {
 		t.Fatalf("unexpected plain transcript: %q", plain)
 	}
 }
@@ -79,7 +79,7 @@ func TestTaskFinishedRendersToolProvidedFinalAnswer(t *testing.T) {
 	m = updated.(*teaModel)
 
 	plain := StripANSI(m.historyText.String())
-	if !strings.Contains(plain, "ASSISTANT\nFinished through the tool.") {
+	if !strings.Contains(plain, "\u25cf ASSISTANT\nFinished through the tool.") {
 		t.Fatalf("final answer was not rendered: %q", plain)
 	}
 	if m.lastResponse != "Finished through the tool." {
