@@ -47,7 +47,7 @@ func TestParsePermissionMode(t *testing.T) {
 }
 
 func TestInteractiveToolsReadOnly(t *testing.T) {
-	tools := interactiveTools(true, PermissionReadOnly)
+	tools := interactiveTools(true, PermissionReadOnly, false)
 	for _, tool := range tools {
 		if requiresPermission(tool.Function.Name) {
 			t.Fatalf("read-only tools include mutating tool %q", tool.Function.Name)

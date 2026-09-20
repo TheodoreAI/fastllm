@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"fastllm/internal/llm"
 )
 
 // TurnMetrics holds token, latency, and cost stats for a single model turn.
@@ -121,4 +123,33 @@ func (sm SessionMetrics) FormatSessionSummary() string {
 	}
 	return fmt.Sprintf("Turns: %d | Total Tokens: %d (in: %d, out: %d) | Total Time: %.2fs | Total Cost: %s",
 		sm.TotalTurns, sm.TotalTokens, sm.TotalPromptTokens, sm.TotalCompletionTokens, sm.TotalDuration.Seconds(), costStr)
+}
+
+// usageReporter is implemented by LLM clients that can report the token counts
+// the server itself returned for the last completion.
+type usageReporter interface {
+	LastUsage() (llm.Usage, bool)
+}
+
+// resolveTurnTokens prefers the server's own accounting over a local estimate.
+//
+// The estimate counts only what came back in the reply, which is wrong in two
+// ways on an agent turn: a tool call carries almost no visible text, and models
+// that stream a separate reasoning channel do their real work in tokens that
+// never appear in the message at all. Both make tokens-per-second read far lower
+// than the model is actually generating.
+func resolveTurnTokens(client LLMClient, estPrompt, estCompletion int) (prompt, completion int, measured bool) {
+	if reporter, ok := client.(usageReporter); ok {
+		if usage, have := reporter.LastUsage(); have {
+			p, c := usage.PromptTokens, usage.CompletionTokens
+			if p == 0 {
+				p = estPrompt
+			}
+			if c == 0 {
+				c = estCompletion
+			}
+			return p, c, true
+		}
+	}
+	return estPrompt, estCompletion, false
 }

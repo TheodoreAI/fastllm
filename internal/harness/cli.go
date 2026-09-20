@@ -43,6 +43,7 @@ func RunCLI(args []string) int {
 	noCmdsFlag := fs.Bool("no-commands", false, "Disable the run_command tool")
 	jsonFlag := fs.Bool("json", false, "Output only the final RunResult JSON")
 	quietFlag := fs.Bool("quiet", false, "Suppress turn-by-turn progress output")
+	obsFlag := fs.Bool("on-observations", false, "Archive large tool output and send the model an evidence receipt or packed handle instead of the full text")
 	resumeFlag := fs.String("resume", "", "Resume an interactive session by ID, or 'last'")
 
 	if err := fs.Parse(args); err != nil {
@@ -135,6 +136,7 @@ func RunCLI(args []string) int {
 	}
 
 	runner := NewRunner(client, workDir, model)
+	runner.EnableObservations = *obsFlag
 
 	req := RunRequest{
 		Task:           task,

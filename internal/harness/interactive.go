@@ -115,7 +115,7 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 	})
 	defer input.Close()
 	permissions := NewPermissionController(permissionMode, input)
-	tools := interactiveTools(allowCmds, permissionMode)
+	tools := interactiveTools(allowCmds, permissionMode, r.EnableObservations)
 	var activeSession *InteractiveSession
 	if sessionStoreErr == nil {
 		activeSession = sessionStore.New(absWorkingDir, model, InteractiveRuntime{
@@ -126,7 +126,10 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 	if activeSession != nil {
 		observationSessionID = activeSession.ID
 	}
-	observationStore, _ := DefaultObservationStore(observationSessionID)
+	var observationStore *ObservationStore
+	if r.EnableObservations {
+		observationStore, _ = DefaultObservationStore(observationSessionID)
+	}
 	observations := &ObservationManager{Store: observationStore}
 
 	saveSession := func() {
@@ -191,7 +194,7 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 		}
 		expandedTools = loaded.Runtime.ExpandedTools
 		permissions.SetMode(permissionMode)
-		tools = interactiveTools(allowCmds, permissionMode)
+		tools = interactiveTools(allowCmds, permissionMode, r.EnableObservations)
 		if err := switchWorkspace(resolvedDir); err != nil {
 			return err
 		}
@@ -528,14 +531,14 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 					} else {
 						setErr = fmt.Errorf("commands must be on or off")
 					}
-					tools = interactiveTools(allowCmds, permissionMode)
+					tools = interactiveTools(allowCmds, permissionMode, r.EnableObservations)
 				case "permissions", "permission":
 					var parsed PermissionMode
 					parsed, setErr = ParsePermissionMode(value)
 					if setErr == nil {
 						permissionMode = parsed
 						permissions.SetMode(parsed)
-						tools = interactiveTools(allowCmds, permissionMode)
+						tools = interactiveTools(allowCmds, permissionMode, r.EnableObservations)
 					}
 				case "output":
 					if value == "expanded" {
@@ -807,26 +810,15 @@ func (r *Runner) runInteractiveTurn(
 		turnStart := time.Now()
 		promptTokens := countApproxTokens(*sessionMessages)
 
-		fmt.Print(ColorGray("\r  Thinking… 0s"))
-		indicatorDone := make(chan struct{})
-		go func() {
-			ticker := time.NewTicker(time.Second)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ticker.C:
-					fmt.Printf(ColorGray("\r  Thinking… %s"), time.Since(turnStart).Round(time.Second))
-				case <-indicatorDone:
-					return
-				}
-			}
-		}()
+		thinking := NewSpinner("Thinking")
+		thinking.Start()
 		modelMessages := observations.Project(*sessionMessages, turn)
 		reply, err := chatWithRetry(ctx, r.LLM, model, modelMessages, tools, thinkLevel, func(attempt int, delay time.Duration, retryErr error) {
-			fmt.Printf("\r%s\n", ColorYellow(fmt.Sprintf("  Model request failed; retry %d/3 in %s: %v", attempt, delay, retryErr)))
+			thinking.Stop()
+			fmt.Printf("%s\n", ColorYellow(fmt.Sprintf("  Model request failed; retry %d/3 in %s: %v", attempt, delay, retryErr)))
+			thinking.Start()
 		})
-		close(indicatorDone)
-		fmt.Print("\r\033[2K")
+		thinking.Stop()
 		turnDuration := time.Since(turnStart)
 		if err != nil {
 			if ctx.Err() == nil {
@@ -836,6 +828,7 @@ func (r *Runner) runInteractiveTurn(
 		}
 
 		compTokens := countApproxTokens([]llm.Message{reply})
+		promptTokens, compTokens, _ = resolveTurnTokens(r.LLM, promptTokens, compTokens)
 		metrics := ComputeTurnMetrics(turn, model, promptTokens, compTokens, turnDuration)
 		sessionMetrics.Add(metrics)
 
@@ -886,7 +879,11 @@ func (r *Runner) runInteractiveTurn(
 				continue
 			}
 
-			fmt.Println(FormatToolState(call.Function.Name, "running", 0))
+			// A tool can block for a long time (a big search, a build, a network
+			// fetch). Animate for the whole execution so the session never looks
+			// frozen between the call card and its result.
+			running := NewSpinner("Running " + call.Function.Name)
+			running.Start()
 			toolStart := time.Now()
 			var toolResult string
 			switch call.Function.Name {
@@ -1074,6 +1071,7 @@ func (r *Runner) runInteractiveTurn(
 				toolResult = fmt.Sprintf("Error: unknown tool %q", call.Function.Name)
 			}
 
+			running.Stop()
 			outcome := observations.Process(call.Function.Name, call.Function.Arguments, toolResult, turn)
 			fmt.Println(FormatToolState(call.Function.Name, "completed", time.Since(toolStart)))
 			fmt.Println(FormatToolResult(call.Function.Name, outcome.DisplayView, previewLines))
@@ -1139,16 +1137,18 @@ func followUpFromArguments(raw string) *FollowUpCommand {
 	return arguments.ThenRun
 }
 
-func interactiveTools(allowCommands bool, permissionMode PermissionMode) []llm.Tool {
+func interactiveTools(allowCommands bool, permissionMode PermissionMode, enableObservations bool) []llm.Tool {
 	tools := []llm.Tool{
 		readFileTool,
 		listFilesTool,
 		searchFilesTool,
 		webSearchTool,
 		webFetchTool,
-		readObservationTool,
 		updatePlanTool,
 		finishTaskTool,
+	}
+	if enableObservations {
+		tools = append(tools, readObservationTool)
 	}
 	if permissionMode != PermissionReadOnly {
 		tools = append(tools, writeFileTool, editFileTool, patchFileTool)

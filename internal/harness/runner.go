@@ -38,6 +38,11 @@ type Runner struct {
 	DefaultMaxTurns   int
 	AllowCommands     bool
 	CommandTimeout    time.Duration
+	// EnableObservations turns on archiving, evidence receipts, and packing of
+	// large tool output. Off by default: measured against a control run it
+	// reliably cuts context but can cost extra turns on short tasks, so it is
+	// opt-in until it is shown to pay for itself on long ones.
+	EnableObservations bool
 }
 
 type FollowUpCommand struct {
@@ -119,7 +124,10 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 	// Initialize background process manager
 	processMgr := NewProcessManager()
 	defer processMgr.KillAll()
-	observationStore, _ := DefaultObservationStore(fmt.Sprintf("run-%d", time.Now().UnixNano()))
+	var observationStore *ObservationStore
+	if r.EnableObservations {
+		observationStore, _ = DefaultObservationStore(fmt.Sprintf("run-%d", time.Now().UnixNano()))
+	}
 	observations := &ObservationManager{Store: observationStore}
 
 	emit := func(ev Event) {
@@ -141,9 +149,11 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 		searchFilesTool,
 		webSearchTool,
 		webFetchTool,
-		readObservationTool,
 		updatePlanTool,
 		finishTaskTool,
+	}
+	if r.EnableObservations {
+		tools = append(tools, readObservationTool)
 	}
 	if allowCmds {
 		tools = append(tools, runCommandTool, processStatusTool, killProcessTool)
@@ -195,6 +205,7 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 		}
 
 		compTokens := countApproxTokens([]llm.Message{reply})
+		promptTokens, compTokens, _ = resolveTurnTokens(r.LLM, promptTokens, compTokens)
 		turnMetrics := ComputeTurnMetrics(turn, model, promptTokens, compTokens, turnDuration)
 		sessionMetrics.Add(turnMetrics)
 
