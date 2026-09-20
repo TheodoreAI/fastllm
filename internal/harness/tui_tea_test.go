@@ -354,3 +354,50 @@ func TestTeaCompactSessionContextQuietWellInsideBudget(t *testing.T) {
 		t.Fatalf("expected no notice for a short transcript, got %q", notice)
 	}
 }
+
+// A permission prompt with no key legend looks frozen: the card names the tool
+// but nothing tells the user that y/a/n are the answers.
+func TestPermissionPromptShowsKeyLegend(t *testing.T) {
+	tmp := t.TempDir()
+	ta := textarea.New()
+	m := &teaModel{
+		runner: NewRunner(&mockLLM{}, tmp, "test-model"), workingDir: tmp,
+		input: ta, viewport: viewport.New(80, 6), ready: true, width: 80,
+		sessionGrants: map[string]bool{}, permissionChan: make(chan teaPermissionRequestMsg),
+	}
+	m.pendingPermission = &teaPermissionRequestMsg{ToolName: "write_file", Summary: "path=hello.txt"}
+
+	plain := StripANSI(m.View())
+	for _, want := range []string{"Permission Required", "write_file", "[y]", "[a]", "[n]", "esc"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("permission prompt is missing %q:\n%s", want, plain)
+		}
+	}
+}
+
+func TestPermissionPromptEnterAndEscDeny(t *testing.T) {
+	for _, key := range []tea.KeyMsg{{Type: tea.KeyEnter}, {Type: tea.KeyEsc}} {
+		ta := textarea.New()
+		m := &teaModel{
+			input: ta, viewport: viewport.New(80, 6), ready: true, width: 80,
+			sessionGrants: map[string]bool{}, permissionChan: make(chan teaPermissionRequestMsg),
+		}
+		reply := make(chan permissionDecision, 1)
+		m.pendingPermission = &teaPermissionRequestMsg{ToolName: "write_file", Reply: reply}
+
+		updated, cmd := m.Update(key)
+		m = updated.(*teaModel)
+
+		select {
+		case d := <-reply:
+			if d.Allow {
+				t.Fatalf("%v allowed the write; it must deny", key.Type)
+			}
+		default:
+			t.Fatalf("%v left the prompt unanswered -- the UI looks frozen", key.Type)
+		}
+		if m.pendingPermission != nil || cmd == nil {
+			t.Fatalf("%v did not clear the prompt or resume the event loop", key.Type)
+		}
+	}
+}
