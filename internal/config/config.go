@@ -1,12 +1,15 @@
 package config
 
 import (
+	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode/utf16"
 )
 
 // ModelEndpoint configures an LLM model and its inference endpoint.
@@ -46,7 +49,41 @@ func (m *ModelEndpoint) ResolveAPIKey() string {
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(data))
+	return strings.TrimSpace(decodeKeyFile(data))
+}
+
+// decodeKeyFile normalizes a key file's bytes to plain text.
+//
+// On Windows a key written with PowerShell's ">" or Out-File lands as UTF-16
+// with a BOM. TrimSpace cannot clean that up — NUL is not Unicode whitespace
+// and neither is the BOM — so the key would be sent mangled and the provider
+// rejects it as invalid, which reads like a bad key rather than an encoding
+// problem. Decoding here means a key file written by any ordinary Windows
+// command still works.
+func decodeKeyFile(data []byte) string {
+	switch {
+	case len(data) >= 2 && data[0] == 0xFF && data[1] == 0xFE:
+		return decodeUTF16(data[2:], binary.LittleEndian)
+	case len(data) >= 2 && data[0] == 0xFE && data[1] == 0xFF:
+		return decodeUTF16(data[2:], binary.BigEndian)
+	}
+	// BOM-less UTF-16LE still shows up as ASCII interleaved with NULs; a plain
+	// UTF-8 key never contains one, so any NUL means the file is not plain text.
+	if bytes.IndexByte(data, 0) >= 0 {
+		return decodeUTF16(data, binary.LittleEndian)
+	}
+	return strings.TrimPrefix(string(data), "\ufeff")
+}
+
+func decodeUTF16(data []byte, order binary.ByteOrder) string {
+	if len(data)%2 != 0 {
+		data = data[:len(data)-1]
+	}
+	units := make([]uint16, 0, len(data)/2)
+	for i := 0; i < len(data); i += 2 {
+		units = append(units, order.Uint16(data[i:i+2]))
+	}
+	return strings.TrimPrefix(string(utf16.Decode(units)), "\ufeff")
 }
 
 // Settings represents the overall fastllm configuration file structure.
