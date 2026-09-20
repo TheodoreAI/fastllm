@@ -1048,7 +1048,12 @@ func (m *teaModel) View() string {
 	if gap < 1 {
 		gap = 1
 	}
-	headerRow := headerLeft + strings.Repeat(" ", gap) + rightInfo
+	// Every full-width row must be clamped to the terminal width. A row even one
+	// column too wide is wrapped by the terminal into two, which shortens the
+	// frame and shifts everything below it. rightInfo changes on every spinner
+	// tick and whenever a status notice appears, so an unclamped header visibly
+	// jitters the whole UI up and down while a turn runs.
+	headerRow := clampToWidth(headerLeft+strings.Repeat(" ", gap)+rightInfo, m.width)
 	sb.WriteString(headerRow + "\n")
 	sb.WriteString(styleMuted.Render(strings.Repeat("─", m.width)) + "\n")
 
@@ -1074,11 +1079,19 @@ func (m *teaModel) View() string {
 	sb.WriteString(inputBox + "\n")
 
 	// 4. Status Bar / Keymap Hints
+	// Hints drop to a short form rather than wrapping: the full string is ~97
+	// columns, so on a narrower terminal it silently became a second row and
+	// pushed the frame past the terminal height.
 	hints := "Tab: Mode  •  Enter: Send  •  ↑/↓: History  •  Ctrl+J: Newline  •  /copy: Copy  •  Ctrl+C: Quit"
+	shortHints := "Tab: Mode  •  Enter: Send  •  Ctrl+C: Quit"
 	if m.mode == modeShell {
 		hints = "Tab: Agent  •  Enter: Run  •  ↑/↓: History  •  Ctrl+V: Paste  •  exit: Leave Shell"
+		shortHints = "Tab: Agent  •  Enter: Run  •  exit: Leave Shell"
 	}
-	sb.WriteString(styleStatusBar.Width(m.width).Render(hints))
+	if VisualLen(hints) > m.width {
+		hints = shortHints
+	}
+	sb.WriteString(styleStatusBar.Width(m.width).Render(clampToWidth(hints, m.width)))
 
 	return sb.String()
 }
@@ -1171,4 +1184,14 @@ func (m *teaModel) addPromptHistory(val string) {
 	}
 	m.promptHistory = append(m.promptHistory, trimmed)
 	savePromptHistoryEntry(trimmed)
+}
+
+// clampToWidth truncates a rendered row to at most width display columns,
+// preserving ANSI styling. A row wider than the terminal is wrapped by the
+// terminal rather than clipped, which silently adds a line to the frame.
+func clampToWidth(row string, width int) string {
+	if width <= 0 || VisualLen(row) <= width {
+		return row
+	}
+	return lipgloss.NewStyle().MaxWidth(width).Render(row)
 }

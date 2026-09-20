@@ -484,3 +484,58 @@ func TestPreflightFailureStillReportsOnce(t *testing.T) {
 		t.Fatal("preflight failure was reported with no error text")
 	}
 }
+
+// The TUI frame must be exactly the same size on every render. A single row
+// wider than the terminal is wrapped into two by the terminal, which changes
+// the frame height and visibly shifts the whole UI. rightInfo changes on every
+// spinner tick and whenever a status notice appears, so an unclamped header
+// made the content jitter up and down while typing or running a turn.
+func TestFrameSizeIsStableAcrossWidthsAndHeaderStates(t *testing.T) {
+	const height = 30
+	tmp := t.TempDir()
+	ta := textarea.New()
+	ta.Prompt = "> "
+	ta.SetHeight(2)
+	ta.ShowLineNumbers = false
+	ta.Placeholder = "Ask a question, enter a task, or type /help (Tab switches to Shell Mode)..."
+	ta.Focus()
+
+	m := &teaModel{
+		runner: NewRunner(&mockLLM{}, tmp, "test-model"), workingDir: tmp,
+		modelName: "gemma-4-31b", input: ta, viewport: viewport.New(80, 10),
+	}
+	m.appendHistory(strings.Repeat("history line\n", 40))
+
+	for _, width := range []int{60, 70, 80, 90, 100, 120} {
+		updated, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: height})
+		m = updated.(*teaModel)
+
+		want := -1
+		for _, notice := range []string{"", "Switched model to gemma-4-31b"} {
+			for _, mode := range []tuiMode{modeAgent, modeShell} {
+				for _, typed := range []int{0, 1, 40, 200} {
+					m.statusNotice = notice
+					m.mode = mode
+					m.input.SetValue(strings.Repeat("x", typed))
+
+					rows := strings.Split(m.View(), "\n")
+					for i, row := range rows {
+						if w := VisualLen(StripANSI(row)); w > width {
+							t.Fatalf("width=%d row %d is %d columns wide; the terminal will wrap it and shift the frame",
+								width, i, w)
+						}
+					}
+					if len(rows) > height {
+						t.Fatalf("width=%d frame is %d rows in a %d-row terminal", width, len(rows), height)
+					}
+					if want < 0 {
+						want = len(rows)
+					} else if len(rows) != want {
+						t.Fatalf("width=%d frame changed from %d to %d rows (notice=%v mode=%v typed=%d)",
+							width, want, len(rows), notice != "", mode, typed)
+					}
+				}
+			}
+		}
+	}
+}
