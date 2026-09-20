@@ -12,6 +12,7 @@ import (
 	"fastllm/internal/config"
 	"fastllm/internal/webtools"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -157,14 +158,16 @@ type teaModel struct {
 	historyText strings.Builder
 
 	// Execution state
-	isExecuting   bool
-	activeTurn    int
-	activeTool    string
-	activeArgs    string
-	cancelTurn    context.CancelFunc
-	eventChan     chan Event
-	statusNotice  string
-	latestMetrics *TurnMetrics
+	isExecuting     bool
+	hasResponseTurn bool
+	lastResponse    string
+	activeTurn      int
+	activeTool      string
+	activeArgs      string
+	cancelTurn      context.CancelFunc
+	eventChan       chan Event
+	statusNotice    string
+	latestMetrics   *TurnMetrics
 
 	// Geometry
 	width  int
@@ -309,18 +312,38 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.clearStatusAfter(2*time.Second))
 			return m, tea.Batch(cmds...)
 
+		case tea.KeyCtrlV:
+			clipText, err := clipboard.ReadAll()
+			if err == nil && clipText != "" {
+				m.input.InsertString(clipText)
+				return m, nil
+			}
+
+		case tea.KeyCtrlJ:
+			// Ctrl+J is universal terminal newline / linefeed
+			m.input.InsertString("\n")
+			return m, nil
+
 		case tea.KeyEnter:
-			if !msg.Alt { // Enter submits, Shift+Enter/Alt+Enter can be handled if needed
-				inputVal := strings.TrimSpace(m.input.Value())
-				if inputVal != "" {
-					m.input.Reset()
-					if m.mode == modeShell {
-						cmds = append(cmds, m.handleShellSubmit(inputVal))
-					} else {
-						cmds = append(cmds, m.handleAgentSubmit(inputVal))
-					}
-					return m, tea.Batch(cmds...)
+			if msg.Alt {
+				m.input.InsertString("\n")
+				return m, nil
+			}
+			val := m.input.Value()
+			// If ends with backslash, allow multiline continuation
+			if strings.HasSuffix(val, "\\") {
+				m.input.SetValue(strings.TrimSuffix(val, "\\") + "\n")
+				return m, nil
+			}
+			inputVal := strings.TrimSpace(val)
+			if inputVal != "" {
+				m.input.Reset()
+				if m.mode == modeShell {
+					cmds = append(cmds, m.handleShellSubmit(inputVal))
+				} else {
+					cmds = append(cmds, m.handleAgentSubmit(inputVal))
 				}
+				return m, tea.Batch(cmds...)
 			}
 
 		case tea.KeyPgUp:
@@ -354,6 +377,8 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case EventTurnComplete:
 			if ev.Response != "" {
+				m.lastResponse = ev.Response
+				m.hasResponseTurn = true
 				m.appendHistory("\n" + FormatMarkdown(ev.Response) + "\n")
 			}
 			if ev.Metrics != nil {
@@ -374,8 +399,10 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err != nil {
 			m.appendHistory(styleDiffDel.Render(fmt.Sprintf("\nTask failed: %v\n\n", msg.Err)))
 		} else if msg.Result != nil {
-			if msg.Result.FinalResponse != "" && !strings.Contains(m.historyText.String(), msg.Result.FinalResponse) {
-				m.appendHistory("\n" + msg.Result.FinalResponse + "\n\n")
+			// Only append final response if NOT already rendered during EventTurnComplete
+			if !m.hasResponseTurn && msg.Result.FinalResponse != "" {
+				m.lastResponse = msg.Result.FinalResponse
+				m.appendHistory("\n" + FormatMarkdown(msg.Result.FinalResponse) + "\n\n")
 			}
 			m.appendHistory(styleMuted.Render(fmt.Sprintf("─ Completed in %d turn(s) (%.1fs) ─\n\n",
 				msg.Result.Turns, float64(msg.Result.DurationMS)/1000.0)))
@@ -612,6 +639,27 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 			}
 			return nil
 
+		case "/copy", "/yank":
+			m.appendHistory(styleUserPrompt.Render("❯ "+inputVal) + "\n")
+			target := m.lastResponse
+			if len(parts) > 1 && parts[1] == "all" {
+				target = m.historyText.String()
+			}
+			if strings.TrimSpace(target) == "" {
+				m.statusNotice = "Nothing to copy yet."
+				m.appendHistory(styleMuted.Render("Nothing to copy yet.\n\n"))
+			} else {
+				err := clipboard.WriteAll(target)
+				if err != nil {
+					m.statusNotice = "Copy error: " + err.Error()
+					m.appendHistory(styleDiffDel.Render(fmt.Sprintf("Copy error: %v\n\n", err)))
+				} else {
+					m.statusNotice = "✓ Copied to clipboard."
+					m.appendHistory(styleStatusNotice.Render("✓ Copied response to system clipboard.\n\n"))
+				}
+			}
+			return m.clearStatusAfter(3 * time.Second)
+
 		case "/dir":
 			m.appendHistory(styleUserPrompt.Render("❯ "+inputVal) + "\n")
 			if len(parts) < 2 {
@@ -645,6 +693,7 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 	// 3. Autonomous Agent Turn Submission
 	m.appendHistory(styleUserPrompt.Render("❯ "+inputVal) + "\n\n")
 	m.isExecuting = true
+	m.hasResponseTurn = false
 	m.activeTurn = 1
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -734,9 +783,9 @@ func (m *teaModel) View() string {
 	sb.WriteString(inputBox + "\n")
 
 	// 4. Status Bar / Keymap Hints
-	hints := "Tab: Switch Mode  •  Enter: Send  •  /c: Clear  •  /help: Commands  •  Ctrl+C: Cancel/Quit"
+	hints := "Tab: Switch Mode  •  Enter: Send  •  Ctrl+J / \\: Newline  •  /copy: Copy  •  Ctrl+C: Quit"
 	if m.mode == modeShell {
-		hints = "Tab: Return to Agent  •  Enter: Run Command  •  exit: Leave Shell  •  /c: Clear"
+		hints = "Tab: Return to Agent  •  Enter: Run Command  •  Ctrl+V: Paste  •  exit: Leave Shell"
 	}
 	sb.WriteString(styleStatusBar.Width(m.width).Render(hints))
 
@@ -757,8 +806,7 @@ func (r *Runner) RunBubbleTea(req RunRequest) error {
 
 	p := tea.NewProgram(
 		model,
-		tea.WithAltScreen(),       // Clean full-screen TUI buffer
-		tea.WithMouseCellMotion(), // Mouse scrolling support in viewport
+		tea.WithAltScreen(), // Clean full-screen TUI buffer
 	)
 	teaModelProg = p
 
