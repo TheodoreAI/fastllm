@@ -21,17 +21,16 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo Building fastllm-desktop.exe (Wails desktop app)...
-pushd cmd\desktop
-call wails build -s
-if errorlevel 1 (
-    echo cmd/desktop build failed. See output above.
-    popd
-    exit /b 1
+rem Keep the copy on PATH in step with the repo build. Without this the two
+rem drift: start.bat runs the repo exe while typing `fastllm` runs the installed
+rem one, and a stale install looks exactly like a missing feature.
+set "INSTALLED=%USERPROFILE%\.local\bin\fastllm.exe"
+if exist "%INSTALLED%" (
+    echo Refreshing installed copy at "%INSTALLED%" ...
+    go build -o "%INSTALLED%" .\cmd\server
+    if errorlevel 1 echo   (skipped: it is probably locked by a running fastllm session)
 )
-popd
 
 echo.
 echo Done:
 echo   %APPDIR%fastllm.exe
-echo   %APPDIR%cmd\desktop\build\bin\fastllm-desktop.exe

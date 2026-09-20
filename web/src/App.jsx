@@ -116,7 +116,6 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useSidebarCollapsed()
   const [sectionOrder, moveSection] = useSectionOrder(DEFAULT_SECTION_ORDER)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
-  const [, setOpenFolderSignal] = useState(0)
 
   useEffect(() => {
     function handleKeyDown(e) {
@@ -562,9 +561,6 @@ export default function App() {
     () =>
       buildCommands({
         setSidebarCollapsed,
-        setOpenFolderSignal,
-        setQuitConfirmOpen,
-        isWails: () => false,
       }),
     [setSidebarCollapsed]
   )

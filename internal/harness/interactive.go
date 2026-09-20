@@ -797,14 +797,22 @@ func (r *Runner) runInteractiveTurn(
 
 		contextChars := messageCharacterCount(*sessionMessages)
 		cfg := planBoundaryCompactionConfig(DefaultCompactionConfig(), contextChars, planBoundary)
-		if contextChars >= cfg.MaxTotalChars*3/4 {
-			fmt.Println(ColorYellow(fmt.Sprintf("  Context is at about %d%% of the compaction threshold.", contextChars*100/cfg.MaxTotalChars)))
-		}
+
 		var compacted bool
 		*sessionMessages, compacted = OnlineCompactMessages(*sessionMessages, cfg)
 		planBoundary = false
-		if compacted {
-			fmt.Println(ColorYellow("  Older tool output was compacted to preserve context space."))
+
+		// Report either the compaction or the approach to it, never both: warning
+		// that context is "at 112% of the threshold" and then that it was already
+		// compacted describes one event as if it were a problem plus a fix.
+		switch {
+		case compacted:
+			after := messageCharacterCount(*sessionMessages)
+			fmt.Println(ColorGray(fmt.Sprintf("  Context reached %s; compacted older tool output down to %s.",
+				formatCharCount(contextChars), formatCharCount(after))))
+		case contextChars >= cfg.MaxTotalChars*3/4:
+			fmt.Println(ColorGray(fmt.Sprintf("  Context is at %d%% of the compaction budget (%s).",
+				contextChars*100/cfg.MaxTotalChars, formatCharCount(cfg.MaxTotalChars))))
 		}
 
 		turnStart := time.Now()

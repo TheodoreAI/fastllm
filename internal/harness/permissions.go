@@ -70,6 +70,26 @@ func (p *PermissionController) Authorize(toolName, summary string) bool {
 	}
 
 	fmt.Println(FormatPermissionPrompt(toolName, summary))
+
+	// Preferred path: an inline menu where enter accepts the highlighted option.
+	// Deny is highlighted first so an accidental enter is never destructive.
+	choices := []Choice{
+		{Key: 'n', Label: "No", Value: "n"},
+		{Key: 'y', Label: "Yes, once", Value: "y"},
+		{Key: 'a', Label: "Yes, all this session", Value: "a"},
+	}
+	if answer, ok := Choose(ColorYellow("Allow?"), choices, 0); ok {
+		switch answer {
+		case "y":
+			return true
+		case "a":
+			p.SessionGrants[toolName] = true
+			return true
+		}
+		return false
+	}
+
+	// Fallback for pipes and dumb terminals: type the answer instead.
 	for {
 		if p.Input == nil {
 			fmt.Println()

@@ -9,26 +9,17 @@ fastllm.db-shm
 fastllm.db-wal
 fastllm.log
 
-
 # `go build ./...` from repo root writes each main package's binary here
-# named after its directory (cmd/server -> server, cmd/desktop -> desktop)
+# named after its directory (cmd/server -> server)
 # when run without -o — easy to do by accident when cross-compile-checking
 # all packages at once.
 /server
-/desktop
 /cli
 web/node_modules/
 # web/dist is governed by web/.gitignore, which keeps the directory itself
 # (web/embed.go does //go:embed all:dist) while ignoring the build output.
 .env
 fastllm_terminal_test.exe
-
-# Wails desktop build output and generated bindings (regenerate via
-# `wails build` / `wails dev` in cmd/desktop — see internal/appserver)
-cmd/desktop/build/bin/
-web/wailsjs/
-web/package.json.md5
-
 
 # Local fastllm config. CandidateConfigPaths checks ./.fastllm/config.json
 # before the one in $HOME, so a project-local config is what the TUI writes

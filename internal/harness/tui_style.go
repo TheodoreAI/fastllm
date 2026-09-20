@@ -18,6 +18,7 @@ const (
 	ansiBold         = "\033[1m"
 	ansiDim          = "\033[2m"
 	ansiItalic       = "\033[3m"
+	ansiInverse      = "[7m"
 	ansiUnderline    = "\033[4m"
 	ansiRed          = "\033[31m"
 	ansiGreen        = "\033[32m"
@@ -80,16 +81,21 @@ func applyStyle(code, s string) string {
 	return code + s + ansiReset
 }
 
-func StyleBold(s string) string        { return applyStyle(ansiBold, s) }
-func StyleDim(s string) string         { return applyStyle(ansiDim, s) }
-func StyleItalic(s string) string      { return applyStyle(ansiItalic, s) }
-func StyleUnderline(s string) string   { return applyStyle(ansiUnderline, s) }
-func ColorRed(s string) string         { return applyStyle(ansiBrightRed, s) }
-func ColorGreen(s string) string       { return applyStyle(ansiBrightGreen, s) }
-func ColorYellow(s string) string      { return applyStyle(ansiBrightYellow, s) }
-func ColorBlue(s string) string        { return applyStyle(ansiBrightBlue, s) }
-func ColorMagenta(s string) string     { return applyStyle(ansiBrightPurple, s) }
-func ColorCyan(s string) string        { return applyStyle(ansiBrightCyan, s) }
+func StyleBold(s string) string      { return applyStyle(ansiBold, s) }
+func StyleDim(s string) string       { return applyStyle(ansiDim, s) }
+func StyleItalic(s string) string    { return applyStyle(ansiItalic, s) }
+func StyleUnderline(s string) string { return applyStyle(ansiUnderline, s) }
+func ColorRed(s string) string       { return applyStyle(ansiBrightRed, s) }
+func ColorGreen(s string) string     { return applyStyle(ansiBrightGreen, s) }
+func ColorYellow(s string) string    { return applyStyle(ansiBrightYellow, s) }
+func ColorBlue(s string) string      { return applyStyle(ansiBrightBlue, s) }
+func ColorMagenta(s string) string   { return applyStyle(ansiBrightPurple, s) }
+func ColorCyan(s string) string      { return applyStyle(ansiBrightCyan, s) }
+
+// ColorInverse swaps foreground and background, which is how the inline
+// chooser marks the highlighted option without relying on a colour that may
+// not contrast against the user's terminal theme.
+func ColorInverse(s string) string     { return applyStyle(ansiInverse, s) }
 func ColorGray(s string) string        { return applyStyle(ansiGray, s) }
 func ColorWhite(s string) string       { return applyStyle(ansiWhite, s) }
 func ColorBrightWhite(s string) string { return applyStyle(ansiBrightWhite, s) }
@@ -234,6 +240,10 @@ func FormatWelcomeBanner(dir, model, configPath string, isGit bool, rulesCount i
 		FormatKV("git repo", gitStatus, 12),
 		FormatKV("rules", rulesStatus, 12),
 		FormatKV("commands", cmdStatus, 12),
+		// Which binary is running, and from which commit. fastllm has both a dev
+		// build in the repo and an installed one on PATH; without this there is no
+		// way to tell a stale copy from a current one.
+		FormatKV("build", ColorGray(BuildIdentity())+"  "+ColorGray(runningExecutable()), 12),
 		"",
 		ColorGray("Type ") + ColorCyan("/help") + ColorGray(" for slash commands or enter your prompt below."),
 	}
@@ -654,4 +664,17 @@ func FormatModelsTable(models []config.ModelEndpoint, activeModel, configPath st
 	}
 
 	return FormatCard("Configured Model Endpoints", lines, 80)
+}
+
+// formatCharCount renders a character count compactly. Context sizes run to six
+// digits, which are hard to compare at a glance mid-session.
+func formatCharCount(chars int) string {
+	switch {
+	case chars >= 1_000_000:
+		return fmt.Sprintf("%.1fM chars", float64(chars)/1_000_000)
+	case chars >= 1_000:
+		return fmt.Sprintf("%.0fk chars", float64(chars)/1_000)
+	default:
+		return fmt.Sprintf("%d chars", chars)
+	}
 }

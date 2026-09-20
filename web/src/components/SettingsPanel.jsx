@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { FONT_OPTIONS } from '../useFontFamily'
 import { FONT_SCALE_OPTIONS } from '../useFontScale'
 import { THEMES } from '../themes'
-import { browseForFolder, isWails } from '../api'
+import { browseForFolder } from '../api'
 import { useEscapeKey } from '../useEscapeKey'
 import { useSettingsExpanded } from '../useSettingsExpanded'
 import ConfirmDeleteModal from './ConfirmDeleteModal'
@@ -35,27 +35,13 @@ function CloseIcon(props) {
 }
 
 // Every global keyboard shortcut fastllm defines, shown together in
-// Settings → About so there's one place to look them up — the panel
-// toggles and Save (native: false) are handled in this web codebase
-// (App.jsx's keydown listener, EditorView's own handler) and work in any
-// build. Open Folder/Exit/Undo/Redo (native: true) are native Wails menu
-// items (see cmd/desktop/main.go's menu()) with no corresponding keydown
-// handler anywhere in web/src — they only work in the packaged desktop
-// app, not a plain browser tab, so they're flagged here rather than
-// listed as if they were universal. None of these three places (App.jsx,
-// EditorView.jsx, cmd/desktop/main.go) know about the other two, so this
-// list has to be kept in sync by hand rather than generated from one
-// source.
+// Settings → About so there is one place to look them up. These are all
+// implemented in this web codebase (App.jsx's keydown listener and
+// commands.js), so the list has to be kept in sync with those by hand.
 const KEYBINDINGS = [
-  { keys: 'Ctrl+Shift+M', description: 'Toggle the model settings panel', native: false },
-  { keys: 'Ctrl+O', description: 'Open folder', native: true },
-  { keys: 'Ctrl+Q', description: 'Exit fastllm', native: true },
-  { keys: 'Ctrl+Z', description: 'Undo', native: true },
-  { keys: 'Ctrl+Y', description: 'Redo', native: true },
-  { keys: 'Ctrl+X', description: 'Cut', native: true },
-  { keys: 'Ctrl+C', description: 'Copy', native: true },
-  { keys: 'Ctrl+V', description: 'Paste', native: true },
-  { keys: 'Ctrl+A', description: 'Select all', native: true },
+  { keys: 'Ctrl+Shift+M', description: 'Toggle the model settings panel' },
+  { keys: 'Ctrl+K', description: 'Open the command palette' },
+  { keys: 'Ctrl+Shift+P', description: 'Open the command palette' },
 ]
 
 // One collapsible sub-block within the Settings panel — mirrors
@@ -502,14 +488,13 @@ export default function SettingsPanel({
         </div>
 
         <p className="settings-label settings-subheading">Keyboard shortcuts</p>
-        {KEYBINDINGS.filter((b) => !b.native || isWails()).map(({ keys, description, native }) => (
+        {KEYBINDINGS.map(({ keys, description }) => (
           <div className="settings-row" key={keys}>
             <span className="settings-row-keybind">
               {keys.split('+').map((k) => <kbd key={k}>{k}</kbd>)}
             </span>
             <span className="settings-row-value settings-row-value-wrap">
               {description}
-              {native && <span className="settings-hint-inline"> (desktop app)</span>}
             </span>
           </div>
         ))}

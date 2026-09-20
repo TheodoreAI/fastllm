@@ -2,8 +2,7 @@
 // OpenAI-compatible LLM, SQLite persistence, and an in-memory vector
 // index for retrieval-augmented answers. It also serves the built
 // React frontend from web/dist when present. All the actual wiring
-// (DB, LLM client, routes) lives in internal/appserver, shared with
-// cmd/desktop's Wails-based native app.
+// (DB, LLM client, routes) lives in internal/appserver.
 package main
 
 import (
