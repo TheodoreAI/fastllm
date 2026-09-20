@@ -1,7 +1,7 @@
 // Command server runs the fastllm backend: a chat API backed by an
 // OpenAI-compatible LLM, SQLite persistence, and an in-memory vector
 // index for retrieval-augmented answers. It is headless — the terminal
-// UI in cmd/cli replaced the browser frontend. All the actual wiring
+// UI it launches by default replaced the browser frontend. All the wiring
 // (DB, LLM client, routes) lives in internal/appserver.
 package main
 
@@ -14,6 +14,7 @@ import (
 
 	"fastllm/internal/appserver"
 	"fastllm/internal/harness"
+	"fastllm/internal/legacystore"
 )
 
 func getenv(key, fallback string) string {
@@ -24,6 +25,10 @@ func getenv(key, fallback string) string {
 }
 
 func main() {
+	// The TUI needs the legacy-database opener installed before it runs;
+	// without it /conversations and /import report the feature as missing.
+	harness.OpenLegacyConversations = legacystore.Installer()
+
 	// If explicit server command is given, start HTTP backend server
 	if len(os.Args) > 1 && os.Args[1] == "server" {
 		runServer(os.Args[2:])

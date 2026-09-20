@@ -22,12 +22,12 @@ fi
 EXE="$APPDIR/fastllm"
 PORT=8080
 
-# The browser UI is gone; the terminal UI (fastllm-cli) replaced it. This
+# The browser UI is gone; the terminal UI replaced it. This
 # script now only brings the headless API server up, so "ready" means the
 # port answers, not that a tab opened.
 announce_ready() {
     echo "fastllm API server listening on http://localhost:$PORT"
-    echo "For the interactive UI, run: fastllm-cli"
+    echo "For the interactive UI, run: fastllm (no arguments)"
 }
 
 # BSD stat (macOS) takes "-f <format>"; GNU stat (Linux) takes "-c

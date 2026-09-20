@@ -1,9 +1,9 @@
 # fastllm
 
-A local LLM chat app and autonomous coding harness. The interactive terminal
-UI (`cmd/cli`) is the interface; a headless Go server (`cmd/server`) streams
+A local LLM chat app and autonomous coding harness. A single binary
+(`cmd/server`) is both: run it with no arguments for the interactive terminal
+UI, or with the `server` subcommand for a headless HTTP backend that streams
 OpenAI-compatible chat and agent runs and stores conversations in SQLite.
-Each ships as a single self-contained executable.
 
 FastLLM can use Ollama and configured cloud providers, expose OpenAI- and
 Anthropic-compatible proxy endpoints, run coding tasks against a sandboxed
@@ -12,8 +12,7 @@ It also includes an interactive terminal UI and a one-shot CLI runner.
 
 ## Architecture
 
-- `cmd/server` — entry point, wires everything together
-- `cmd/cli` — standalone agent CLI
+- `cmd/server` — the single binary: terminal UI by default, HTTP API with the `server` subcommand
 - `internal/llm` — local and cloud model clients and routing
 - `internal/store` — SQLite persistence for conversations, settings, and notes
 - `internal/chat` — chat, compatibility API, and SSE agent handlers
@@ -43,7 +42,7 @@ go run ./cmd/server server
 Terminal UI:
 
 ```
-go run ./cmd/cli
+go run ./cmd/server
 ```
 
 Run the checks used before committing:
@@ -59,7 +58,7 @@ gofmt -l .
 Run a one-shot task in the current workspace:
 
 ```
-go run ./cmd/cli --task "inspect the project and fix the failing tests" --dir .
+go run ./cmd/server --task "inspect the project and fix the failing tests" --dir .
 ```
 
 Omit `--task` for the interactive TUI. Useful flags include `--model`,
@@ -89,12 +88,12 @@ already explicit user actions and do not prompt again.
 ## Production build (single binary)
 
 ```
-go build -o fastllm-cli.exe ./cmd/cli     # terminal UI
-go build -o fastllm.exe ./cmd/server      # headless API server
+go build -o fastllm.exe ./cmd/server
 ```
 
-`build-all.sh` / `build-all.bat` build both. The server listens on
-http://localhost:8080 and serves the API only — there is no browser UI.
+One binary does both jobs: run it with no arguments for the terminal UI, or
+with the `server` subcommand for the headless API on http://localhost:8080.
+There is no browser UI. `build-all.sh` / `build-all.bat` wrap this.
 
 `cmd/server/rsrc_windows_*.syso` embed the app icon (`cmd/server/icon/fastllm.ico`)
 into `fastllm.exe` on Windows builds — `go build` picks them up automatically,
@@ -122,7 +121,7 @@ to start the headless API server with no console window. It:
   launching a stale/missing binary
 
 See `start.bat` for the underlying logic. For interactive use, run
-`fastllm-cli` rather than this launcher.
+`fastllm` with no arguments rather than this launcher.
 
 ## Configuration (env vars)
 

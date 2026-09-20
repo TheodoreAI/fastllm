@@ -156,7 +156,7 @@ func rootNotice(w http.ResponseWriter, r *http.Request) {
 
 const headlessNotice = `fastllm is running headless.
 
-The browser UI has been replaced by the terminal UI; run "fastllm-cli" to use it.
+The browser UI has been replaced by the terminal UI; run "fastllm" with no arguments.
 
 This server still provides:
   POST /api/chat                 PUT  /api/notes
