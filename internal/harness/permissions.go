@@ -116,7 +116,7 @@ func (p *PermissionController) Authorize(toolName, summary string) bool {
 
 func requiresPermission(toolName string) bool {
 	switch toolName {
-	case "write_file", "edit_file", "patch_file", "run_command", "kill_process":
+	case "write_file", "edit_file", "patch_file", "run_command", "kill_process", "spawn_agent", "cancel_agent":
 		return true
 	default:
 		return false

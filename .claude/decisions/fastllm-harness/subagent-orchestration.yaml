@@ -1,0 +1,3 @@
+value: Use native asynchronous child Runner tasks with isolated context, shared workspace, structured lifecycle tools, max 3 concurrent children, and max depth 2; ask/read-only children cannot mutate.
+reason: Native orchestration reuses the harness and yields structured results/cancellation; subprocess agents lost coordination, while synchronous delegation prevented useful parallel work.
+decided_at: 2026-09-20T15:40:34+00:00

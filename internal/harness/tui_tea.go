@@ -4,9 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -109,13 +107,13 @@ var (
 func tuiToolBadge(name string) string {
 	var c lipgloss.Color
 	switch name {
-	case "read_file", "list_files", "search_files":
+	case "read_file", "list_files", "search_files", "glob_files":
 		c = tuiColorCyan
 	case "write_file", "edit_file", "patch_file":
 		c = tuiColorYellow
 	case "web_search", "web_fetch":
 		c = tuiColorBlue
-	case "run_command", "process_status", "kill_process":
+	case "run_command", "process_status", "kill_process", "spawn_agent", "agent_status", "send_agent_message", "cancel_agent":
 		c = tuiColorPurple
 	case "finish_task":
 		c = tuiColorGreen
@@ -155,16 +153,17 @@ type teaModel struct {
 	historyText strings.Builder
 
 	// Execution state
-	isExecuting     bool
-	hasResponseTurn bool
-	lastResponse    string
-	activeTurn      int
-	activeTool      string
-	activeArgs      string
-	cancelTurn      context.CancelFunc
-	eventChan       chan Event
-	statusNotice    string
-	latestMetrics   *TurnMetrics
+	isExecuting      bool
+	hasResponseTurn  bool
+	agentWorkStarted bool
+	lastResponse     string
+	activeTurn       int
+	activeTool       string
+	activeArgs       string
+	cancelTurn       context.CancelFunc
+	eventChan        chan Event
+	statusNotice     string
+	latestMetrics    *TurnMetrics
 
 	// Prompt history navigation
 	promptHistory []string
@@ -375,6 +374,9 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.input.CursorEnd()
 				return m, nil
 			}
+			var inputCmd tea.Cmd
+			m.input, inputCmd = m.input.Update(msg)
+			return m, inputCmd
 
 		case tea.KeyDown:
 			if m.historyIdx != -1 && m.input.Line() >= m.input.LineCount()-1 {
@@ -389,6 +391,9 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
+			var inputCmd tea.Cmd
+			m.input, inputCmd = m.input.Update(msg)
+			return m, inputCmd
 
 		case tea.KeyEsc:
 			if m.historyIdx != -1 {
@@ -407,6 +412,13 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+	case tea.MouseMsg:
+		// Mouse-wheel events belong exclusively to the conversation viewport.
+		// Never let them reach the textarea or prompt-history navigation.
+		var viewportCmd tea.Cmd
+		m.viewport, viewportCmd = m.viewport.Update(msg)
+		return m, viewportCmd
+
 	case teaAgentEventMsg:
 		ev := Event(msg)
 		switch ev.Type {
@@ -415,6 +427,7 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case EventToolCall:
 			if ev.ToolCall != nil {
+				m.startAgentWork(ev.Turn)
 				m.activeTool = ev.ToolCall.Name
 				m.activeArgs = summarizeArgs(ev.ToolCall.Arguments)
 				m.appendHistory(FormatToolCall(ev.ToolCall.Name, m.activeArgs) + "\n")
@@ -422,6 +435,7 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case EventToolResult:
 			if ev.ToolCall != nil {
+				m.startAgentWork(ev.Turn)
 				m.activeTool = ""
 				m.activeArgs = ""
 				m.appendHistory(FormatToolResult(ev.ToolCall.Name, ev.ToolCall.Result, 4) + "\n\n")
@@ -431,7 +445,7 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if ev.Response != "" {
 				m.lastResponse = ev.Response
 				m.hasResponseTurn = true
-				m.appendHistory("\n" + FormatMarkdownWidth(ev.Response, m.contentWidth()) + "\n")
+				m.appendHistory(formatAssistantAnswer(ev.Response, m.contentWidth()))
 			}
 			if ev.Metrics != nil {
 				m.latestMetrics = ev.Metrics
@@ -446,6 +460,11 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if ev.Error != "" {
 				m.appendHistory(styleDiffDel.Render(fmt.Sprintf("\nTask failed: %s\n\n", ev.Error)))
 			} else if ev.Result != nil {
+				if !m.hasResponseTurn && strings.TrimSpace(ev.Result.FinalResponse) != "" {
+					m.lastResponse = ev.Result.FinalResponse
+					m.hasResponseTurn = true
+					m.appendHistory(formatAssistantAnswer(ev.Result.FinalResponse, m.contentWidth()))
+				}
 				m.appendHistory(styleMuted.Render(fmt.Sprintf("─ Completed in %d turn(s) (%.1fs) ─\n\n",
 					ev.Result.Turns, float64(ev.Result.DurationMS)/1000.0)))
 			}
@@ -456,11 +475,13 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case teaShellDoneMsg:
-		if msg.Err != nil {
-			m.appendHistory(styleDiffDel.Render(fmt.Sprintf("$ %v\n\n", msg.Err)))
-		} else {
-			m.appendHistory(msg.Output + "\n\n")
+		if msg.Output != "" {
+			m.appendHistory(msg.Output + "\n")
 		}
+		if msg.Err != nil {
+			m.appendHistory(styleDiffDel.Render(fmt.Sprintf("$ %v\n", msg.Err)))
+		}
+		m.appendHistory("\n")
 
 	case teaStatusClearMsg:
 		m.statusNotice = ""
@@ -508,16 +529,19 @@ func (m *teaModel) handleShellSubmit(cmdStr string) tea.Cmd {
 		m.statusNotice = "History cleared."
 		return m.clearStatusAfter(2 * time.Second)
 	}
+	if path, ok := parseDirectoryChange(cmdStr); ok {
+		if err := m.changeWorkingDirectory(path); err != nil {
+			m.appendHistory(styleDiffDel.Render(fmt.Sprintf("Cannot change directory: %v\n\n", err)))
+		} else {
+			m.appendHistory(styleStatusNotice.Render(fmt.Sprintf("Working directory changed to %s\n\n", m.workingDir)))
+		}
+		return nil
+	}
 
 	m.appendHistory(styleShellBadge.Render("$ "+cmdStr) + "\n")
 
 	return func() tea.Msg {
-		var cmd *exec.Cmd
-		if runtime.GOOS == "windows" {
-			cmd = exec.Command("cmd.exe", "/c", cmdStr)
-		} else {
-			cmd = exec.Command("sh", "-c", cmdStr)
-		}
+		cmd := newInteractiveShellCommand(cmdStr)
 		cmd.Dir = m.workingDir
 		out, err := cmd.CombinedOutput()
 		return teaShellDoneMsg{
@@ -525,6 +549,19 @@ func (m *teaModel) handleShellSubmit(cmdStr string) tea.Cmd {
 			Err:    err,
 		}
 	}
+}
+
+func (m *teaModel) changeWorkingDirectory(path string) error {
+	newDir, err := resolveInteractiveDirectory(m.workingDir, path)
+	if err != nil {
+		return err
+	}
+	m.workingDir = newDir
+	m.checkpointMgr = NewCheckpointManager(newDir)
+	m.rules = DiscoverWorkspaceRules(newDir)
+	m.systemPrompt = DefaultSystemPrompt + FormatRulesForPrompt(m.rules)
+	m.statusNotice = "Directory changed to " + filepath.Base(newDir)
+	return nil
 }
 
 func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
@@ -642,6 +679,9 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 			m.appendHistory(styleUserPrompt.Render("❯ /status") + "\n")
 			card := FormatStatusCard(m.workingDir, m.modelName, len(m.rules), SessionMetrics{}, m.processMgr)
 			m.appendHistory(card + "\n\n")
+			if summary := m.runner.agents.Summary(); summary.Total > 0 {
+				m.appendHistory(FormatCard("Child Agents", strings.Split(m.runner.agents.Status(""), "\n"), 74) + "\n\n")
+			}
 			return nil
 
 		case "/model", "/models":
@@ -696,7 +736,7 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 				m.statusNotice = "Nothing to copy yet."
 				m.appendHistory(styleMuted.Render("Nothing to copy yet.\n\n"))
 			} else {
-				err := clipboard.WriteAll(target)
+				err := clipboard.WriteAll(StripANSI(target))
 				if err != nil {
 					m.statusNotice = "Copy error: " + err.Error()
 					m.appendHistory(styleDiffDel.Render(fmt.Sprintf("Copy error: %v\n\n", err)))
@@ -713,17 +753,11 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 				m.appendHistory(styleMuted.Render("Usage: /dir <path>\n\n"))
 				return nil
 			}
-			newDir, err := filepath.Abs(parts[1])
-			if err != nil {
+			if err := m.changeWorkingDirectory(strings.Join(parts[1:], " ")); err != nil {
 				m.appendHistory(styleDiffDel.Render(fmt.Sprintf("Invalid path: %v\n\n", err)))
 				return nil
 			}
-			m.workingDir = newDir
-			m.checkpointMgr = NewCheckpointManager(newDir)
-			m.rules = DiscoverWorkspaceRules(newDir)
-			m.systemPrompt = DefaultSystemPrompt + FormatRulesForPrompt(m.rules)
-			m.statusNotice = "Directory changed to " + filepath.Base(newDir)
-			m.appendHistory(styleStatusNotice.Render(fmt.Sprintf("Working directory changed to %s (%d rules discovered)\n\n", newDir, len(m.rules))))
+			m.appendHistory(styleStatusNotice.Render(fmt.Sprintf("Working directory changed to %s (%d rules discovered)\n\n", m.workingDir, len(m.rules))))
 			return m.clearStatusAfter(2 * time.Second)
 		}
 	}
@@ -738,9 +772,10 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 	}
 
 	// 3. Autonomous Agent Turn Submission
-	m.appendHistory(styleUserPrompt.Render("❯ "+inputVal) + "\n\n")
+	m.appendHistory(formatSubmittedPrompt(inputVal))
 	m.isExecuting = true
 	m.hasResponseTurn = false
+	m.agentWorkStarted = false
 	m.activeTurn = 1
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -751,10 +786,12 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 	go func() {
 		defer close(m.eventChan)
 		req := RunRequest{
-			Task:         inputVal,
-			WorkingDir:   m.workingDir,
-			Model:        m.modelName,
-			SystemPrompt: m.systemPrompt,
+			Task:           inputVal,
+			WorkingDir:     m.workingDir,
+			Model:          m.modelName,
+			SystemPrompt:   m.systemPrompt,
+			AllowCommands:  m.runner.AllowCommands,
+			PermissionMode: PermissionAuto,
 		}
 		_, err := m.runner.Run(ctx, req, func(ev Event) {
 			m.eventChan <- ev
@@ -768,6 +805,25 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 	}()
 
 	return m.waitForNextEvent()
+}
+
+func formatSubmittedPrompt(input string) string {
+	label := lipgloss.NewStyle().Bold(true).Foreground(tuiColorCyan).Render("YOU")
+	return "\n" + label + "  " + styleUserPrompt.Render(input) + "\n"
+}
+
+func formatAssistantAnswer(response string, width int) string {
+	label := lipgloss.NewStyle().Bold(true).Foreground(tuiColorGreen).Render("ASSISTANT")
+	return "\n" + label + "\n" + FormatMarkdownWidth(response, width) + "\n\n"
+}
+
+func (m *teaModel) startAgentWork(turn int) {
+	if m.agentWorkStarted {
+		return
+	}
+	m.agentWorkStarted = true
+	label := fmt.Sprintf("AGENT WORK · TURN %d", turn)
+	m.appendHistory("\n" + styleMuted.Bold(true).Render(label) + "\n")
 }
 
 // View implements tea.Model
@@ -793,6 +849,10 @@ func (m *teaModel) View() string {
 		dirBase = m.workingDir
 	}
 	dirBadge := styleHeaderPill.Render(dirBase)
+	agentBadge := ""
+	if summary := m.runner.agents.Summary(); summary.Total > 0 {
+		agentBadge = " " + styleHeaderPill.Render(fmt.Sprintf("agents %d/%d · %s tok", summary.Pending+summary.Running, summary.Total, compactCount(summary.TotalTokens)))
+	}
 
 	var rightInfo string
 	if m.isExecuting {
@@ -807,7 +867,7 @@ func (m *teaModel) View() string {
 			m.latestMetrics.Duration.Seconds(), m.latestMetrics.TokensPerSecond))
 	}
 
-	headerLeft := lipgloss.JoinHorizontal(lipgloss.Center, brand, " ", modeBadge, " ", modelBadge, " ", dirBadge)
+	headerLeft := lipgloss.JoinHorizontal(lipgloss.Center, brand, " ", modeBadge, " ", modelBadge, " ", dirBadge, agentBadge)
 	leftWidth := lipgloss.Width(headerLeft)
 	rightWidth := lipgloss.Width(rightInfo)
 	gap := m.width - leftWidth - rightWidth - 2
@@ -858,6 +918,7 @@ func (r *Runner) RunBubbleTea(req RunRequest) error {
 	p := tea.NewProgram(
 		model,
 		tea.WithAltScreen(), // Clean full-screen TUI buffer
+		tea.WithMouseCellMotion(),
 	)
 	teaModelProg = p
 

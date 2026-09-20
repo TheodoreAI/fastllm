@@ -406,6 +406,9 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 				sessionMetrics.ObservationEfficiency = observations.Stats()
 				fmt.Println(FormatStatusCard(absWorkingDir, model, len(discoveredRules), sessionMetrics, processMgr))
 				fmt.Println(FormatRuntimeCard(maxTurns, cmdTimeout, thinkLevel, allowCmds, permissionMode, activeSessionID(activeSession)))
+				if summary := r.agents.Summary(); summary.Total > 0 {
+					fmt.Println(FormatCard("Child Agents", strings.Split(r.agents.Status(""), "\n"), 74))
+				}
 				continue
 
 			case "/sessions":
@@ -963,6 +966,22 @@ func (r *Runner) runInteractiveTurn(
 				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
 				toolResult = r.executeSearchFiles(ctx, absWorkingDir, args.Pattern, args.Path)
 
+			case "glob_files":
+				var args struct {
+					Pattern string `json:"pattern"`
+					Path    string `json:"path"`
+				}
+				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+				toolResult = r.executeGlobFiles(ctx, absWorkingDir, args.Pattern, args.Path)
+
+			case "spawn_agent", "agent_status", "send_agent_message", "cancel_agent":
+				parent := RunRequest{
+					WorkingDir: absWorkingDir, Model: model, MaxTurns: maxTurns,
+					AllowCommands: allowCmds, CommandTimeout: cmdTimeout,
+					ThinkLevel: thinkLevel, PermissionMode: permissions.Mode,
+				}
+				toolResult = r.executeAgentTool(parent, call.Function.Name, call.Function.Arguments)
+
 			case "web_search":
 				var args struct {
 					Query      string `json:"query"`
@@ -1165,16 +1184,19 @@ func interactiveTools(allowCommands bool, permissionMode PermissionMode, enableO
 		readFileTool,
 		listFilesTool,
 		searchFilesTool,
+		globFilesTool,
 		webSearchTool,
 		webFetchTool,
 		updatePlanTool,
 		finishTaskTool,
+		agentStatusTool,
+		sendAgentMessageTool,
 	}
 	if enableObservations {
 		tools = append(tools, readObservationTool)
 	}
 	if permissionMode != PermissionReadOnly {
-		tools = append(tools, writeFileTool, editFileTool, patchFileTool)
+		tools = append(tools, writeFileTool, editFileTool, patchFileTool, spawnAgentTool, cancelAgentTool)
 	}
 	if allowCommands {
 		if permissionMode != PermissionReadOnly {
@@ -1254,16 +1276,7 @@ func runInteractiveCommand(dir, command string) error {
 		return nil
 	}
 
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.Command("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", trimmed)
-	} else {
-		shell := os.Getenv("SHELL")
-		if shell == "" {
-			shell = "sh"
-		}
-		cmd = exec.Command(shell, "-c", trimmed)
-	}
+	cmd := newInteractiveShellCommand(trimmed)
 	cmd.Dir = dir
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -1298,4 +1311,15 @@ func runInteractiveCommand(dir, command string) error {
 		}
 		return err
 	}
+}
+
+func newInteractiveShellCommand(command string) *exec.Cmd {
+	if runtime.GOOS == "windows" {
+		return exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command)
+	}
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		shell = "sh"
+	}
+	return exec.Command(shell, "-c", command)
 }
