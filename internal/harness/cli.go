@@ -253,10 +253,7 @@ func RunCLI(args []string) int {
 			lines = append(lines, FormatKV("turns", fmt.Sprintf("%d", result.Turns), 10))
 			lines = append(lines, FormatKV("duration", fmt.Sprintf("%.2fs", float64(result.DurationMS)/1000.0), 10))
 			if result.Metrics != nil {
-				costStr := "$0.0000"
-				if result.Metrics.TotalCost > 0 {
-					costStr = fmt.Sprintf("$%.4f", result.Metrics.TotalCost)
-				}
+				costStr := FormatCost(result.Metrics.TotalCost, result.Metrics.CostComplete)
 				tokenSummary := fmt.Sprintf("%d total (%d prompt %s %d completion %s %s)",
 					result.Metrics.TotalTokens, result.Metrics.TotalPromptTokens, SymDot,
 					result.Metrics.TotalCompletionTokens, SymDot, costStr)

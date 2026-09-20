@@ -478,10 +478,7 @@ func renderInlineMarkdown(line string) string {
 
 // FormatTurnSummary formats the metrics at the completion of a turn into a sleek divider.
 func FormatTurnSummary(tm TurnMetrics) string {
-	costStr := "$0.00"
-	if tm.EstimatedCost > 0 {
-		costStr = fmt.Sprintf("$%.4f", tm.EstimatedCost)
-	}
+	costStr := FormatCost(tm.EstimatedCost, tm.CostKnown)
 
 	parts := []string{
 		fmt.Sprintf("%.1fs", tm.Duration.Seconds()),
@@ -655,10 +652,7 @@ func FormatSessionsTable(sessions []InteractiveSession, activeID string) string 
 
 // FormatStatusCard renders a comprehensive session metrics and environment card.
 func FormatStatusCard(dir, model string, rulesCount int, sm SessionMetrics, pm *ProcessManager) string {
-	costStr := "$0.0000"
-	if sm.TotalCost > 0 {
-		costStr = fmt.Sprintf("$%.4f", sm.TotalCost)
-	}
+	costStr := FormatCost(sm.TotalCost, sm.CostComplete)
 
 	procsCount := 0
 	if pm != nil {

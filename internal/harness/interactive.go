@@ -855,7 +855,11 @@ func (r *Runner) runInteractiveTurn(
 
 		compTokens := countApproxTokens([]llm.Message{reply})
 		promptTokens, compTokens, _ = resolveTurnTokens(r.LLM, promptTokens, compTokens)
-		metrics := ComputeTurnMetrics(turn, model, promptTokens, compTokens, turnDuration)
+		billable := false
+		if direct, ok := localClient(r.LLM); ok {
+			billable = billableEndpoint(direct.BaseURL)
+		}
+		metrics := ComputeTurnMetrics(turn, model, promptTokens, compTokens, turnDuration, billable)
 		sessionMetrics.Add(metrics)
 
 		// If no tools called, print reply and return control to the prompt

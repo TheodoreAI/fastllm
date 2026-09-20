@@ -87,8 +87,10 @@ type cloudClients struct {
 type Router struct {
 	Local *Client
 
-	mu     sync.RWMutex
-	clouds cloudClients
+	mu sync.RWMutex
+	// lastChat holds the client that served the most recent Chat (usageHolder).
+	lastChat atomic.Value
+	clouds   cloudClients
 }
 
 // NewRouter builds a Router around the given local client, with the given
@@ -278,7 +280,7 @@ func (r *Router) StreamChat(ctx context.Context, model string, messages []Messag
 func (r *Router) Chat(ctx context.Context, model string, messages []Message, tools []Tool, thinkLevel string) (Message, error) {
 	bare, provider, ok := stripProviderPrefix(model)
 	if !ok {
-		return r.Local.Chat(ctx, model, messages, tools, thinkLevel)
+		return r.noted(r.Local).Chat(ctx, model, messages, tools, thinkLevel)
 	}
 
 	r.mu.RLock()
@@ -291,40 +293,40 @@ func (r *Router) Chat(ctx context.Context, model string, messages []Message, too
 			return Message{}, fmt.Errorf("llm: OpenAI isn't configured — add an API key in Settings → Cloud providers")
 		}
 		if NeedsResponsesAPI("openai", bare) {
-			return clouds.openaiResponses.Chat(ctx, bare, messages, tools, thinkLevel)
+			return r.noted(clouds.openaiResponses).Chat(ctx, bare, messages, tools, thinkLevel)
 		}
-		return clouds.openai.Chat(ctx, bare, messages, tools, thinkLevel)
+		return r.noted(clouds.openai).Chat(ctx, bare, messages, tools, thinkLevel)
 	case "gemini":
 		if clouds.gemini == nil {
 			return Message{}, fmt.Errorf("llm: Gemini isn't configured — add an API key in Settings → Cloud providers")
 		}
-		return clouds.gemini.Chat(ctx, bare, messages, tools, thinkLevel)
+		return r.noted(clouds.gemini).Chat(ctx, bare, messages, tools, thinkLevel)
 	case "nvidia":
 		if clouds.nvidia == nil {
 			return Message{}, fmt.Errorf("llm: NVIDIA Build isn't configured — add an API key in Settings → Cloud providers")
 		}
-		return clouds.nvidia.Chat(ctx, bare, messages, tools, thinkLevel)
+		return r.noted(clouds.nvidia).Chat(ctx, bare, messages, tools, thinkLevel)
 	case "anthropic":
 		if clouds.anthropic == nil {
 			return Message{}, fmt.Errorf("llm: Anthropic isn't configured — add an API key in Settings → Cloud providers")
 		}
-		return clouds.anthropic.Chat(ctx, bare, messages, tools, thinkLevel)
+		return r.noted(clouds.anthropic).Chat(ctx, bare, messages, tools, thinkLevel)
 	case "cloudflare":
 		if clouds.cloudflare == nil {
 			return Message{}, fmt.Errorf("llm: Cloudflare Workers AI isn't configured — add an API token and account ID in Settings → Cloud providers")
 		}
 		if NeedsAnthropicAPI(bare) {
-			return clouds.cloudflareAnthropic.Chat(ctx, bare, messages, tools, thinkLevel)
+			return r.noted(clouds.cloudflareAnthropic).Chat(ctx, bare, messages, tools, thinkLevel)
 		}
 		if NeedsResponsesAPI("cloudflare", bare) {
-			return clouds.cloudflareResponses.Chat(ctx, bare, messages, tools, thinkLevel)
+			return r.noted(clouds.cloudflareResponses).Chat(ctx, bare, messages, tools, thinkLevel)
 		}
-		return clouds.cloudflare.Chat(ctx, bare, messages, tools, thinkLevel)
+		return r.noted(clouds.cloudflare).Chat(ctx, bare, messages, tools, thinkLevel)
 	case "selfhosted":
 		if clouds.selfHosted == nil {
 			return Message{}, errProviderNotConfigured("selfhosted")
 		}
-		msg, err := clouds.selfHosted.Chat(ctx, bare, messages, tools, thinkLevel)
+		msg, err := r.noted(clouds.selfHosted).Chat(ctx, bare, messages, tools, thinkLevel)
 		if err != nil {
 			if strings.Contains(err.Error(), "connection refused") || strings.Contains(err.Error(), "connectex") {
 				return Message{}, errProviderUnreachable("selfhosted", clouds.selfHosted.BaseURL, err)
@@ -431,4 +433,42 @@ func (r *Router) ListModels(ctx context.Context) ([]Model, error) {
 		}
 	}
 	return out, nil
+}
+
+// chatClient is the tool-capable half every routed client implements.
+type chatClient interface {
+	Chat(ctx context.Context, model string, messages []Message, tools []Tool, thinkLevel string) (Message, error)
+}
+
+// usageSource is implemented by clients that can report the token counts the
+// server returned for their most recent request.
+type usageSource interface {
+	LastUsage() (Usage, bool)
+}
+
+// usageHolder wraps the last serving client so it can go into an atomic.Value,
+// which cannot store a nil interface directly.
+type usageHolder struct{ client chatClient }
+
+// noted records which client is about to serve a request and returns it, so
+// LastUsage can ask that same client for its token counts. Without this a
+// Router reports no usage at all and callers silently fall back to estimating
+// tokens, which quietly makes every token count and cost figure approximate.
+func (r *Router) noted(c chatClient) chatClient {
+	r.lastChat.Store(usageHolder{client: c})
+	return c
+}
+
+// LastUsage reports the token counts for the most recent Chat, from whichever
+// client actually served it.
+func (r *Router) LastUsage() (Usage, bool) {
+	holder, ok := r.lastChat.Load().(usageHolder)
+	if !ok || holder.client == nil {
+		return Usage{}, false
+	}
+	source, ok := holder.client.(usageSource)
+	if !ok {
+		return Usage{}, false
+	}
+	return source.LastUsage()
 }
