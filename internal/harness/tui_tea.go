@@ -229,13 +229,15 @@ func newTeaModel(runner *Runner, req RunRequest) (*teaModel, error) {
 }
 
 func (m *teaModel) formatWelcome() string {
-	var sb strings.Builder
-	title := styleBrand.Render("fastllm") + " " + styleHeaderPill.Render(m.modelName) + " " + styleMuted.Render(m.workingDir)
-	sb.WriteString(title + "\n")
-	sb.WriteString(styleMuted.Render(fmt.Sprintf("Git repo: %v  •  Discovered rules: %d  •  Commands enabled: %v",
-		m.checkpointMgr.IsGitRepo(), len(m.rules), m.runner.AllowCommands)) + "\n")
-	sb.WriteString(styleMuted.Render("Type a task to execute autonomously. Press Tab to toggle Shell Mode. Type /help for commands.") + "\n\n")
-	return sb.String()
+	banner := FormatWelcomeBanner(
+		m.workingDir,
+		m.modelName,
+		m.configPath,
+		m.checkpointMgr.IsGitRepo(),
+		len(m.rules),
+		m.runner.AllowCommands,
+	)
+	return banner + "\n\n"
 }
 
 func (m *teaModel) appendHistory(text string) {
@@ -263,8 +265,8 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 
-		headerHeight := 3
-		inputHeight := m.input.Height() + 2
+		headerHeight := 2
+		inputHeight := m.input.Height() + 3
 		statusHeight := 1
 		vpHeight := m.height - headerHeight - inputHeight - statusHeight
 		if vpHeight < 5 {
@@ -280,7 +282,7 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.Width = msg.Width
 			m.viewport.Height = vpHeight
 		}
-		m.input.SetWidth(msg.Width - 4)
+		m.input.SetWidth(msg.Width - 6)
 
 	case tea.KeyMsg:
 		switch msg.Type {
@@ -340,25 +342,23 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if ev.ToolCall != nil {
 				m.activeTool = ev.ToolCall.Name
 				m.activeArgs = summarizeArgs(ev.ToolCall.Arguments)
-				line := fmt.Sprintf("  ┌ %s %s\n", tuiToolBadge(ev.ToolCall.Name), styleMuted.Render(m.activeArgs))
-				m.appendHistory(line)
+				m.appendHistory(FormatToolCall(ev.ToolCall.Name, m.activeArgs) + "\n")
 			}
 
 		case EventToolResult:
 			if ev.ToolCall != nil {
 				m.activeTool = ""
 				m.activeArgs = ""
-				resSummary := summarizeToolResult(ev.ToolCall.Result)
-				line := fmt.Sprintf("  └ %s %s\n\n", styleStatusNotice.Render("✓"), styleMuted.Render(resSummary))
-				m.appendHistory(line)
+				m.appendHistory(FormatToolResult(ev.ToolCall.Name, ev.ToolCall.Result, 4) + "\n\n")
 			}
 
 		case EventTurnComplete:
 			if ev.Response != "" {
-				m.appendHistory(ev.Response + "\n\n")
+				m.appendHistory("\n" + FormatMarkdown(ev.Response) + "\n")
 			}
 			if ev.Metrics != nil {
 				m.latestMetrics = ev.Metrics
+				m.appendHistory(FormatTurnSummary(*ev.Metrics) + "\n\n")
 			}
 		}
 		// Listen for next event
@@ -699,14 +699,30 @@ func (m *teaModel) View() string {
 	}
 
 	headerLeft := lipgloss.JoinHorizontal(lipgloss.Center, brand, " ", modeBadge, " ", modelBadge, " ", dirBadge)
-	headerTotal := lipgloss.JoinHorizontal(lipgloss.Center, headerLeft, "  ", rightInfo)
-	sb.WriteString(headerTotal + "\n")
+	leftWidth := lipgloss.Width(headerLeft)
+	rightWidth := lipgloss.Width(rightInfo)
+	gap := m.width - leftWidth - rightWidth - 2
+	if gap < 1 {
+		gap = 1
+	}
+	headerRow := headerLeft + strings.Repeat(" ", gap) + rightInfo
+	sb.WriteString(headerRow + "\n")
+	sb.WriteString(styleMuted.Render(strings.Repeat("─", m.width)) + "\n")
 
 	// 2. Viewport (Conversation & Tool Call History)
 	sb.WriteString(m.viewport.View() + "\n")
 
-	// 3. Bottom Input Bar
-	sb.WriteString(m.input.View() + "\n")
+	// 3. Bottom Input Box with Rounded Border
+	var borderCol lipgloss.Color = tuiColorBorder
+	if m.mode == modeShell {
+		borderCol = tuiColorYellow
+	}
+	inputBox := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderCol).
+		Width(m.width - 2).
+		Render(m.input.View())
+	sb.WriteString(inputBox + "\n")
 
 	// 4. Status Bar / Keymap Hints
 	hints := "Tab: Switch Mode  •  Enter: Send  •  /c: Clear  •  /help: Commands  •  Ctrl+C: Cancel/Quit"
@@ -716,24 +732,6 @@ func (m *teaModel) View() string {
 	sb.WriteString(styleStatusBar.Width(m.width).Render(hints))
 
 	return sb.String()
-}
-
-func summarizeToolResult(res string) string {
-	res = strings.TrimSpace(res)
-	if strings.HasPrefix(res, "Error") || strings.HasPrefix(res, "error") {
-		if len(res) > 80 {
-			return res[:77] + "..."
-		}
-		return res
-	}
-	lines := strings.Split(res, "\n")
-	if len(lines) == 1 {
-		if len(lines[0]) > 80 {
-			return lines[0][:77] + "..."
-		}
-		return lines[0]
-	}
-	return fmt.Sprintf("completed (%d lines output)", len(lines))
 }
 
 // Global program reference for async event dispatches
