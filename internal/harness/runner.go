@@ -295,7 +295,15 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 
 		compTokens := countApproxTokens([]llm.Message{reply})
 		promptTokens, compTokens, _ = resolveTurnTokens(r.LLM, promptTokens, compTokens)
-		turnMetrics := ComputeTurnMetrics(turn, model, promptTokens, compTokens, turnDuration)
+		// A provider-routed model always bills; otherwise it depends on whether
+		// the direct client points at a public endpoint or at local hardware.
+		billable := r.routeModel != ""
+		if !billable {
+			if direct, ok := localClient(r.LLM); ok {
+				billable = billableEndpoint(direct.BaseURL)
+			}
+		}
+		turnMetrics := ComputeTurnMetrics(turn, model, promptTokens, compTokens, turnDuration, billable)
 		sessionMetrics.Add(turnMetrics)
 
 		turnRec := TurnRecord{

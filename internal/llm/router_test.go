@@ -1,7 +1,10 @@
 package llm
 
 import (
+	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -55,5 +58,35 @@ func TestSelfHostedProviderIsBuiltFromInjectedConfig(t *testing.T) {
 	}
 	if selfHosted.BaseURL != "http://10.0.0.5:9000/v1" {
 		t.Fatalf("client points at %q, not the injected endpoint", selfHosted.BaseURL)
+	}
+}
+
+// A Router that reports no usage makes every caller fall back to estimating
+// tokens, which silently turns real token counts and costs into guesses.
+func TestRouterReportsUsageFromTheServingClient(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"hi"}}],` +
+			`"usage":{"prompt_tokens":123,"completion_tokens":45,"total_tokens":168}}`))
+	}))
+	defer server.Close()
+
+	local := New(server.URL, "", "local-model", "")
+	router := NewRouter(local, CloudProviderConfig{})
+
+	if _, ok := router.LastUsage(); ok {
+		t.Fatal("usage reported before any request")
+	}
+
+	if _, err := router.Chat(context.Background(), "local-model", []Message{{Role: "user", Content: "hi"}}, nil, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	usage, ok := router.LastUsage()
+	if !ok {
+		t.Fatal("router reported no usage; callers would fall back to estimated tokens")
+	}
+	if usage.PromptTokens != 123 || usage.CompletionTokens != 45 {
+		t.Fatalf("usage = %+v; want the counts the server reported", usage)
 	}
 }
