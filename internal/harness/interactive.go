@@ -657,24 +657,17 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 				}
 
 				targetModel := parts[1]
-				model = targetModel
-				if settings != nil {
-					if matched := settings.FindModel(targetModel); matched != nil {
-						fmt.Println(ColorGreen(fmt.Sprintf("  %s Switched model to: %s (%s, URL: %s)", SymCheck, matched.ID, matched.Name, matched.URL)))
-						if client, ok := r.LLM.(*llm.Client); ok {
-							if matched.URL != "" {
-								client.BaseURL = matched.URL
-							}
-							if resolved := matched.ResolveAPIKey(); resolved != "" {
-								client.APIKey = resolved
-							}
-							applyModelParameters(client, matched.Parameters)
-						}
-						saveSession()
-						continue
-					}
+				matched := settings.FindModel(targetModel)
+				if matched == nil {
+					fmt.Println(ColorRed(fmt.Sprintf("  %s Model %q is not configured. Use /models to list available models.", SymCross, targetModel)))
+					continue
 				}
-				fmt.Println(ColorGreen(fmt.Sprintf("  %s Switched model to: %s", SymCheck, model)))
+				if err := r.SwitchModel(matched); err != nil {
+					fmt.Println(ColorRed(fmt.Sprintf("  %s Could not switch model: %v", SymCross, err)))
+					continue
+				}
+				model = matched.ID
+				fmt.Println(ColorGreen(fmt.Sprintf("  %s Switched model to: %s (%s, URL: %s)", SymCheck, matched.ID, matched.Name, matched.URL)))
 				saveSession()
 				continue
 

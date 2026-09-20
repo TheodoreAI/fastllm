@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"fastllm/internal/config"
 	"fastllm/internal/files"
 	"fastllm/internal/gitrepo"
 	"fastllm/internal/llm"
@@ -43,6 +44,34 @@ type Runner struct {
 	// reliably cuts context but can cost extra turns on short tasks, so it is
 	// opt-in until it is shown to pay for itself on long ones.
 	EnableObservations bool
+}
+
+// SwitchModel reconfigures the runner's direct LLM client for a configured
+// endpoint. Keeping this operation on Runner ensures every interactive UI
+// switches the model and its transport settings atomically.
+func (r *Runner) SwitchModel(endpoint *config.ModelEndpoint) error {
+	if endpoint == nil {
+		return errors.New("model endpoint is not configured")
+	}
+	if strings.TrimSpace(endpoint.URL) == "" {
+		return fmt.Errorf("model %q has no endpoint URL", endpoint.ID)
+	}
+
+	client, ok := r.LLM.(*llm.Client)
+	if !ok {
+		return fmt.Errorf("model switching is not supported by %T", r.LLM)
+	}
+
+	client.BaseURL = strings.TrimRight(strings.TrimSpace(endpoint.URL), "/")
+	client.APIKey = endpoint.ResolveAPIKey()
+	client.ChatModel = endpoint.ID
+	client.SendThink = config.ShouldSendThink(endpoint, client.BaseURL)
+	client.Temperature = nil
+	client.TopP = nil
+	client.MaxTokens = nil
+	applyModelParameters(client, endpoint.Parameters)
+	r.DefaultModel = endpoint.ID
+	return nil
 }
 
 type FollowUpCommand struct {

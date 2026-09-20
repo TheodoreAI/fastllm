@@ -573,9 +573,18 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 		case "/model", "/models":
 			m.appendHistory(styleUserPrompt.Render("❯ "+inputVal) + "\n")
 			if len(parts) > 1 && parts[1] != "list" {
-				m.modelName = parts[1]
-				m.statusNotice = fmt.Sprintf("Switched model to %s", parts[1])
-				m.appendHistory(styleStatusNotice.Render("Active model set to: "+parts[1]) + "\n\n")
+				matched := m.settings.FindModel(parts[1])
+				if matched == nil {
+					m.appendHistory(styleDiffDel.Render(fmt.Sprintf("Model %q is not configured. Use /models to list available models.\n\n", parts[1])))
+					return nil
+				}
+				if err := m.runner.SwitchModel(matched); err != nil {
+					m.appendHistory(styleDiffDel.Render(fmt.Sprintf("Could not switch model: %v\n\n", err)))
+					return nil
+				}
+				m.modelName = matched.ID
+				m.statusNotice = fmt.Sprintf("Switched model to %s", matched.ID)
+				m.appendHistory(styleStatusNotice.Render(fmt.Sprintf("Active model: %s (%s)\nEndpoint: %s", matched.ID, matched.Name, matched.URL)) + "\n\n")
 				return m.clearStatusAfter(2 * time.Second)
 			}
 			if m.settings != nil && len(m.settings.Models) > 0 {
