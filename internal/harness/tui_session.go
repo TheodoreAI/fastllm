@@ -205,8 +205,117 @@ func (m *teaModel) activeSessionID() string {
 	return m.activeSession.ID
 }
 
+// withLegacySource runs fn against the legacy web database, reporting in the
+// transcript when it is unreachable rather than failing silently.
+func (m *teaModel) withLegacySource(fn func(LegacyConversationSource) error) {
+	if OpenLegacyConversations == nil {
+		m.appendHistory(styleMuted.Render("  Legacy conversation access is not built into this binary.") + "\n\n")
+		return
+	}
+	src, closeSrc, err := OpenLegacyConversations()
+	if err != nil {
+		m.appendHistory(styleDiffDel.Render(fmt.Sprintf("Cannot open the legacy database: %v\n\n", err)))
+		return
+	}
+	if closeSrc != nil {
+		defer func() { _ = closeSrc() }()
+	}
+	if err := fn(src); err != nil {
+		m.appendHistory(styleDiffDel.Render(fmt.Sprintf("%v\n\n", err)))
+	}
+}
+
+// importLegacy imports one conversation by id, or every conversation when id is
+// zero, and reports what happened.
+func (m *teaModel) importLegacy(src LegacyConversationSource, id int64) error {
+	if m.sessionStore == nil {
+		return fmt.Errorf("session persistence is unavailable")
+	}
+	source := src
+	if id != 0 {
+		index, err := src.ListConversations()
+		if err != nil {
+			return err
+		}
+		var match *LegacyConversation
+		for i := range index {
+			if index[i].ID == id {
+				match = &index[i]
+				break
+			}
+		}
+		if match == nil {
+			return fmt.Errorf("no conversation with id %d", id)
+		}
+		source = singleConversationSource{parent: src, only: *match}
+	}
+	report, err := ImportLegacyConversations(source, m.sessionStore, m.workingDir, m.modelName, m.runtimeSettings())
+	if err != nil {
+		return err
+	}
+	m.appendHistory(styleStatusNotice.Render("Import: "+report.String()) + "\n\n")
+	if len(report.Imported) > 0 {
+		m.appendHistory(styleMuted.Render("  Use /sessions to list them and /resume <id> to open one.") + "\n\n")
+	}
+	m.statusNotice = report.String()
+	return nil
+}
+
+// singleConversationSource narrows a source to one conversation so that a
+// targeted /import reuses the same idempotent path as a full import.
+type singleConversationSource struct {
+	parent LegacyConversationSource
+	only   LegacyConversation
+}
+
+func (s singleConversationSource) ListConversations() ([]LegacyConversation, error) {
+	return []LegacyConversation{s.only}, nil
+}
+
+func (s singleConversationSource) LoadMessages(id int64) ([]llm.Message, error) {
+	return s.parent.LoadMessages(id)
+}
+
 func (m *teaModel) handleSessionSlash(input string, parts []string, command string) (bool, tea.Cmd) {
 	switch command {
+	case "/conversations":
+		m.appendHistory(styleUserPrompt.Render("❯ /conversations") + "\n")
+		m.withLegacySource(func(src LegacyConversationSource) error {
+			index, err := src.ListConversations()
+			if err != nil {
+				return err
+			}
+			imported := map[string]bool{}
+			if m.sessionStore != nil {
+				if seen, seenErr := alreadyImported(m.sessionStore); seenErr == nil {
+					imported = seen
+				}
+			}
+			m.appendHistory(FormatLegacyConversationsTable(index, imported) + "\n\n")
+			return nil
+		})
+		return true, nil
+
+	case "/import":
+		m.appendHistory(styleUserPrompt.Render("❯ "+input) + "\n")
+		if len(parts) < 2 {
+			m.appendHistory(styleMuted.Render("  Usage: /import <conversation-id> | /import all") + "\n\n")
+			return true, nil
+		}
+		var target int64
+		if !strings.EqualFold(parts[1], "all") {
+			parsed, err := strconv.ParseInt(parts[1], 10, 64)
+			if err != nil || parsed <= 0 {
+				m.appendHistory(styleDiffDel.Render(fmt.Sprintf("Not a conversation id: %q\n\n", parts[1])))
+				return true, nil
+			}
+			target = parsed
+		}
+		m.withLegacySource(func(src LegacyConversationSource) error {
+			return m.importLegacy(src, target)
+		})
+		return true, nil
+
 	case "/sessions":
 		if m.sessionStore == nil {
 			m.appendHistory(styleDiffDel.Render("Session persistence is unavailable.\n\n"))
