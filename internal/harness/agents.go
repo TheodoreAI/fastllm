@@ -187,7 +187,7 @@ func (m *AgentManager) Spawn(parent RunRequest, task, requestedDir, model string
 
 	childReq := RunRequest{
 		Task: task, WorkingDir: workingDir, Model: model, MaxTurns: maxTurns,
-		AllowCommands: parent.AllowCommands, CommandTimeout: parent.CommandTimeout,
+		AllowCommands: parent.AllowCommands, CommandsConfigured: true, CommandTimeout: parent.CommandTimeout,
 		ThinkLevel: parent.ThinkLevel, AgentDepth: parent.AgentDepth + 1,
 		AgentInbox: record.inbox, PermissionMode: parent.PermissionMode,
 	}

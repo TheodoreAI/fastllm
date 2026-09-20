@@ -28,6 +28,9 @@ type RunRequest struct {
 	// AllowCommands controls whether the run_command tool is offered.
 	// Defaults to true.
 	AllowCommands bool `json:"allow_commands"`
+	// CommandsConfigured distinguishes an explicit interactive "off" from the
+	// zero value used by older non-interactive callers.
+	CommandsConfigured bool `json:"-"`
 
 	// CommandTimeout is the maximum execution time for each run_command invocation.
 	// Defaults to 60 seconds if <= 0.
@@ -51,6 +54,9 @@ type RunRequest struct {
 	AgentDepth     int            `json:"-"`
 	AgentInbox     <-chan string  `json:"-"`
 	PermissionMode PermissionMode `json:"permission_mode,omitempty"`
+	// Authorize is an optional interactive approval callback used by terminal
+	// clients in ask mode. Non-interactive callers leave it nil.
+	Authorize func(toolName, summary string) bool `json:"-"`
 }
 
 // InitialMessage represents a prior conversation turn.

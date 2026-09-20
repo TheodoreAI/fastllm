@@ -15,9 +15,11 @@ type mockLLM struct {
 	chatModel string
 	turns     []func(messages []llm.Message) (llm.Message, error)
 	turnIndex int
+	toolsSeen [][]llm.Tool
 }
 
 func (m *mockLLM) Chat(ctx context.Context, model string, messages []llm.Message, tools []llm.Tool, thinkLevel string) (llm.Message, error) {
+	m.toolsSeen = append(m.toolsSeen, append([]llm.Tool(nil), tools...))
 	if m.turnIndex >= len(m.turns) {
 		return llm.Message{Role: "assistant", Content: "No more planned turns"}, nil
 	}
@@ -28,6 +30,64 @@ func (m *mockLLM) Chat(ctx context.Context, model string, messages []llm.Message
 
 func (m *mockLLM) ChatModel() string {
 	return m.chatModel
+}
+
+func TestRunnerInteractiveAuthorizationCanDenyMutation(t *testing.T) {
+	tmpDir := t.TempDir()
+	mock := &mockLLM{turns: []func([]llm.Message) (llm.Message, error){
+		func([]llm.Message) (llm.Message, error) {
+			call := llm.ToolCall{ID: "write-1", Type: "function"}
+			call.Function.Name = "write_file"
+			call.Function.Arguments = `{"path":"denied.txt","content":"must not exist"}`
+			return llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{call}}, nil
+		},
+		func(messages []llm.Message) (llm.Message, error) {
+			if got := messages[len(messages)-1].Content; !strings.Contains(got, "Permission denied") {
+				t.Fatalf("model did not receive denial result: %q", got)
+			}
+			return llm.Message{Role: "assistant", Content: "denial handled"}, nil
+		},
+	}}
+	runner := NewRunner(mock, tmpDir, "test-model")
+	var askedName, askedSummary string
+	result, err := runner.Run(context.Background(), RunRequest{
+		Task: "try a write", WorkingDir: tmpDir, Model: "test-model", PermissionMode: PermissionAsk,
+		Authorize: func(name, summary string) bool {
+			askedName, askedSummary = name, summary
+			return false
+		},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if askedName != "write_file" || !strings.Contains(askedSummary, "denied.txt") {
+		t.Fatalf("authorization request = %q %q", askedName, askedSummary)
+	}
+	if _, err := os.Stat(filepath.Join(tmpDir, "denied.txt")); !os.IsNotExist(err) {
+		t.Fatalf("denied mutation created file: %v", err)
+	}
+	if result.FinalResponse != "denial handled" {
+		t.Fatalf("final response = %q", result.FinalResponse)
+	}
+}
+
+func TestRunnerExplicitlyDisablesCommands(t *testing.T) {
+	mock := &mockLLM{turns: []func([]llm.Message) (llm.Message, error){
+		func([]llm.Message) (llm.Message, error) { return llm.Message{Role: "assistant", Content: "done"}, nil },
+	}}
+	runner := NewRunner(mock, t.TempDir(), "test-model")
+	runner.AllowCommands = true
+	result, err := runner.Run(context.Background(), RunRequest{
+		Task: "no commands", CommandsConfigured: true, AllowCommands: false, PermissionMode: PermissionAuto,
+	}, nil)
+	if err != nil || result.FinalResponse != "done" {
+		t.Fatalf("explicit command disable run failed: result=%+v err=%v", result, err)
+	}
+	for _, tool := range mock.toolsSeen[0] {
+		if tool.Function.Name == "run_command" || tool.Function.Name == "process_status" || tool.Function.Name == "kill_process" {
+			t.Fatalf("command tool %q was exposed while explicitly disabled", tool.Function.Name)
+		}
+	}
 }
 
 func TestRunner_AutonomousFileEditing(t *testing.T) {

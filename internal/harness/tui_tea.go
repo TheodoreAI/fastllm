@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"fastllm/internal/config"
+	"fastllm/internal/llm"
 	"fastllm/internal/webtools"
 
 	"github.com/atotto/clipboard"
@@ -126,6 +127,15 @@ func tuiToolBadge(name string) string {
 // Bubble Tea Messages
 type teaAgentEventMsg Event
 type teaStatusClearMsg struct{}
+type teaPermissionRequestMsg struct {
+	ToolName string
+	Summary  string
+	Reply    chan permissionDecision
+}
+type permissionDecision struct {
+	Allow        bool
+	GrantSession bool
+}
 type teaShellDoneMsg struct {
 	Output string
 	Err    error
@@ -162,8 +172,25 @@ type teaModel struct {
 	activeArgs       string
 	cancelTurn       context.CancelFunc
 	eventChan        chan Event
+	permissionChan   chan teaPermissionRequestMsg
 	statusNotice     string
 	latestMetrics    *TurnMetrics
+	pendingPrompt    string
+	taskStarted      time.Time
+
+	// Persistent conversation and runtime state.
+	sessionStore      *SessionStore
+	activeSession     *InteractiveSession
+	sessionMessages   []llm.Message
+	sessionMetrics    SessionMetrics
+	maxTurns          int
+	commandTimeout    time.Duration
+	thinkLevel        string
+	allowCommands     bool
+	permissionMode    PermissionMode
+	expandedTools     bool
+	sessionGrants     map[string]bool
+	pendingPermission *teaPermissionRequestMsg
 
 	// Prompt history navigation
 	promptHistory []string
@@ -198,6 +225,24 @@ func newTeaModel(runner *Runner, req RunRequest) (*teaModel, error) {
 	checkpointMgr := NewCheckpointManager(absWorkingDir)
 	processMgr := NewProcessManager()
 	settings, configPath, _ := config.LoadSettings(absWorkingDir)
+	maxTurns := req.MaxTurns
+	if maxTurns <= 0 {
+		maxTurns = runner.DefaultMaxTurns
+	}
+	if maxTurns <= 0 {
+		maxTurns = 20
+	}
+	commandTimeout := req.CommandTimeout
+	if commandTimeout <= 0 {
+		commandTimeout = runner.CommandTimeout
+	}
+	if commandTimeout <= 0 {
+		commandTimeout = 60 * time.Second
+	}
+	permissionMode := req.PermissionMode
+	if permissionMode == "" {
+		permissionMode = PermissionAsk
+	}
 
 	ta := textarea.New()
 	ta.Placeholder = "Ask a question, enter a task, or type /help (Tab switches to Shell Mode)..."
@@ -214,24 +259,35 @@ func newTeaModel(runner *Runner, req RunRequest) (*teaModel, error) {
 	hist := loadPromptHistory()
 
 	m := &teaModel{
-		runner:        runner,
-		workingDir:    absWorkingDir,
-		modelName:     modelName,
-		mode:          modeAgent,
-		configPath:    configPath,
-		checkpointMgr: checkpointMgr,
-		processMgr:    processMgr,
-		rules:         rules,
-		settings:      settings,
-		systemPrompt:  DefaultSystemPrompt + rulesPrompt,
-		input:         ta,
-		spinner:       sp,
-		promptHistory: hist,
-		historyIdx:    -1,
+		runner:         runner,
+		workingDir:     absWorkingDir,
+		modelName:      modelName,
+		mode:           modeAgent,
+		configPath:     configPath,
+		checkpointMgr:  checkpointMgr,
+		processMgr:     processMgr,
+		rules:          rules,
+		settings:       settings,
+		systemPrompt:   DefaultSystemPrompt + rulesPrompt,
+		input:          ta,
+		spinner:        sp,
+		promptHistory:  hist,
+		historyIdx:     -1,
+		maxTurns:       maxTurns,
+		commandTimeout: commandTimeout,
+		thinkLevel:     req.ThinkLevel,
+		allowCommands:  req.AllowCommands,
+		permissionMode: permissionMode,
+		sessionGrants:  make(map[string]bool),
+		permissionChan: make(chan teaPermissionRequestMsg),
+	}
+	if err := m.initializeSession(req.ResumeSession); err != nil {
+		m.statusNotice = "Session recovery failed: " + err.Error()
 	}
 
 	// Initial welcome message in history
 	m.appendHistory(m.formatWelcome())
+	m.appendSessionTranscript()
 
 	return m, nil
 }
@@ -243,7 +299,7 @@ func (m *teaModel) formatWelcome() string {
 		m.configPath,
 		m.checkpointMgr.IsGitRepo(),
 		len(m.rules),
-		m.runner.AllowCommands,
+		m.allowCommands,
 	)
 	return banner + "\n\n"
 }
@@ -301,6 +357,29 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.input.SetWidth(msg.Width - 6)
 
 	case tea.KeyMsg:
+		if m.pendingPermission != nil {
+			if msg.Type == tea.KeyCtrlC {
+				m.resolvePermission(false, false)
+				if m.cancelTurn != nil {
+					m.cancelTurn()
+				}
+				return m, m.waitForNextEvent()
+			}
+			if msg.Type == tea.KeyRunes && len(msg.Runes) > 0 {
+				switch msg.Runes[0] {
+				case 'y', 'Y':
+					m.resolvePermission(true, false)
+					return m, m.waitForNextEvent()
+				case 'a', 'A':
+					m.resolvePermission(true, true)
+					return m, m.waitForNextEvent()
+				case 'n', 'N':
+					m.resolvePermission(false, false)
+					return m, m.waitForNextEvent()
+				}
+			}
+			return m, nil
+		}
 		switch msg.Type {
 		case tea.KeyCtrlC:
 			if m.isExecuting && m.cancelTurn != nil {
@@ -438,7 +517,11 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.startAgentWork(ev.Turn)
 				m.activeTool = ""
 				m.activeArgs = ""
-				m.appendHistory(FormatToolResult(ev.ToolCall.Name, ev.ToolCall.Result, 4) + "\n\n")
+				previewLines := 4
+				if m.expandedTools {
+					previewLines = 10000
+				}
+				m.appendHistory(FormatToolResult(ev.ToolCall.Name, ev.ToolCall.Result, previewLines) + "\n\n")
 			}
 
 		case EventTurnComplete:
@@ -449,6 +532,7 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if ev.Metrics != nil {
 				m.latestMetrics = ev.Metrics
+				m.sessionMetrics.Add(*ev.Metrics)
 				m.appendHistory(FormatTurnSummary(*ev.Metrics) + "\n\n")
 			}
 
@@ -468,10 +552,25 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.appendHistory(styleMuted.Render(fmt.Sprintf("─ Completed in %d turn(s) (%.1fs) ─\n\n",
 					ev.Result.Turns, float64(ev.Result.DurationMS)/1000.0)))
 			}
+			response := m.lastResponse
+			if ev.Result != nil && strings.TrimSpace(ev.Result.FinalResponse) != "" {
+				response = ev.Result.FinalResponse
+			}
+			m.recordCompletedPrompt(response)
 		}
 		// Listen for next event
 		if m.eventChan != nil {
 			cmds = append(cmds, m.waitForNextEvent())
+		}
+
+	case teaPermissionRequestMsg:
+		if m.sessionGrants[msg.ToolName] {
+			msg.Reply <- permissionDecision{Allow: true}
+			cmds = append(cmds, m.waitForNextEvent())
+		} else {
+			m.pendingPermission = &msg
+			m.input.Blur()
+			m.statusNotice = "Permission required for " + msg.ToolName
 		}
 
 	case teaShellDoneMsg:
@@ -509,12 +608,30 @@ func (m *teaModel) clearStatusAfter(d time.Duration) tea.Cmd {
 
 func (m *teaModel) waitForNextEvent() tea.Cmd {
 	return func() tea.Msg {
-		ev, ok := <-m.eventChan
-		if !ok {
-			return nil
+		select {
+		case ev, ok := <-m.eventChan:
+			if !ok {
+				return nil
+			}
+			return teaAgentEventMsg(ev)
+		case request := <-m.permissionChan:
+			return request
 		}
-		return teaAgentEventMsg(ev)
 	}
+}
+
+func (m *teaModel) resolvePermission(allow, grant bool) {
+	request := m.pendingPermission
+	if request == nil {
+		return
+	}
+	if allow && grant {
+		m.sessionGrants[request.ToolName] = true
+	}
+	request.Reply <- permissionDecision{Allow: allow, GrantSession: grant}
+	m.pendingPermission = nil
+	m.statusNotice = ""
+	m.input.Focus()
 }
 
 func (m *teaModel) handleShellSubmit(cmdStr string) tea.Cmd {
@@ -560,7 +677,9 @@ func (m *teaModel) changeWorkingDirectory(path string) error {
 	m.checkpointMgr = NewCheckpointManager(newDir)
 	m.rules = DiscoverWorkspaceRules(newDir)
 	m.systemPrompt = DefaultSystemPrompt + FormatRulesForPrompt(m.rules)
+	m.settings, m.configPath, _ = config.LoadSettings(newDir)
 	m.statusNotice = "Directory changed to " + filepath.Base(newDir)
+	_ = m.saveSession()
 	return nil
 }
 
@@ -569,9 +688,13 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 	if strings.HasPrefix(inputVal, "/") {
 		parts := strings.Fields(inputVal)
 		cmd := strings.ToLower(parts[0])
+		if handled, result := m.handleSessionSlash(inputVal, parts, cmd); handled {
+			return result
+		}
 
 		switch cmd {
 		case "/exit", "/quit":
+			m.closeSession()
 			return tea.Quit
 
 		case "/help":
@@ -580,6 +703,9 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 			return nil
 
 		case "/c", "/clear":
+			m.sessionMessages = nil
+			m.lastResponse = ""
+			_ = m.saveSession()
 			m.historyText.Reset()
 			m.appendHistory(m.formatWelcome())
 			m.statusNotice = "Screen and conversation cleared."
@@ -677,8 +803,9 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 
 		case "/status":
 			m.appendHistory(styleUserPrompt.Render("❯ /status") + "\n")
-			card := FormatStatusCard(m.workingDir, m.modelName, len(m.rules), SessionMetrics{}, m.processMgr)
+			card := FormatStatusCard(m.workingDir, m.modelName, len(m.rules), m.sessionMetrics, m.processMgr)
 			m.appendHistory(card + "\n\n")
+			m.appendHistory(FormatRuntimeCard(m.maxTurns, m.commandTimeout, m.thinkLevel, m.allowCommands, m.permissionMode, m.activeSessionID()) + "\n\n")
 			if summary := m.runner.agents.Summary(); summary.Total > 0 {
 				m.appendHistory(FormatCard("Child Agents", strings.Split(m.runner.agents.Status(""), "\n"), 74) + "\n\n")
 			}
@@ -697,6 +824,7 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 					return nil
 				}
 				m.modelName = matched.ID
+				_ = m.saveSession()
 				m.statusNotice = fmt.Sprintf("Switched model to %s", matched.ID)
 				m.appendHistory(styleStatusNotice.Render(fmt.Sprintf("Active model: %s (%s)\nEndpoint: %s", matched.ID, matched.Name, matched.URL)) + "\n\n")
 				return m.clearStatusAfter(2 * time.Second)
@@ -773,6 +901,11 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 
 	// 3. Autonomous Agent Turn Submission
 	m.appendHistory(formatSubmittedPrompt(inputVal))
+	if notice := m.compactSessionContext(); notice != "" {
+		m.appendHistory(styleMuted.Render("  "+notice) + "\n\n")
+	}
+	m.pendingPrompt = inputVal
+	m.taskStarted = time.Now()
 	m.isExecuting = true
 	m.hasResponseTurn = false
 	m.agentWorkStarted = false
@@ -782,16 +915,42 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 	m.cancelTurn = cancel
 	m.eventChan = make(chan Event, 64)
 
+	// Snapshot the transcript on the UI goroutine; the worker below must not read
+	// m.sessionMessages while Update may be appending to it.
+	priorMessages := m.initialMessages()
+
 	// Launch background task
 	go func() {
 		defer close(m.eventChan)
 		req := RunRequest{
-			Task:           inputVal,
-			WorkingDir:     m.workingDir,
-			Model:          m.modelName,
-			SystemPrompt:   m.systemPrompt,
-			AllowCommands:  m.runner.AllowCommands,
-			PermissionMode: PermissionAuto,
+			Task:               inputVal,
+			WorkingDir:         m.workingDir,
+			Model:              m.modelName,
+			SystemPrompt:       m.systemPrompt,
+			MaxTurns:           m.maxTurns,
+			CommandTimeout:     m.commandTimeout,
+			ThinkLevel:         m.thinkLevel,
+			AllowCommands:      m.allowCommands,
+			CommandsConfigured: true,
+			PermissionMode:     m.permissionMode,
+			InitialMessages:    priorMessages,
+		}
+		if m.permissionMode == PermissionAsk {
+			req.Authorize = func(toolName, summary string) bool {
+				reply := make(chan permissionDecision, 1)
+				request := teaPermissionRequestMsg{ToolName: toolName, Summary: summary, Reply: reply}
+				select {
+				case m.permissionChan <- request:
+				case <-ctx.Done():
+					return false
+				}
+				select {
+				case decision := <-reply:
+					return decision.Allow
+				case <-ctx.Done():
+					return false
+				}
+			}
 		}
 		_, err := m.runner.Run(ctx, req, func(ev Event) {
 			m.eventChan <- ev
@@ -856,7 +1015,7 @@ func (m *teaModel) View() string {
 
 	var rightInfo string
 	if m.isExecuting {
-		rightInfo = fmt.Sprintf("%s Turn %d", m.spinner.View(), m.activeTurn)
+		rightInfo = fmt.Sprintf("%s Turn %d · %s", m.spinner.View(), m.activeTurn, time.Since(m.taskStarted).Round(time.Second))
 		if m.activeTool != "" {
 			rightInfo += " " + tuiToolBadge(m.activeTool)
 		}
@@ -886,11 +1045,16 @@ func (m *teaModel) View() string {
 	if m.mode == modeShell {
 		borderCol = tuiColorYellow
 	}
+	inputContent := m.input.View()
+	if m.pendingPermission != nil {
+		inputContent = FormatPermissionPrompt(m.pendingPermission.ToolName, m.pendingPermission.Summary)
+		borderCol = tuiColorYellow
+	}
 	inputBox := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(borderCol).
 		Width(m.width - 2).
-		Render(m.input.View())
+		Render(inputContent)
 	sb.WriteString(inputBox + "\n")
 
 	// 4. Status Bar / Keymap Hints
