@@ -169,8 +169,14 @@ func FormatDivider(label string, width int) string {
 
 // FormatCard wraps an array of text lines in a modern rounded box.
 func FormatCard(title string, lines []string, width int) string {
-	if width <= 0 {
-		width = 72
+	minWidth := VisualLen(title) + 8
+	for _, line := range lines {
+		if v := VisualLen(line) + 6; v > minWidth {
+			minWidth = v
+		}
+	}
+	if width < minWidth {
+		width = minWidth
 	}
 	var b strings.Builder
 
@@ -240,13 +246,15 @@ func FormatWelcomeBanner(dir, model, configPath string, isGit bool, rulesCount i
 		FormatKV("git repo", gitStatus, 12),
 		FormatKV("rules", rulesStatus, 12),
 		FormatKV("commands", cmdStatus, 12),
-		// Which binary is running, and from which commit. fastllm has both a dev
-		// build in the repo and an installed one on PATH; without this there is no
-		// way to tell a stale copy from a current one.
-		FormatKV("build", ColorGray(BuildIdentity())+"  "+ColorGray(runningExecutable()), 12),
-		"",
-		ColorGray("Type ") + ColorCyan("/help") + ColorGray(" for slash commands or enter your prompt below."),
+		FormatKV("build", ColorGray(BuildIdentity()), 12),
 	}
+	if exe := runningExecutable(); exe != "" {
+		lines = append(lines, FormatKV("binary", ColorGray(exe), 12))
+	}
+	lines = append(lines,
+		"",
+		ColorGray("Type ")+ColorCyan("/help")+ColorGray(" for slash commands or enter your prompt below."),
+	)
 
 	return FormatCard("fastllm "+SymDot+" autonomous agent repl", lines, 74)
 }

@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -165,6 +166,11 @@ type teaModel struct {
 	statusNotice    string
 	latestMetrics   *TurnMetrics
 
+	// Prompt history navigation
+	promptHistory []string
+	historyIdx    int
+	historyDraft  string
+
 	// Geometry
 	width  int
 	height int
@@ -206,6 +212,8 @@ func newTeaModel(runner *Runner, req RunRequest) (*teaModel, error) {
 	sp.Spinner = spinner.Dot
 	sp.Style = lipgloss.NewStyle().Foreground(tuiColorCyan)
 
+	hist := loadPromptHistory()
+
 	m := &teaModel{
 		runner:        runner,
 		workingDir:    absWorkingDir,
@@ -219,6 +227,8 @@ func newTeaModel(runner *Runner, req RunRequest) (*teaModel, error) {
 		systemPrompt:  DefaultSystemPrompt + rulesPrompt,
 		input:         ta,
 		spinner:       sp,
+		promptHistory: hist,
+		historyIdx:    -1,
 	}
 
 	// Initial welcome message in history
@@ -341,6 +351,9 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			inputVal := strings.TrimSpace(val)
 			if inputVal != "" {
+				m.addPromptHistory(inputVal)
+				m.historyIdx = -1
+				m.historyDraft = ""
 				m.input.Reset()
 				if m.mode == modeShell {
 					cmds = append(cmds, m.handleShellSubmit(inputVal))
@@ -348,6 +361,41 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					cmds = append(cmds, m.handleAgentSubmit(inputVal))
 				}
 				return m, tea.Batch(cmds...)
+			}
+
+		case tea.KeyUp:
+			if m.input.Line() == 0 && len(m.promptHistory) > 0 {
+				if m.historyIdx == -1 {
+					m.historyDraft = m.input.Value()
+					m.historyIdx = len(m.promptHistory) - 1
+				} else if m.historyIdx > 0 {
+					m.historyIdx--
+				}
+				m.input.SetValue(m.promptHistory[m.historyIdx])
+				m.input.CursorEnd()
+				return m, nil
+			}
+
+		case tea.KeyDown:
+			if m.historyIdx != -1 && m.input.Line() >= m.input.LineCount()-1 {
+				if m.historyIdx < len(m.promptHistory)-1 {
+					m.historyIdx++
+					m.input.SetValue(m.promptHistory[m.historyIdx])
+					m.input.CursorEnd()
+				} else {
+					m.historyIdx = -1
+					m.input.SetValue(m.historyDraft)
+					m.input.CursorEnd()
+				}
+				return m, nil
+			}
+
+		case tea.KeyEsc:
+			if m.historyIdx != -1 {
+				m.historyIdx = -1
+				m.input.SetValue(m.historyDraft)
+				m.input.CursorEnd()
+				return m, nil
 			}
 
 		case tea.KeyPgUp:
@@ -786,9 +834,9 @@ func (m *teaModel) View() string {
 	sb.WriteString(inputBox + "\n")
 
 	// 4. Status Bar / Keymap Hints
-	hints := "Tab: Switch Mode  •  Enter: Send  •  Ctrl+J / \\: Newline  •  /copy: Copy  •  Ctrl+C: Quit"
+	hints := "Tab: Mode  •  Enter: Send  •  ↑/↓: History  •  Ctrl+J: Newline  •  /copy: Copy  •  Ctrl+C: Quit"
 	if m.mode == modeShell {
-		hints = "Tab: Return to Agent  •  Enter: Run Command  •  Ctrl+V: Paste  •  exit: Leave Shell"
+		hints = "Tab: Agent  •  Enter: Run  •  ↑/↓: History  •  Ctrl+V: Paste  •  exit: Leave Shell"
 	}
 	sb.WriteString(styleStatusBar.Width(m.width).Render(hints))
 
@@ -815,4 +863,71 @@ func (r *Runner) RunBubbleTea(req RunRequest) error {
 
 	_, err = p.Run()
 	return err
+}
+
+func promptHistoryPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".fastllm", "history")
+}
+
+func loadPromptHistory() []string {
+	p := promptHistoryPath()
+	if p == "" {
+		return nil
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return nil
+	}
+	raw := strings.Split(string(data), "\n")
+	var lines []string
+	for _, l := range raw {
+		trimmed := strings.TrimSpace(strings.TrimRight(l, "\r"))
+		if trimmed != "" {
+			restored := strings.ReplaceAll(trimmed, "\\n", "\n")
+			lines = append(lines, restored)
+		}
+	}
+	if len(lines) > 500 {
+		lines = lines[len(lines)-500:]
+	}
+	return lines
+}
+
+func savePromptHistoryEntry(entry string) {
+	entry = strings.TrimSpace(entry)
+	if entry == "" {
+		return
+	}
+	p := promptHistoryPath()
+	if p == "" {
+		return
+	}
+	dir := filepath.Dir(p)
+	_ = os.MkdirAll(dir, 0o755)
+
+	singleLine := strings.ReplaceAll(entry, "\r\n", "\\n")
+	singleLine = strings.ReplaceAll(singleLine, "\n", "\\n")
+
+	f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = f.WriteString(singleLine + "\n")
+}
+
+func (m *teaModel) addPromptHistory(val string) {
+	trimmed := strings.TrimSpace(val)
+	if trimmed == "" {
+		return
+	}
+	if n := len(m.promptHistory); n > 0 && m.promptHistory[n-1] == trimmed {
+		return
+	}
+	m.promptHistory = append(m.promptHistory, trimmed)
+	savePromptHistoryEntry(trimmed)
 }
