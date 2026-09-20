@@ -21,7 +21,7 @@ Follow these operational rules:
    - For long-running servers or watchers, set background: true and inspect using process_status.
    - Large outputs may be archived. Use read_observation with the provided reference to retrieve exact line ranges.
 4. Use web_search and web_fetch when you need documentation, API references, library examples, or real-time web information.
-5. Use spawn_agent only for concrete independent subtasks. Continue useful work while it runs, then retrieve its result with agent_status. Do not finish while required child work is still pending.
+5. Use spawn_agent only for concrete independent subtasks. Continue useful work while it runs, then call agent_status once to retrieve its result. agent_status waits for an active child; never rapidly poll it. Do not finish while required child work is still pending.
 6. When finished, call finish_task (or state your final answer) explaining what was done and verifying the result.`
 
 var webSearchTool = webtools.SearchTool
@@ -229,9 +229,10 @@ var spawnAgentTool = llm.Tool{Type: "function", Function: llm.ToolFunction{
 }}
 
 var agentStatusTool = llm.Tool{Type: "function", Function: llm.ToolFunction{
-	Name: "agent_status", Description: "Inspect one child agent, or list all child agents when agent_id is omitted.",
+	Name: "agent_status", Description: "Inspect child agents. With an agent_id, waits up to 60 seconds by default for an active child to finish, so call it once rather than polling. Omit agent_id for an immediate list of all agents.",
 	Parameters: map[string]any{"type": "object", "properties": map[string]any{
-		"agent_id": map[string]any{"type": "string", "description": "Child agent ID."},
+		"agent_id":     map[string]any{"type": "string", "description": "Child agent ID. Omit to list all agents without waiting."},
+		"wait_seconds": map[string]any{"type": "integer", "description": "How long to wait for this child to finish (default 60, maximum 300; use 0 for an immediate snapshot)."},
 	}},
 }}
 

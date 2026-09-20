@@ -359,7 +359,7 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 				toolResult = r.executeGlobFiles(ctx, absWorkingDir, args.Pattern, args.Path)
 
 			case "spawn_agent", "agent_status", "send_agent_message", "cancel_agent":
-				toolResult = r.executeAgentTool(req, call.Function.Name, call.Function.Arguments)
+				toolResult = r.executeAgentTool(ctx, req, call.Function.Name, call.Function.Arguments)
 
 			case "web_search":
 				var args struct {

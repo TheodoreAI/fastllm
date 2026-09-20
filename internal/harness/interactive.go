@@ -980,7 +980,7 @@ func (r *Runner) runInteractiveTurn(
 					AllowCommands: allowCmds, CommandTimeout: cmdTimeout,
 					ThinkLevel: thinkLevel, PermissionMode: permissions.Mode,
 				}
-				toolResult = r.executeAgentTool(parent, call.Function.Name, call.Function.Arguments)
+				toolResult = r.executeAgentTool(ctx, parent, call.Function.Name, call.Function.Arguments)
 
 			case "web_search":
 				var args struct {

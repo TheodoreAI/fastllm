@@ -1,0 +1,4 @@
+- decided_at: 2026-09-20T16:00:10+00:00
+  event: initial
+  value: A specific agent_status call waits up to 60 seconds by default for active-child completion, is parent-context cancelable, and supports wait_seconds 0 for an immediate snapshot; list-all remains immediate.
+  reason: Runtime waiting prevents fast local models from consuming every parent turn on tight status polling while preserving asynchronous child execution and explicit snapshots.

@@ -76,6 +76,9 @@ status/result inspection, follow-up messages, and cancellation. Delegation is
 limited to three concurrent children and two levels deep. The TUI header and
 `/status` show known/active child counts and aggregate child token usage;
 `agent_status` reports per-agent tokens and results.
+When inspecting a specific active child, it waits up to 60 seconds for completion
+instead of encouraging rapid model-driven polling; pass `wait_seconds: 0` when an
+immediate snapshot is actually needed.
 
 Workspace access is confined to the selected directory. Web fetching rejects
 loopback, private, multicast, and link-local destinations.
