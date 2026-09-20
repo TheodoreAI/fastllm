@@ -126,10 +126,6 @@ func tuiToolBadge(name string) string {
 
 // Bubble Tea Messages
 type teaAgentEventMsg Event
-type teaAgentDoneMsg struct {
-	Result *RunResult
-	Err    error
-}
 type teaStatusClearMsg struct{}
 type teaShellDoneMsg struct {
 	Output string
@@ -249,6 +245,14 @@ func (m *teaModel) appendHistory(text string) {
 		m.viewport.SetContent(m.historyText.String())
 		m.viewport.GotoBottom()
 	}
+}
+
+func (m *teaModel) contentWidth() int {
+	w := m.width - 4
+	if w < 40 {
+		return 76
+	}
+	return w
 }
 
 // Init implements tea.Model
@@ -379,33 +383,28 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if ev.Response != "" {
 				m.lastResponse = ev.Response
 				m.hasResponseTurn = true
-				m.appendHistory("\n" + FormatMarkdown(ev.Response) + "\n")
+				m.appendHistory("\n" + FormatMarkdownWidth(ev.Response, m.contentWidth()) + "\n")
 			}
 			if ev.Metrics != nil {
 				m.latestMetrics = ev.Metrics
 				m.appendHistory(FormatTurnSummary(*ev.Metrics) + "\n\n")
 			}
+
+		case EventTaskFinished:
+			m.isExecuting = false
+			m.activeTool = ""
+			m.activeArgs = ""
+			m.cancelTurn = nil
+			if ev.Error != "" {
+				m.appendHistory(styleDiffDel.Render(fmt.Sprintf("\nTask failed: %s\n\n", ev.Error)))
+			} else if ev.Result != nil {
+				m.appendHistory(styleMuted.Render(fmt.Sprintf("─ Completed in %d turn(s) (%.1fs) ─\n\n",
+					ev.Result.Turns, float64(ev.Result.DurationMS)/1000.0)))
+			}
 		}
 		// Listen for next event
 		if m.eventChan != nil {
 			cmds = append(cmds, m.waitForNextEvent())
-		}
-
-	case teaAgentDoneMsg:
-		m.isExecuting = false
-		m.activeTool = ""
-		m.activeArgs = ""
-		m.cancelTurn = nil
-		if msg.Err != nil {
-			m.appendHistory(styleDiffDel.Render(fmt.Sprintf("\nTask failed: %v\n\n", msg.Err)))
-		} else if msg.Result != nil {
-			// Only append final response if NOT already rendered during EventTurnComplete
-			if !m.hasResponseTurn && msg.Result.FinalResponse != "" {
-				m.lastResponse = msg.Result.FinalResponse
-				m.appendHistory("\n" + FormatMarkdown(msg.Result.FinalResponse) + "\n\n")
-			}
-			m.appendHistory(styleMuted.Render(fmt.Sprintf("─ Completed in %d turn(s) (%.1fs) ─\n\n",
-				msg.Result.Turns, float64(msg.Result.DurationMS)/1000.0)))
 		}
 
 	case teaShellDoneMsg:
@@ -709,11 +708,15 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 			Model:        m.modelName,
 			SystemPrompt: m.systemPrompt,
 		}
-		res, err := m.runner.Run(ctx, req, func(ev Event) {
+		_, err := m.runner.Run(ctx, req, func(ev Event) {
 			m.eventChan <- ev
 		})
-		// When done, dispatch completion
-		teaModelProg.Send(teaAgentDoneMsg{Result: res, Err: err})
+		if err != nil {
+			m.eventChan <- Event{
+				Type:  EventTaskFinished,
+				Error: err.Error(),
+			}
+		}
 	}()
 
 	return m.waitForNextEvent()
