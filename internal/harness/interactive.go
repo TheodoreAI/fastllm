@@ -22,6 +22,13 @@ import (
 
 // RunInteractive starts an interactive terminal TUI / REPL session.
 func (r *Runner) RunInteractive(initialReq RunRequest) error {
+	if os.Getenv("FASTLLM_SIMPLE_TUI") != "1" {
+		return r.RunBubbleTea(initialReq)
+	}
+	return r.runSimpleInteractive(initialReq)
+}
+
+func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 	workingDir := initialReq.WorkingDir
 	if workingDir == "" {
 		workingDir = r.DefaultWorkingDir
@@ -247,9 +254,24 @@ func (r *Runner) RunInteractive(initialReq RunRequest) error {
 	var shellMode bool
 
 	for {
-		prompt := FormatPrompt(model)
+		// Rebuilt every prompt so it reflects the turn that just finished.
+		status := FormatStatusLine(StatusLine{
+			Model:          model,
+			PermissionMode: permissionMode,
+			ShellMode:      shellMode,
+			ContextChars:   messageCharacterCount(sessionMessages),
+			ContextBudget:  DefaultCompactionConfig().MaxTotalChars,
+			Turns:          sessionMetrics.TotalTurns,
+			TotalTokens:    sessionMetrics.TotalTokens,
+			Cost:           sessionMetrics.TotalCost,
+			WorkingDir:     absWorkingDir,
+			// Re-read each prompt: /dir can move the session to another repo.
+			Branch: currentBranch(absWorkingDir),
+		})
+		// The status line already names the model, so the prompt stays bare.
+		prompt := status + FormatPrompt("")
 		if shellMode {
-			prompt = FormatShellPrompt(absWorkingDir)
+			prompt = status + FormatShellPrompt(absWorkingDir)
 		}
 		rawLine, readErr := input.ReadLine(prompt)
 		if readErr != nil {
