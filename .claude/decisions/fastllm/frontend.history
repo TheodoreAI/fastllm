@@ -1,0 +1,4 @@
+- decided_at: 2026-09-20T16:46:20+00:00
+  event: initial
+  value: Terminal UI (cmd/cli) is the only user interface; the React/Vite frontend in web/ is deleted and cmd/server runs headless, serving /api/* and /v1/* with a plain-text notice at / and 404 for every other path.
+  reason: The TUI reached parity and recent work all targeted it, so maintaining two UIs duplicated effort. Removal was gated on the stranded-data checklist rather than done outright: conversations lived only in SQLite, so an idempotent import (fastllm-cli --import-conversations, plus /conversations and /import in the TUI) was built and verified against the real 22MB fastllm.db before deleting anything. Notes had 0 rows and were unwanted; cloud_providers had no row at all and config.json is already the real source for the TUI. The HTTP API/compat backend is deliberately NOT removed -- retiring the frontend is a separate decision from retiring the server.
