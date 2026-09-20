@@ -111,10 +111,6 @@ export function quitServer() {
   return fetch('/api/quit', { method: 'POST' })
 }
 
-export function isWails() {
-  return false
-}
-
 const STALL_TIMEOUT_MS = 30000
 
 export async function streamChat(
