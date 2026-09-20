@@ -782,3 +782,17 @@ func FormatLegacyConversationsTable(conversations []LegacyConversation, imported
 	lines = append(lines, "")
 	return FormatCard("Legacy Web Conversations", lines, 86)
 }
+
+// FormatPermissionKeyLegend renders the key hints for the Bubble Tea TUI's
+// permission prompt. It is separate from FormatPermissionPrompt because the
+// legacy REPL draws its own inline menu via Choose right after that card;
+// putting the legend inside the shared card would double it up there. Deny is
+// listed last but bound to enter/esc, so a reflexive keypress is never the
+// destructive one.
+func FormatPermissionKeyLegend() string {
+	return "  " + ColorYellow("Allow?") + "  " +
+		ColorGreen("[y]") + " once   " +
+		ColorGreen("[a]") + " all this session   " +
+		ColorRed("[n]") + " deny   " +
+		ColorGray("(enter or esc denies)")
+}

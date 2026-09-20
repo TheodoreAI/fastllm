@@ -365,6 +365,10 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, m.waitForNextEvent()
 			}
+			if msg.Type == tea.KeyEnter || msg.Type == tea.KeyEsc {
+				m.resolvePermission(false, false)
+				return m, m.waitForNextEvent()
+			}
 			if msg.Type == tea.KeyRunes && len(msg.Runes) > 0 {
 				switch msg.Runes[0] {
 				case 'y', 'Y':
@@ -1047,7 +1051,8 @@ func (m *teaModel) View() string {
 	}
 	inputContent := m.input.View()
 	if m.pendingPermission != nil {
-		inputContent = FormatPermissionPrompt(m.pendingPermission.ToolName, m.pendingPermission.Summary)
+		inputContent = FormatPermissionPrompt(m.pendingPermission.ToolName, m.pendingPermission.Summary) +
+			"\n" + FormatPermissionKeyLegend()
 		borderCol = tuiColorYellow
 	}
 	inputBox := lipgloss.NewStyle().
