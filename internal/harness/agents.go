@@ -29,7 +29,9 @@ func drainAgentInbox(messages *[]llm.Message, inbox <-chan string) {
 	}
 }
 
-func (r *Runner) executeAgentTool(parent RunRequest, name, rawArgs string) string {
+const defaultAgentStatusWait = 60 * time.Second
+
+func (r *Runner) executeAgentTool(ctx context.Context, parent RunRequest, name, rawArgs string) string {
 	switch name {
 	case "spawn_agent":
 		var args struct {
@@ -48,10 +50,19 @@ func (r *Runner) executeAgentTool(parent RunRequest, name, rawArgs string) strin
 		return fmt.Sprintf("Spawned %s. Use agent_status with agent_id=%q to inspect its result.", id, id)
 	case "agent_status":
 		var args struct {
-			AgentID string `json:"agent_id"`
+			AgentID     string `json:"agent_id"`
+			WaitSeconds *int   `json:"wait_seconds"`
 		}
 		_ = json.Unmarshal([]byte(rawArgs), &args)
-		return r.agents.Status(args.AgentID)
+		if strings.TrimSpace(args.AgentID) == "" {
+			return r.agents.Status("")
+		}
+		wait := defaultAgentStatusWait
+		if args.WaitSeconds != nil {
+			seconds := max(0, min(*args.WaitSeconds, 300))
+			wait = time.Duration(seconds) * time.Second
+		}
+		return r.agents.WaitStatus(ctx, args.AgentID, wait)
 	case "send_agent_message":
 		var args struct {
 			AgentID string `json:"agent_id"`
@@ -104,6 +115,7 @@ type AgentRecord struct {
 
 	cancel context.CancelFunc
 	inbox  chan string
+	done   chan struct{}
 }
 
 type AgentManager struct {
@@ -168,7 +180,7 @@ func (m *AgentManager) Spawn(parent RunRequest, task, requestedDir, model string
 	ctx, cancel := context.WithCancel(context.Background())
 	record := &AgentRecord{
 		ID: id, Task: task, WorkingDir: workingDir, Model: model,
-		State: AgentPending, cancel: cancel, inbox: make(chan string, 16),
+		State: AgentPending, cancel: cancel, inbox: make(chan string, 16), done: make(chan struct{}),
 	}
 	m.agents[id] = record
 	m.mu.Unlock()
@@ -218,7 +230,6 @@ func (m *AgentManager) run(ctx context.Context, record *AgentRecord, req RunRequ
 	})
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	record.FinishedAt = time.Now()
 	record.Result = result
 	switch {
@@ -234,6 +245,8 @@ func (m *AgentManager) run(ctx context.Context, record *AgentRecord, req RunRequ
 	default:
 		record.State = AgentCompleted
 	}
+	m.mu.Unlock()
+	close(record.done)
 }
 
 func (r *Runner) childRunner() *Runner {
@@ -296,6 +309,35 @@ func (m *AgentManager) Status(id string) string {
 		lines = append(lines, fmt.Sprintf("%s | %-9s | %d tok | %s", a.ID, a.State, a.Metrics.TotalTokens, oneLine(a.Task, 70)))
 	}
 	return header + "\n" + strings.Join(lines, "\n")
+}
+
+// WaitStatus waits for one active child to finish, or until the caller's
+// context or wait limit expires. Keeping the wait inside the harness prevents
+// an LLM from spending a model turn on every instantaneous status poll.
+func (m *AgentManager) WaitStatus(ctx context.Context, id string, wait time.Duration) string {
+	m.mu.RLock()
+	agent, ok := m.agents[id]
+	if !ok {
+		m.mu.RUnlock()
+		return fmt.Sprintf("Error: unknown agent %q.", id)
+	}
+	done := agent.done
+	active := agent.State == AgentPending || agent.State == AgentRunning
+	m.mu.RUnlock()
+
+	if !active || wait <= 0 {
+		return m.Status(id)
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return m.Status(id)
+	case <-ctx.Done():
+		return m.Status(id) + "\nWait canceled: " + ctx.Err().Error()
+	case <-timer.C:
+		return m.Status(id) + fmt.Sprintf("\nStill active after waiting %s. Continue other useful work before checking again.", wait.Round(time.Second))
+	}
 }
 
 func formatAgentRecord(a *AgentRecord) string {

@@ -80,6 +80,106 @@ func TestAgentManagerReturnsStructuredResult(t *testing.T) {
 	t.Fatalf("agent did not complete: %s", runner.agents.Status(id))
 }
 
+func TestAgentStatusWaitsForCompletionInsteadOfPolling(t *testing.T) {
+	release := make(chan struct{})
+	client := &agentTestLLM{chat: func(ctx context.Context, _ []llm.Message) (llm.Message, error) {
+		select {
+		case <-release:
+			return llm.Message{Role: "assistant", Content: "finished after wait"}, nil
+		case <-ctx.Done():
+			return llm.Message{}, ctx.Err()
+		}
+	}}
+	runner := NewRunner(client, t.TempDir(), "test-model")
+	id, err := runner.agents.Spawn(RunRequest{
+		WorkingDir: runner.DefaultWorkingDir, Model: "test-model", PermissionMode: PermissionReadOnly,
+	}, "wait for release", "", "", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := make(chan string, 1)
+	go func() {
+		result <- runner.agents.WaitStatus(context.Background(), id, time.Second)
+	}()
+	select {
+	case got := <-result:
+		t.Fatalf("status returned before child completed: %q", got)
+	case <-time.After(30 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case got := <-result:
+		if !strings.Contains(got, "State: completed") || !strings.Contains(got, "Result:\nfinished after wait") {
+			t.Fatalf("waited status lacks completed result: %q", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("status did not return after child completed")
+	}
+}
+
+func TestAgentStatusToolWaitsByDefault(t *testing.T) {
+	release := make(chan struct{})
+	client := &agentTestLLM{chat: func(ctx context.Context, _ []llm.Message) (llm.Message, error) {
+		select {
+		case <-release:
+			return llm.Message{Role: "assistant", Content: "tool result"}, nil
+		case <-ctx.Done():
+			return llm.Message{}, ctx.Err()
+		}
+	}}
+	runner := NewRunner(client, t.TempDir(), "test-model")
+	parent := RunRequest{WorkingDir: runner.DefaultWorkingDir, Model: "test-model", PermissionMode: PermissionReadOnly}
+	id, err := runner.agents.Spawn(parent, "wait through tool", "", "", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := make(chan string, 1)
+	go func() {
+		result <- runner.executeAgentTool(context.Background(), parent, "agent_status", `{"agent_id":"`+id+`"}`)
+	}()
+	select {
+	case got := <-result:
+		t.Fatalf("agent_status tool returned an active snapshot instead of waiting: %q", got)
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case got := <-result:
+		if !strings.Contains(got, "State: completed") || !strings.Contains(got, "Result:\ntool result") {
+			t.Fatalf("agent_status tool result = %q", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("agent_status tool did not wake when the child completed")
+	}
+}
+
+func TestAgentStatusWaitHonorsContextCancellation(t *testing.T) {
+	client := &agentTestLLM{chat: func(ctx context.Context, _ []llm.Message) (llm.Message, error) {
+		<-ctx.Done()
+		return llm.Message{}, ctx.Err()
+	}}
+	runner := NewRunner(client, t.TempDir(), "test-model")
+	id, err := runner.agents.Spawn(RunRequest{
+		WorkingDir: runner.DefaultWorkingDir, Model: "test-model", PermissionMode: PermissionReadOnly,
+	}, "stay active", "", "", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	got := runner.agents.WaitStatus(ctx, id, time.Minute)
+	if !strings.Contains(got, "Wait canceled: context canceled") {
+		t.Fatalf("canceled wait = %q", got)
+	}
+	if err := runner.agents.Cancel(id); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAgentManagerEnforcesConcurrencyAndWorkspace(t *testing.T) {
 	client := &agentTestLLM{chat: func(ctx context.Context, _ []llm.Message) (llm.Message, error) {
 		<-ctx.Done()
