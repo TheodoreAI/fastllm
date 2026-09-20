@@ -67,6 +67,21 @@ func TestFormatWelcomeBanner(t *testing.T) {
 	}
 }
 
+func TestFormatWelcomeBannerAlignment(t *testing.T) {
+	banner := FormatWelcomeBanner("C:\\Users\\mateo\\go\\fastllm", "muse-glimmer", "C:\\Users\\mateo\\.fastllm\\config.json", true, 0, true)
+	lines := strings.Split(strings.TrimSpace(banner), "\n")
+	if len(lines) < 5 {
+		t.Fatalf("banner has too few lines: %d", len(lines))
+	}
+	expectedWidth := VisualLen(lines[0])
+	for i, line := range lines {
+		vLen := VisualLen(line)
+		if vLen != expectedWidth {
+			t.Errorf("line %d has mismatched visual width: got %d, expected %d\nLine: %q", i, vLen, expectedWidth, line)
+		}
+	}
+}
+
 func TestFormatToolCallAndResult(t *testing.T) {
 	call := FormatToolCall("read_file", "path=main.go")
 	if !strings.Contains(call, "read_file") || !strings.Contains(call, "path=main.go") {
