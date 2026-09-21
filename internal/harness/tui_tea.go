@@ -140,6 +140,12 @@ type teaShellDoneMsg struct {
 	Output string
 	Err    error
 }
+type teaImageDoneMsg struct {
+	Path     string
+	Bytes    int
+	Duration time.Duration
+	Err      error
+}
 
 // teaModel holds the Bubble Tea state
 type teaModel struct {
@@ -337,24 +343,21 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 
-		headerHeight := 2
-		inputHeight := m.input.Height() + 3
-		statusHeight := 1
-		vpHeight := m.height - headerHeight - inputHeight - statusHeight
-		if vpHeight < 5 {
-			vpHeight = 5
-		}
+		m.input.SetWidth(msg.Width - 6)
+		// Width changed, so the text re-wraps: recompute the box height before
+		// handing the remaining rows to the viewport.
+		m.syncInputHeight()
 
 		if !m.ready {
-			m.viewport = viewport.New(msg.Width, vpHeight)
+			m.viewport = viewport.New(msg.Width, 3)
 			m.viewport.SetContent(m.historyText.String())
-			m.viewport.GotoBottom()
 			m.ready = true
+			m.resizeViewport()
+			m.viewport.GotoBottom()
 		} else {
 			m.viewport.Width = msg.Width
-			m.viewport.Height = vpHeight
+			m.resizeViewport()
 		}
-		m.input.SetWidth(msg.Width - 6)
 
 	case tea.KeyMsg:
 		if m.pendingPermission != nil {
@@ -384,6 +387,15 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		// A bracketed paste arrives as one key event carrying the whole
+		// clipboard, newlines included. Insert it literally -- treating those
+		// newlines as Enter submits the paste one line at a time, which also
+		// starts one agent turn per line.
+		if msg.Paste {
+			m.input.InsertString(string(msg.Runes))
+			return m, nil
+		}
+
 		switch msg.Type {
 		case tea.KeyCtrlC:
 			if m.isExecuting && m.cancelTurn != nil {
@@ -586,6 +598,15 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.appendHistory("\n")
 
+	case teaImageDoneMsg:
+		if msg.Err != nil {
+			m.appendHistory(styleDiffDel.Render(fmt.Sprintf("Image generation failed: %v\n\n", msg.Err)))
+		} else {
+			m.appendHistory(styleStatusNotice.Render(fmt.Sprintf("Image saved: %s", msg.Path)) + "\n")
+			m.appendHistory(styleMuted.Render(fmt.Sprintf("  %d bytes · %.1fs\n\n", msg.Bytes, msg.Duration.Seconds())))
+			m.statusNotice = "Image generated."
+		}
+
 	case teaStatusClearMsg:
 		m.statusNotice = ""
 
@@ -600,8 +621,71 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.viewport, vpCmd = m.viewport.Update(msg)
 	m.input, inCmd = m.input.Update(msg)
 	cmds = append(cmds, vpCmd, inCmd)
+	m.syncInputHeight()
 
 	return m, tea.Batch(cmds...)
+}
+
+// Input box bounds. It starts at two rows to match the resting layout and grows
+// with the text rather than scrolling it: a fixed two-row box pushes the line
+// you are typing out of sight once the text wraps past it.
+const (
+	minInputRows = 2
+	maxInputRows = 10
+)
+
+// inputDisplayRows reports how many terminal rows the textarea's content needs
+// once soft-wrapped at its content width.
+func inputDisplayRows(ta textarea.Model) int {
+	width := ta.Width()
+	if width < 1 {
+		width = 1
+	}
+	rows := 0
+	for _, line := range strings.Split(ta.Value(), "\n") {
+		needed := (VisualLen(line) + width - 1) / width
+		if needed < 1 {
+			needed = 1
+		}
+		rows += needed
+	}
+	if rows < 1 {
+		rows = 1
+	}
+	return rows
+}
+
+// syncInputHeight grows or shrinks the input box to fit its content and gives
+// the viewport back exactly the rows the box did not take, so the frame height
+// never changes.
+func (m *teaModel) syncInputHeight() {
+	desired := inputDisplayRows(m.input)
+	if desired < minInputRows {
+		desired = minInputRows
+	}
+	if desired > maxInputRows {
+		desired = maxInputRows
+	}
+	if desired == m.input.Height() {
+		return
+	}
+	m.input.SetHeight(desired)
+	m.resizeViewport()
+}
+
+// resizeViewport recomputes the conversation height from the current input box
+// size. Both the resize path and the initial layout go through here so they can
+// never disagree about how many rows the frame uses.
+func (m *teaModel) resizeViewport() {
+	// One spare row is deliberate: it absorbs a history line that happens to be
+	// wider than the viewport and wraps, so an over-wide line costs a row of
+	// slack instead of pushing the frame past the bottom of the terminal.
+	const headerRows, statusRows, boxBorderRows, spareRow = 2, 1, 2, 1
+	vpHeight := m.height - headerRows - statusRows - boxBorderRows - spareRow - m.input.Height()
+	if vpHeight < 3 {
+		vpHeight = 3
+	}
+	m.viewport.Height = vpHeight
 }
 
 func (m *teaModel) clearStatusAfter(d time.Duration) tea.Cmd {
@@ -805,6 +889,29 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 				return teaShellDoneMsg{Output: content, Err: err}
 			}
 
+		case "/image":
+			if len(parts) < 2 {
+				m.appendHistory(styleMuted.Render("Usage: /image <prompt>\n\n"))
+				return nil
+			}
+			prompt := strings.TrimSpace(inputVal[len(parts[0]):])
+			endpoint := configuredImageEndpoint(m.settings)
+			if endpoint == nil {
+				m.appendHistory(styleDiffDel.Render("No image model is configured. Add a model whose id or name contains \"image\".\n\n"))
+				return nil
+			}
+			m.appendHistory(styleUserPrompt.Render("❯ /image "+prompt) + "\n")
+			m.appendHistory(styleMuted.Render("Generating image with "+endpoint.Name+"...") + "\n")
+			workingDir := m.workingDir
+			settings := m.settings
+			return func() tea.Msg {
+				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+				defer cancel()
+				started := time.Now()
+				path, size, err := generateConfiguredImage(ctx, settings, workingDir, prompt)
+				return teaImageDoneMsg{Path: path, Bytes: size, Duration: time.Since(started), Err: err}
+			}
+
 		case "/status":
 			m.appendHistory(styleUserPrompt.Render("❯ /status") + "\n")
 			card := FormatStatusCard(m.workingDir, m.modelName, len(m.rules), m.sessionMetrics, m.processMgr)
@@ -904,6 +1011,14 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 	}
 
 	// 3. Autonomous Agent Turn Submission
+	//
+	// One turn at a time. Without this a multi-line paste submits once per
+	// pasted line, and the resulting workers race over the event channel.
+	if m.isExecuting {
+		m.input.SetValue(inputVal)
+		m.statusNotice = "A turn is already running — Ctrl+C cancels it."
+		return m.clearStatusAfter(3 * time.Second)
+	}
 	m.appendHistory(formatSubmittedPrompt(inputVal))
 	if notice := m.compactSessionContext(); notice != "" {
 		m.appendHistory(styleMuted.Render("  "+notice) + "\n\n")
@@ -917,7 +1032,12 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelTurn = cancel
-	m.eventChan = make(chan Event, 64)
+	// Capture the channel in a local: the worker below must send on *this*
+	// turn's channel, not on whatever m.eventChan happens to hold when the
+	// send runs. Reading the field at send time let one worker send into a
+	// later turn's channel after that turn had closed it -- a panic.
+	events := make(chan Event, 64)
+	m.eventChan = events
 
 	// Snapshot the transcript on the UI goroutine; the worker below must not read
 	// m.sessionMessages while Update may be appending to it.
@@ -925,7 +1045,7 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 
 	// Launch background task
 	go func() {
-		defer close(m.eventChan)
+		defer close(events)
 		req := RunRequest{
 			Task:               inputVal,
 			WorkingDir:         m.workingDir,
@@ -968,10 +1088,10 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 			if ev.Type == EventTaskFinished {
 				finished = true
 			}
-			m.eventChan <- ev
+			events <- ev
 		})
 		if err != nil && !finished {
-			m.eventChan <- Event{
+			events <- Event{
 				Type:  EventTaskFinished,
 				Error: err.Error(),
 			}

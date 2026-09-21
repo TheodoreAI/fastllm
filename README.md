@@ -85,6 +85,13 @@ current values. Permission modes are `ask` (the default for model-initiated
 writes and commands), `read-only`, and `auto`. Direct Shell Mode commands are
 already explicit user actions and do not prompt again.
 
+Use `/image <prompt>` to call the configured image-generation endpoint. FastLLM
+selects `qwen-image` when present, otherwise the first configured model whose ID
+or name contains `image`. The endpoint must implement OpenAI's
+`POST /v1/images/generations` shape and return `data[].b64_json`. FastLLM decodes
+and validates the response, then writes the image under `generated-images/` in
+the active workspace; base64 is never added to session history.
+
 ## Production build (single binary)
 
 ```
