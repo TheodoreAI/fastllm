@@ -589,6 +589,10 @@ func FormatHelp() string {
 		{"/fetch <url>", "Fetch and read web page content converted to Markdown"},
 	})
 
+	renderSection("Image Generation", []cmdEntry{
+		{"/image <prompt>", "Generate an image and save it under generated-images/"},
+	})
+
 	return b.String()
 }
 

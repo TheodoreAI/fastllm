@@ -1,0 +1,3 @@
+value: Expose OpenAI-compatible image generation as /image in both terminal modes, backed by internal/imagegen; resolve a configured image endpoint and persist validated decoded files under the active workspace instead of storing base64 in session history.
+reason: Fits the terminal-only architecture and existing endpoint config while keeping large base64 payloads out of chat/session storage; preferred over adding a web renderer or coupling image output to the chat completion path.
+decided_at: 2026-09-21T20:18:21+00:00

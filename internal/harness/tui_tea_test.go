@@ -539,3 +539,137 @@ func TestFrameSizeIsStableAcrossWidthsAndHeaderStates(t *testing.T) {
 		}
 	}
 }
+
+// slowLLM blocks until released, so a second submit can race the first.
+type slowLLM struct{ release chan struct{} }
+
+func (s *slowLLM) Chat(ctx context.Context, model string, messages []llm.Message, tools []llm.Tool, thinkLevel string) (llm.Message, error) {
+	select {
+	case <-s.release:
+	case <-ctx.Done():
+		return llm.Message{}, ctx.Err()
+	}
+	return llm.Message{Role: "assistant", Content: "done"}, nil
+}
+
+func newBusyModel(t *testing.T, client LLMClient) *teaModel {
+	t.Helper()
+	ta := textarea.New()
+	ta.Focus()
+	tmp := t.TempDir()
+	return &teaModel{
+		runner: NewRunner(client, tmp, "test-model"), workingDir: tmp, modelName: "test-model",
+		input: ta, viewport: viewport.New(80, 10), ready: true, width: 80,
+		maxTurns: 2, commandTimeout: time.Minute,
+		permissionMode: PermissionAuto, sessionGrants: make(map[string]bool),
+		permissionChan: make(chan teaPermissionRequestMsg),
+	}
+}
+
+// Submitting while a turn runs used to start a second worker. Both workers then
+// sent on whatever m.eventChan held at send time, so one could send into a
+// channel the other had already closed: "panic: send on closed channel".
+func TestSecondSubmitDoesNotStartAConcurrentTurn(t *testing.T) {
+	slow := &slowLLM{release: make(chan struct{})}
+	m := newBusyModel(t, slow)
+
+	first := m.handleAgentSubmit("first")
+	if first == nil || !m.isExecuting {
+		t.Fatal("first submit did not start a turn")
+	}
+	firstChan := m.eventChan
+
+	if cmd := m.handleAgentSubmit("second"); cmd == nil {
+		t.Fatal("second submit returned no command")
+	}
+	if m.eventChan != firstChan {
+		t.Fatal("second submit replaced the running turn's event channel")
+	}
+	if m.input.Value() != "second" {
+		t.Fatalf("rejected input was lost: %q", m.input.Value())
+	}
+	if !strings.Contains(m.statusNotice, "already running") {
+		t.Fatalf("no notice explaining the refusal: %q", m.statusNotice)
+	}
+
+	close(slow.release)
+	for ev := range m.eventChan {
+		_ = ev
+	}
+}
+
+// A pasted block must land in the textarea as text, not be replayed as one
+// Enter per line.
+func TestPasteInsertsTextInsteadOfSubmitting(t *testing.T) {
+	m := newBusyModel(t, &mockLLM{})
+	pasted := "line one\nline two\nline three"
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(pasted), Paste: true})
+	m = updated.(*teaModel)
+
+	if m.isExecuting || cmd != nil {
+		t.Fatal("paste started a turn instead of inserting text")
+	}
+	if got := m.input.Value(); got != pasted {
+		t.Fatalf("pasted text = %q; want %q", got, pasted)
+	}
+}
+
+// A fixed two-row input box scrolls its own content: once the text wraps past
+// two rows, the line being typed moves out of view entirely. The box must grow
+// with the text, and the viewport must give back exactly the rows it takes so
+// the frame height never changes.
+func TestInputBoxGrowsAndKeepsTypedTextVisible(t *testing.T) {
+	const width, height = 80, 30
+	tmp := t.TempDir()
+	ta := textarea.New()
+	ta.Prompt = "> "
+	ta.SetHeight(minInputRows)
+	ta.ShowLineNumbers = false
+	ta.Focus()
+	m := &teaModel{
+		runner: NewRunner(&mockLLM{}, tmp, "test-model"), workingDir: tmp,
+		modelName: "test-model", input: ta, viewport: viewport.New(width, 10),
+	}
+	m.appendHistory(strings.Repeat("history\n", 60))
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: height})
+	m = updated.(*teaModel)
+
+	frame, lastBox := -1, 0
+	// Type through the real key path so the caret moves exactly as it does for
+	// a user; SetValue would leave the textarea's own scroll position behind.
+	for typed := 1; typed <= 900; typed++ {
+		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+		m = updated.(*teaModel)
+
+		view := m.View()
+		rows := strings.Split(view, "\n")
+		if frame < 0 {
+			frame = len(rows)
+		} else if len(rows) != frame {
+			t.Fatalf("typed=%d frame changed from %d to %d rows", typed, frame, len(rows))
+		}
+		if len(rows) > height {
+			t.Fatalf("typed=%d frame is %d rows in a %d-row terminal", typed, len(rows), height)
+		}
+		for i, row := range rows {
+			if w := VisualLen(StripANSI(row)); w > width {
+				t.Fatalf("typed=%d row %d is %d columns wide", typed, i, w)
+			}
+		}
+		if m.input.Height() < lastBox {
+			t.Fatalf("typed=%d box shrank from %d to %d rows", typed, lastBox, m.input.Height())
+		}
+		lastBox = m.input.Height()
+	}
+	if lastBox != maxInputRows {
+		t.Fatalf("box reached %d rows; want the %d cap", lastBox, maxInputRows)
+	}
+
+	// The caret must still be on screen at the cap -- that is the whole point.
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("END")})
+	m = updated.(*teaModel)
+	if !strings.Contains(StripANSI(m.View()), "END") {
+		t.Fatal("the caret line scrolled out of the input box")
+	}
+}

@@ -716,6 +716,29 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 				}
 				continue
 
+			case "/image":
+				if len(parts) < 2 {
+					fmt.Println(ColorYellow("  Usage: /image <prompt>"))
+					continue
+				}
+				prompt := strings.TrimSpace(line[len(parts[0]):])
+				endpoint := configuredImageEndpoint(settings)
+				if endpoint == nil {
+					fmt.Println(ColorRed("  No image model is configured. Add a model whose id or name contains \"image\"."))
+					continue
+				}
+				fmt.Println(ColorGray(fmt.Sprintf("  Generating image with %s...", endpoint.Name)))
+				ctxImage, cancelImage := context.WithTimeout(context.Background(), 15*time.Minute)
+				started := time.Now()
+				path, size, err := generateConfiguredImage(ctxImage, settings, absWorkingDir, prompt)
+				cancelImage()
+				if err != nil {
+					fmt.Println(ColorRed(fmt.Sprintf("  %s Image generation failed: %v", SymCross, err)))
+				} else {
+					fmt.Println(ColorGreen(fmt.Sprintf("  %s Image saved: %s (%d bytes, %.1fs)", SymCheck, path, size, time.Since(started).Seconds())))
+				}
+				continue
+
 			default:
 				fmt.Printf("Unknown command %q. Type /help for available commands.\n", cmd)
 				continue
