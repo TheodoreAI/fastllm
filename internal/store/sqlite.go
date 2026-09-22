@@ -125,6 +125,12 @@ func Open(path string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	// SQLite serializes writes internally, and its PRAGMAs are scoped to a
+	// physical connection. Keeping one pooled connection makes the settings
+	// below apply to every operation and avoids SQLITE_BUSY races between
+	// database/sql connections in this low-volume local store.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	if _, err := db.Exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;`); err != nil {
 		db.Close()
 		return nil, err
@@ -416,19 +422,15 @@ func SaveNotes(db *sql.DB, workspaceID, content string) error {
 }
 
 func AppendNotes(db *sql.DB, workspaceID, text string) (string, error) {
-	current, err := GetNotes(db, workspaceID)
-	if err != nil {
-		return "", err
-	}
-	var newContent string
-	if current == "" {
-		newContent = text
-	} else {
-		newContent = current + "\n" + text
-	}
-	if err := SaveNotes(db, workspaceID, newContent); err != nil {
-		return "", err
-	}
-	return newContent, nil
+	var content string
+	err := db.QueryRow(`
+		INSERT INTO notes (workspace_id, content) VALUES (?, ?)
+		ON CONFLICT(workspace_id) DO UPDATE SET
+			content = CASE
+				WHEN notes.content = '' THEN excluded.content
+				ELSE notes.content || char(10) || excluded.content
+			END,
+			updated_at = CURRENT_TIMESTAMP
+		RETURNING content`, workspaceID, text).Scan(&content)
+	return content, err
 }
-

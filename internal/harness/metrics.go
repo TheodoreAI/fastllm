@@ -213,12 +213,6 @@ func (sm SessionMetrics) FormatSessionSummary() string {
 		sm.TotalTurns, sm.TotalTokens, sm.TotalPromptTokens, sm.TotalCompletionTokens, sm.TotalDuration.Seconds(), costStr)
 }
 
-// usageReporter is implemented by LLM clients that can report the token counts
-// the server itself returned for the last completion.
-type usageReporter interface {
-	LastUsage() (llm.Usage, bool)
-}
-
 // resolveTurnTokens prefers the server's own accounting over a local estimate.
 //
 // The estimate counts only what came back in the reply, which is wrong in two
@@ -226,18 +220,16 @@ type usageReporter interface {
 // that stream a separate reasoning channel do their real work in tokens that
 // never appear in the message at all. Both make tokens-per-second read far lower
 // than the model is actually generating.
-func resolveTurnTokens(client LLMClient, estPrompt, estCompletion int) (prompt, completion int, measured bool) {
-	if reporter, ok := client.(usageReporter); ok {
-		if usage, have := reporter.LastUsage(); have {
-			p, c := usage.PromptTokens, usage.CompletionTokens
-			if p == 0 {
-				p = estPrompt
-			}
-			if c == 0 {
-				c = estCompletion
-			}
-			return p, c, true
+func resolveTurnTokens(usage llm.Usage, haveUsage bool, estPrompt, estCompletion int) (prompt, completion int, measured bool) {
+	if haveUsage {
+		p, c := usage.PromptTokens, usage.CompletionTokens
+		if p == 0 {
+			p = estPrompt
 		}
+		if c == 0 {
+			c = estCompletion
+		}
+		return p, c, true
 	}
 	return estPrompt, estCompletion, false
 }

@@ -2,7 +2,6 @@ package harness
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -40,7 +39,7 @@ func (r *Runner) executeAgentTool(ctx context.Context, parent RunRequest, name, 
 			Model      string `json:"model"`
 			MaxTurns   int    `json:"max_turns"`
 		}
-		if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
+		if err := decodeToolArguments(rawArgs, &args); err != nil {
 			return "Error: invalid spawn_agent arguments: " + err.Error()
 		}
 		id, err := r.agents.Spawn(parent, args.Task, args.WorkingDir, args.Model, args.MaxTurns)
@@ -53,7 +52,9 @@ func (r *Runner) executeAgentTool(ctx context.Context, parent RunRequest, name, 
 			AgentID     string `json:"agent_id"`
 			WaitSeconds *int   `json:"wait_seconds"`
 		}
-		_ = json.Unmarshal([]byte(rawArgs), &args)
+		if err := decodeToolArguments(rawArgs, &args); err != nil {
+			return "Error: invalid agent_status arguments: " + err.Error()
+		}
 		if strings.TrimSpace(args.AgentID) == "" {
 			return r.agents.Status("")
 		}
@@ -68,7 +69,7 @@ func (r *Runner) executeAgentTool(ctx context.Context, parent RunRequest, name, 
 			AgentID string `json:"agent_id"`
 			Message string `json:"message"`
 		}
-		if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
+		if err := decodeToolArguments(rawArgs, &args); err != nil {
 			return "Error: invalid send_agent_message arguments: " + err.Error()
 		}
 		if err := r.agents.Send(args.AgentID, args.Message); err != nil {
@@ -79,7 +80,7 @@ func (r *Runner) executeAgentTool(ctx context.Context, parent RunRequest, name, 
 		var args struct {
 			AgentID string `json:"agent_id"`
 		}
-		if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
+		if err := decodeToolArguments(rawArgs, &args); err != nil {
 			return "Error: invalid cancel_agent arguments: " + err.Error()
 		}
 		if err := r.agents.Cancel(args.AgentID); err != nil {
@@ -120,6 +121,10 @@ type AgentRecord struct {
 
 type AgentManager struct {
 	mu            sync.RWMutex
+	ctx           context.Context
+	cancel        context.CancelFunc
+	wg            sync.WaitGroup
+	closed        bool
 	runner        *Runner
 	agents        map[string]*AgentRecord
 	nextID        int
@@ -128,7 +133,9 @@ type AgentManager struct {
 }
 
 func NewAgentManager(runner *Runner, maxConcurrent, maxDepth int) *AgentManager {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &AgentManager{
+		ctx: ctx, cancel: cancel,
 		runner: runner, agents: make(map[string]*AgentRecord),
 		maxConcurrent: maxConcurrent, maxDepth: maxDepth,
 	}
@@ -171,18 +178,23 @@ func (m *AgentManager) Spawn(parent RunRequest, task, requestedDir, model string
 	}
 
 	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return "", fmt.Errorf("agent manager is closed")
+	}
 	if m.activeCountLocked() >= m.maxConcurrent {
 		m.mu.Unlock()
 		return "", fmt.Errorf("agent concurrency limit (%d) reached", m.maxConcurrent)
 	}
 	m.nextID++
 	id := fmt.Sprintf("agent-%d", m.nextID)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(m.ctx)
 	record := &AgentRecord{
 		ID: id, Task: task, WorkingDir: workingDir, Model: model,
 		State: AgentPending, cancel: cancel, inbox: make(chan string, 16), done: make(chan struct{}),
 	}
 	m.agents[id] = record
+	m.wg.Add(1)
 	m.mu.Unlock()
 
 	childReq := RunRequest{
@@ -215,6 +227,7 @@ func childWorkingDirectory(parentDir, requested string) (string, error) {
 }
 
 func (m *AgentManager) run(ctx context.Context, record *AgentRecord, req RunRequest) {
+	defer m.wg.Done()
 	m.mu.Lock()
 	record.State = AgentRunning
 	record.StartedAt = time.Now()
@@ -247,6 +260,19 @@ func (m *AgentManager) run(ctx context.Context, record *AgentRecord, req RunRequ
 	}
 	m.mu.Unlock()
 	close(record.done)
+}
+
+func (m *AgentManager) Close() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	if !m.closed {
+		m.closed = true
+		m.cancel()
+	}
+	m.mu.Unlock()
+	m.wg.Wait()
 }
 
 func (r *Runner) childRunner() *Runner {

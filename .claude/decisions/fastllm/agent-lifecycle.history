@@ -1,0 +1,4 @@
+- decided_at: 2026-09-22T01:47:32+00:00
+  event: initial
+  value: Runner owns child-agent lifetime; children remain asynchronous and isolated across interactive turns, while Runner.Close cancels and joins all children at the request/session boundary.
+  reason: Preserves the existing asynchronous orchestration model while preventing request and session shutdown from leaking LLM work.

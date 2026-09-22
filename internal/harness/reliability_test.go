@@ -21,7 +21,7 @@ func (f *flakyLLM) Chat(context.Context, string, []llm.Message, []llm.Tool, stri
 func TestChatWithRetryRecoversTransientFailure(t *testing.T) {
 	client := &flakyLLM{}
 	reply, err := chatWithRetry(context.Background(), client, "model", nil, nil, "", nil)
-	if err != nil || reply.Content != "recovered" || client.calls != 3 {
+	if err != nil || reply.Message.Content != "recovered" || client.calls != 3 {
 		t.Fatalf("reply=%+v calls=%d err=%v", reply, client.calls, err)
 	}
 }

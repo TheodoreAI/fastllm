@@ -42,21 +42,25 @@ type BackgroundProcess struct {
 	StartTime time.Time `json:"start_time"`
 	Exited    bool      `json:"exited"`
 	ExitCode  int       `json:"exit_code"`
-	cmd       *exec.Cmd
-	output    *syncBuffer
+}
+
+type managedProcess struct {
+	BackgroundProcess
+	cmd    *exec.Cmd
+	output *syncBuffer
 }
 
 // ProcessManager manages life-cycle of background commands.
 type ProcessManager struct {
 	mu        sync.Mutex
-	processes map[string]*BackgroundProcess
+	processes map[string]*managedProcess
 	counter   int
 }
 
 // NewProcessManager creates a new ProcessManager.
 func NewProcessManager() *ProcessManager {
 	return &ProcessManager{
-		processes: make(map[string]*BackgroundProcess),
+		processes: make(map[string]*managedProcess),
 	}
 }
 
@@ -84,13 +88,15 @@ func (pm *ProcessManager) Start(command string, dir string) (*BackgroundProcess,
 		return nil, fmt.Errorf("failed to start background command: %w", err)
 	}
 
-	proc := &BackgroundProcess{
-		ID:        id,
-		PID:       cmd.Process.Pid,
-		Command:   command,
-		StartTime: time.Now(),
-		cmd:       cmd,
-		output:    buf,
+	proc := &managedProcess{
+		BackgroundProcess: BackgroundProcess{
+			ID:        id,
+			PID:       cmd.Process.Pid,
+			Command:   command,
+			StartTime: time.Now(),
+		},
+		cmd:    cmd,
+		output: buf,
 	}
 	pm.processes[id] = proc
 
@@ -111,7 +117,8 @@ func (pm *ProcessManager) Start(command string, dir string) (*BackgroundProcess,
 		}
 	}()
 
-	return proc, nil
+	snapshot := proc.BackgroundProcess
+	return &snapshot, nil
 }
 
 // Status returns the current status and latest output for a process.
@@ -124,28 +131,31 @@ func (pm *ProcessManager) Status(id string) (*BackgroundProcess, string, error) 
 		return nil, "", fmt.Errorf("process %q not found", id)
 	}
 
-	return proc, proc.output.String(), nil
+	snapshot := proc.BackgroundProcess
+	return &snapshot, proc.output.String(), nil
 }
 
 // Kill terminates a background process.
 func (pm *ProcessManager) Kill(id string) error {
 	pm.mu.Lock()
 	proc, ok := pm.processes[id]
-	pm.mu.Unlock()
-
 	if !ok {
+		pm.mu.Unlock()
 		return fmt.Errorf("process %q not found", id)
 	}
-
 	if proc.Exited || proc.cmd.Process == nil {
+		pm.mu.Unlock()
 		return nil
 	}
+	process := proc.cmd.Process
+	pid := proc.PID
+	pm.mu.Unlock()
 
 	if runtime.GOOS == "windows" {
 		// Taskkill /T /F to kill process tree on Windows
-		_ = exec.Command("taskkill", "/PID", fmt.Sprintf("%d", proc.PID), "/T", "/F").Run()
+		_ = exec.Command("taskkill", "/PID", fmt.Sprintf("%d", pid), "/T", "/F").Run()
 	} else {
-		_ = proc.cmd.Process.Kill()
+		_ = process.Kill()
 	}
 
 	return nil
@@ -158,7 +168,8 @@ func (pm *ProcessManager) List() []*BackgroundProcess {
 
 	result := make([]*BackgroundProcess, 0, len(pm.processes))
 	for _, p := range pm.processes {
-		result = append(result, p)
+		snapshot := p.BackgroundProcess
+		result = append(result, &snapshot)
 	}
 	return result
 }
@@ -166,16 +177,16 @@ func (pm *ProcessManager) List() []*BackgroundProcess {
 // KillAll kills all active background processes.
 func (pm *ProcessManager) KillAll() {
 	pm.mu.Lock()
-	procs := make([]*BackgroundProcess, 0, len(pm.processes))
+	ids := make([]string, 0, len(pm.processes))
 	for _, p := range pm.processes {
 		if !p.Exited {
-			procs = append(procs, p)
+			ids = append(ids, p.ID)
 		}
 	}
 	pm.mu.Unlock()
 
-	for _, p := range procs {
-		_ = pm.Kill(p.ID)
+	for _, id := range ids {
+		_ = pm.Kill(id)
 	}
 }
 
