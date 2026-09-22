@@ -23,8 +23,14 @@ type ModelEndpoint struct {
 	APIKeyFile string `json:"api_key_file,omitempty"`
 	Provider   string `json:"provider,omitempty"`
 	// SendThink overrides the automatic detection of Ollama's "think" extension.
-	SendThink  *bool                  `json:"send_think,omitempty"`
-	Parameters map[string]interface{} `json:"parameters,omitempty"`
+	SendThink *bool `json:"send_think,omitempty"`
+	// ContextWindow is the model's total input+output window in tokens. It sizes
+	// the compaction budget, so a self-hosted endpoint serving a model the built-in
+	// table cannot recognize (a fine-tune, a renamed checkpoint, a vLLM server
+	// started with a reduced --max-model-len) should set it explicitly rather than
+	// inherit a guess. Zero means "fall back to the table, then the default".
+	ContextWindow int                    `json:"context_window,omitempty"`
+	Parameters    map[string]interface{} `json:"parameters,omitempty"`
 }
 
 // ResolveAPIKey returns the endpoint's API key. An inline APIKey wins; otherwise the

@@ -46,7 +46,20 @@ type Runner struct {
 	// reliably cuts context but can cost extra turns on short tasks, so it is
 	// opt-in until it is shown to pay for itself on long ones.
 	EnableObservations bool
+	// ContextBudgetChars sizes compaction against the active model's real context
+	// window. Zero falls back to DefaultCompactionConfig, which keeps Runners
+	// constructed without settings (tests, embedders) working unchanged.
+	ContextBudgetChars int
 	agents             *AgentManager
+}
+
+// compactionConfig returns the runner's budget, preferring a window-derived one.
+func (r *Runner) compactionConfig() CompactionConfig {
+	cfg := DefaultCompactionConfig()
+	if r.ContextBudgetChars > 0 {
+		cfg.MaxTotalChars = r.ContextBudgetChars
+	}
+	return cfg
 }
 
 // SwitchModel reconfigures the runner's direct LLM client for a configured
@@ -59,6 +72,17 @@ func (r *Runner) SwitchModel(endpoint *config.ModelEndpoint) error {
 	if active := r.agents.ActiveCount(); active > 0 {
 		return fmt.Errorf("cannot switch model while %d child agent(s) are running", active)
 	}
+
+	// Set before either return below, so a provider-routed endpoint gets its
+	// budget too. The endpoint's own context_window wins over the model table.
+	window := endpoint.ContextWindow
+	if window <= 0 {
+		window = lookupKnownContextWindow(endpoint.ID)
+	}
+	if window <= 0 {
+		window = DefaultContextWindowTokens
+	}
+	r.ContextBudgetChars = contextBudgetChars(window)
 
 	// A provider-tagged endpoint is served by one of the router's native
 	// clients, which builds its own URL and speaks its own wire format. Such an
@@ -282,7 +306,7 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 		emit(Event{Type: EventTurnStart, Turn: turn})
 
 		// Compact context window if messages exceed budget
-		compactionConfig := planBoundaryCompactionConfig(DefaultCompactionConfig(), messageCharacterCount(messages), planBoundary)
+		compactionConfig := planBoundaryCompactionConfig(r.compactionConfig(), messageCharacterCount(messages), planBoundary)
 		messages, _ = OnlineCompactMessages(messages, compactionConfig)
 		planBoundary = false
 

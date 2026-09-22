@@ -145,7 +145,7 @@ func (m *teaModel) initialMessages() []InitialMessage {
 // without this the TUI's own message list grows unbounded across turns. Returns a
 // notice to surface, or "" when the context is comfortably inside budget.
 func (m *teaModel) compactSessionContext() string {
-	cfg := DefaultCompactionConfig()
+	cfg := m.compactionConfig()
 	if cfg.MaxTotalChars <= 0 {
 		return ""
 	}

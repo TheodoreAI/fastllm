@@ -65,6 +65,12 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 	currentSystemPrompt := func() string {
 		return systemPrompt + rulesPrompt + formatSkillCatalogPrompt(discoveredSkills)
 	}
+	// Recomputed rather than captured: /model and /dir both change which window
+	// applies, and a budget frozen at startup would keep compacting a 200k model
+	// as if it were the 32k default.
+	currentCompactionConfig := func() CompactionConfig {
+		return CompactionConfigForModel(settings, model)
+	}
 
 	allowCmds := r.AllowCommands
 	maxTurns := initialReq.MaxTurns
@@ -272,7 +278,7 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 			PermissionMode: permissionMode,
 			ShellMode:      shellMode,
 			ContextChars:   messageCharacterCount(sessionMessages),
-			ContextBudget:  DefaultCompactionConfig().MaxTotalChars,
+			ContextBudget:  currentCompactionConfig().MaxTotalChars,
 			Turns:          sessionMetrics.TotalTurns,
 			TotalTokens:    sessionMetrics.TotalTokens,
 			Cost:           sessionMetrics.TotalCost,
@@ -598,8 +604,9 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 				continue
 
 			case "/compact":
+				budget := currentCompactionConfig()
 				before := messageCharacterCount(sessionMessages)
-				compacted, didCompact := ForceCompactMessages(sessionMessages, DefaultCompactionConfig())
+				compacted, didCompact := ForceCompactMessages(sessionMessages, budget)
 				if !didCompact {
 					fmt.Println(ColorGray("  Nothing to compact yet; the transcript has no completed older turns to collapse."))
 					continue
@@ -609,8 +616,8 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 				saveSession()
 				fmt.Println(ColorGreen(fmt.Sprintf("  %s Compacted context from %s to %s (%d%% of the %s budget).",
 					SymCheck, formatCharCount(before), formatCharCount(after),
-					after*100/DefaultCompactionConfig().MaxTotalChars,
-					formatCharCount(DefaultCompactionConfig().MaxTotalChars))))
+					after*100/budget.MaxTotalChars,
+					formatCharCount(budget.MaxTotalChars))))
 				continue
 
 			case "/rules":
@@ -850,6 +857,7 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 			expandedTools,
 			observations,
 			observationStore,
+			currentCompactionConfig(),
 		)
 		sessionMessages[0].Content = baseSystemPrompt
 		saveSession()
@@ -882,6 +890,7 @@ func (r *Runner) runInteractiveTurn(
 	expandedTools bool,
 	observations *ObservationManager,
 	observationStore *ObservationStore,
+	compactionCfg CompactionConfig,
 ) {
 	var planBoundary bool
 	for turn := 1; turn <= maxTurns; turn++ {
@@ -891,7 +900,7 @@ func (r *Runner) runInteractiveTurn(
 		}
 
 		contextChars := messageCharacterCount(*sessionMessages)
-		cfg := planBoundaryCompactionConfig(DefaultCompactionConfig(), contextChars, planBoundary)
+		cfg := planBoundaryCompactionConfig(compactionCfg, contextChars, planBoundary)
 
 		var compacted bool
 		*sessionMessages, compacted = OnlineCompactMessages(*sessionMessages, cfg)
