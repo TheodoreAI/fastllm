@@ -1,0 +1,4 @@
+- decided_at: 2026-09-22T03:02:37+00:00
+  event: initial
+  value: Discover SKILL.md files from project-local .agents/skills and .claude/skills directories up to the repository root; /skills lists them, /skills <name> shows details, and /skills <name> <task> applies the skill for one agent run only.
+  reason: Project-local discovery respects the workspace trust boundary, nearest-definition precedence avoids duplicates, and one-run injection prevents skill instructions from leaking into later turns.

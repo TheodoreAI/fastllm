@@ -577,6 +577,7 @@ func FormatHelp() string {
 		{"/diff", "Syntax-highlighted git diff of uncommitted changes"},
 		{"/undo", "Rollback working directory to pre-turn git checkpoint"},
 		{"/rules", "Inspect discovered workspace instruction files"},
+		{"/skills [name] [task]", "List, inspect, or run a project-local skill"},
 	})
 
 	renderSection("Background Processes", []cmdEntry{
