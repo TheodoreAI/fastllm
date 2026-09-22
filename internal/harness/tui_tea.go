@@ -159,6 +159,7 @@ type teaModel struct {
 	checkpointMgr *CheckpointManager
 	processMgr    *ProcessManager
 	rules         []RuleFile
+	skills        []Skill
 	settings      *config.Settings
 	systemPrompt  string
 
@@ -231,6 +232,7 @@ func newTeaModel(runner *Runner, req RunRequest) (*teaModel, error) {
 
 	rules := DiscoverWorkspaceRules(absWorkingDir)
 	rulesPrompt := FormatRulesForPrompt(rules)
+	skills := DiscoverWorkspaceSkills(absWorkingDir)
 
 	checkpointMgr := NewCheckpointManager(absWorkingDir)
 	processMgr := NewProcessManager()
@@ -280,6 +282,7 @@ func newTeaModel(runner *Runner, req RunRequest) (*teaModel, error) {
 		checkpointMgr:  checkpointMgr,
 		processMgr:     processMgr,
 		rules:          rules,
+		skills:         skills,
 		settings:       settings,
 		systemPrompt:   DefaultSystemPrompt + rulesPrompt,
 		input:          ta,
@@ -818,6 +821,7 @@ func (m *teaModel) changeWorkingDirectory(path string) error {
 	m.workingDir = newDir
 	m.checkpointMgr = NewCheckpointManager(newDir)
 	m.rules = DiscoverWorkspaceRules(newDir)
+	m.skills = DiscoverWorkspaceSkills(newDir)
 	m.systemPrompt = DefaultSystemPrompt + FormatRulesForPrompt(m.rules)
 	m.settings, m.configPath = settings, configPath
 	m.statusNotice = "Directory changed to " + filepath.Base(newDir)
@@ -826,6 +830,7 @@ func (m *teaModel) changeWorkingDirectory(path string) error {
 }
 
 func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
+	skillPrompt := ""
 	// 1. Check for slash commands
 	if strings.HasPrefix(inputVal, "/") {
 		parts := strings.Fields(inputVal)
@@ -912,6 +917,27 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 				}
 			}
 			return nil
+
+		case "/skills":
+			name, task := parseSkillInvocation(inputVal)
+			if name == "" {
+				m.appendHistory(styleUserPrompt.Render("❯ /skills") + "\n")
+				m.appendHistory(formatSkillList(m.skills) + "\n\n")
+				return nil
+			}
+			skill, ok := findSkill(m.skills, name)
+			if !ok {
+				m.appendHistory(styleDiffDel.Render(fmt.Sprintf("Unknown skill %q. Use /skills to list project skills.\n\n", name)))
+				return nil
+			}
+			if task == "" {
+				m.appendHistory(styleUserPrompt.Render("❯ "+inputVal) + "\n")
+				m.appendHistory(formatSkillDetails(skill, m.workingDir) + "\n\n")
+				return nil
+			}
+			inputVal = task
+			skillPrompt = formatSkillPrompt(skill, m.workingDir)
+			m.appendHistory(styleMuted.Render("Using skill "+skill.Name+" for this turn.") + "\n")
 
 		case "/search":
 			if len(parts) < 2 {
@@ -1096,6 +1122,7 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 	// Snapshot the transcript on the UI goroutine; the worker below must not read
 	// m.sessionMessages while Update may be appending to it.
 	priorMessages := m.initialMessages()
+	systemPrompt := m.systemPrompt + skillPrompt
 
 	// Launch background task
 	go func() {
@@ -1104,7 +1131,7 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 			Task:               inputVal,
 			WorkingDir:         m.workingDir,
 			Model:              m.modelName,
-			SystemPrompt:       m.systemPrompt,
+			SystemPrompt:       systemPrompt,
 			MaxTurns:           m.maxTurns,
 			CommandTimeout:     m.commandTimeout,
 			ThinkLevel:         m.thinkLevel,

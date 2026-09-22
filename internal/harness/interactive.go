@@ -61,6 +61,7 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 	// Auto-discover workspace rules (AGENTS.md, CLAUDE.md, etc.)
 	discoveredRules := DiscoverWorkspaceRules(absWorkingDir)
 	rulesPrompt := FormatRulesForPrompt(discoveredRules)
+	discoveredSkills := DiscoverWorkspaceSkills(absWorkingDir)
 
 	allowCmds := r.AllowCommands
 	maxTurns := initialReq.MaxTurns
@@ -179,6 +180,7 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 		checkpointMgr = NewCheckpointManager(absWorkingDir)
 		discoveredRules = DiscoverWorkspaceRules(absWorkingDir)
 		rulesPrompt = FormatRulesForPrompt(discoveredRules)
+		discoveredSkills = DiscoverWorkspaceSkills(absWorkingDir)
 		settings, configPath = newSettings, newConfigPath
 		sessionMessages = []llm.Message{
 			{Role: "system", Content: systemPrompt + rulesPrompt},
@@ -288,6 +290,7 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 		if line == "" {
 			continue
 		}
+		skillPrompt := ""
 
 		// If in shell mode, execute shell commands directly
 		if shellMode {
@@ -610,6 +613,25 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 				}
 				continue
 
+			case "/skills":
+				name, task := parseSkillInvocation(line)
+				if name == "" {
+					fmt.Println(formatSkillList(discoveredSkills))
+					continue
+				}
+				skill, ok := findSkill(discoveredSkills, name)
+				if !ok {
+					fmt.Println(ColorRed(fmt.Sprintf("  %s Unknown skill %q. Use /skills to list project skills.", SymCross, name)))
+					continue
+				}
+				if task == "" {
+					fmt.Println(formatSkillDetails(skill, absWorkingDir))
+					continue
+				}
+				line = task
+				skillPrompt = formatSkillPrompt(skill, absWorkingDir)
+				fmt.Println(ColorGray("  Using skill " + skill.Name + " for this turn."))
+
 			case "/ps":
 				procs := processMgr.List()
 				if len(procs) == 0 {
@@ -769,7 +791,12 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 			cancelCp()
 		}
 
-		// Add user turn
+		// Add user turn. Skill instructions apply only to this turn and are
+		// removed before the durable session transcript is saved.
+		baseSystemPrompt := sessionMessages[0].Content
+		if skillPrompt != "" {
+			sessionMessages[0].Content += skillPrompt
+		}
 		sessionMessages = append(sessionMessages, llm.Message{
 			Role:    "user",
 			Content: line,
@@ -805,6 +832,7 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 			observations,
 			observationStore,
 		)
+		sessionMessages[0].Content = baseSystemPrompt
 		saveSession()
 		cancel()
 		signal.Stop(sigChan)

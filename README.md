@@ -85,6 +85,13 @@ current values. Permission modes are `ask` (the default for model-initiated
 writes and commands), `read-only`, and `auto`. Direct Shell Mode commands are
 already explicit user actions and do not prompt again.
 
+Project-local skills are discovered from `.agents/skills/*/SKILL.md` and
+`.claude/skills/*/SKILL.md` in the workspace or its parent directories up to
+the repository root. Use `/skills` to list them, `/skills <name>` to show a
+skill's details, or `/skills <name> <task>` to apply it to one agent run.
+Nearest definitions take precedence and `.agents` wins over `.claude` when
+both define the same skill.
+
 Use `/image <prompt>` to call the configured image-generation endpoint. FastLLM
 selects `qwen-image` when present, otherwise the first configured model whose ID
 or name contains `image`. The endpoint must implement OpenAI's
