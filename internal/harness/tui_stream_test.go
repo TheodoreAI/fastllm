@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 // Only whole lines may be rendered: FormatMarkdownWidth tracks code-fence state
@@ -213,5 +214,39 @@ func TestTurnCompleteRendersUnterminatedFinalLine(t *testing.T) {
 	}
 	if !strings.Contains(plain, "ASSISTANT") {
 		t.Fatalf("assistant label missing:\n%q", plain)
+	}
+}
+
+// No rendered row may reach the full terminal width. A row that fills the last
+// column leaves the cursor wrap-pending, and terminals that then emit an extra
+// row change the frame height -- which shows up as the whole UI shifting up and
+// down while typing, since the padded rows change as content does.
+func TestFrameNeverFillsLastColumn(t *testing.T) {
+	for _, width := range []int{80, 100, 120} {
+		m := newStreamTestModel()
+		runner := &Runner{}
+		runner.agents = NewAgentManager(runner, 0, 0)
+		m.runner = runner
+		updated, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: 30})
+		m = updated.(*teaModel)
+		m.appendHistory(strings.Repeat("some history line\n", 10))
+
+		frameHeights := map[int]bool{}
+		for _, typed := range []string{"", "hello", strings.Repeat("z", 200)} {
+			m.input.SetValue(typed)
+			m.syncInputHeight()
+			lines := strings.Split(m.View(), "\n")
+			frameHeights[len(lines)] = true
+			for i, line := range lines {
+				if w := VisualLen(line); w >= width {
+					t.Fatalf("width=%d typed=%d: row %d is %d cols, must stay under %d",
+						width, len(typed), i, w, width)
+				}
+			}
+		}
+		// The frame must also keep a constant height as the input box grows.
+		if len(frameHeights) != 1 {
+			t.Fatalf("width=%d: frame height changed while typing: %v", width, frameHeights)
+		}
 	}
 }

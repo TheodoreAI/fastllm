@@ -103,3 +103,18 @@ func TestNilSinkFallsBackToNonStreaming(t *testing.T) {
 		t.Fatalf("content = %q, want the non-streaming path", res.Message.Content)
 	}
 }
+
+// The harness always wraps its client in a *llm.Router (see cli.go), so the
+// Router must satisfy streamingLLMClient. When it did not, the type assertion
+// in chatWithRetryStreaming failed and streaming was silently disabled for
+// every model, local ones included -- the answer still arrived, all at once.
+func TestRouterSatisfiesStreamingClient(t *testing.T) {
+	router := llm.NewRouter(&llm.Client{}, llm.CloudProviderConfig{})
+	if _, ok := interface{}(router).(streamingLLMClient); !ok {
+		t.Fatal("*llm.Router no longer satisfies streamingLLMClient; streaming is silently disabled")
+	}
+	// The concrete local client must satisfy it too, since the Router delegates.
+	if _, ok := interface{}(&llm.Client{}).(streamingLLMClient); !ok {
+		t.Fatal("*llm.Client no longer satisfies streamingLLMClient")
+	}
+}

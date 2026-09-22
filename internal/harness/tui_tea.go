@@ -332,6 +332,20 @@ func (m *teaModel) appendHistory(text string) {
 	}
 }
 
+// frameWidth is the width every full-width row is built to.
+//
+// It stops one column short of the terminal. A row that fills the final column
+// leaves the cursor in a wrap-pending state, and many terminals (Windows Terminal
+// among them) then emit an extra row, which changes the frame height and shifts
+// the whole UI up or down as content changes. Giving the frame one spare column
+// makes every row unambiguously one row.
+func (m *teaModel) frameWidth() int {
+	if m.width < 2 {
+		return 1
+	}
+	return m.width - 1
+}
+
 func (m *teaModel) contentWidth() int {
 	w := m.width - 4
 	if w < 40 {
@@ -363,13 +377,13 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncInputHeight()
 
 		if !m.ready {
-			m.viewport = viewport.New(msg.Width, 3)
+			m.viewport = viewport.New(m.frameWidth(), 3)
 			m.viewport.SetContent(m.historyText.String())
 			m.ready = true
 			m.resizeViewport()
 			m.viewport.GotoBottom()
 		} else {
-			m.viewport.Width = msg.Width
+			m.viewport.Width = m.frameWidth()
 			m.resizeViewport()
 		}
 
@@ -1506,7 +1520,7 @@ func (m *teaModel) View() string {
 	headerLeft := lipgloss.JoinHorizontal(lipgloss.Center, brand, " ", modeBadge, " ", modelBadge, " ", dirBadge, agentBadge)
 	leftWidth := lipgloss.Width(headerLeft)
 	rightWidth := lipgloss.Width(rightInfo)
-	gap := m.width - leftWidth - rightWidth - 2
+	gap := m.frameWidth() - leftWidth - rightWidth - 2
 	if gap < 1 {
 		gap = 1
 	}
@@ -1515,9 +1529,9 @@ func (m *teaModel) View() string {
 	// frame and shifts everything below it. rightInfo changes on every spinner
 	// tick and whenever a status notice appears, so an unclamped header visibly
 	// jitters the whole UI up and down while a turn runs.
-	headerRow := clampToWidth(headerLeft+strings.Repeat(" ", gap)+rightInfo, m.width)
+	headerRow := clampToWidth(headerLeft+strings.Repeat(" ", gap)+rightInfo, m.frameWidth())
 	sb.WriteString(headerRow + "\n")
-	sb.WriteString(styleMuted.Render(strings.Repeat("─", m.width)) + "\n")
+	sb.WriteString(styleMuted.Render(strings.Repeat("─", m.frameWidth())) + "\n")
 
 	// 2. Viewport (Conversation & Tool Call History)
 	sb.WriteString(m.viewport.View() + "\n")
@@ -1536,7 +1550,7 @@ func (m *teaModel) View() string {
 	inputBox := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(borderCol).
-		Width(m.width - 2).
+		Width(m.frameWidth() - 2).
 		Render(inputContent)
 	sb.WriteString(inputBox + "\n")
 
@@ -1556,18 +1570,18 @@ func (m *teaModel) View() string {
 	}
 	used, budget := m.contextUsage()
 	gauge := formatContextGauge(used, budget, 10)
-	if VisualLen(hints)+VisualLen(gauge)+2 > m.width {
+	if VisualLen(hints)+VisualLen(gauge)+2 > m.frameWidth() {
 		hints = shortHints
 	}
-	if VisualLen(hints)+VisualLen(gauge)+2 > m.width {
+	if VisualLen(hints)+VisualLen(gauge)+2 > m.frameWidth() {
 		gauge = formatContextGauge(used, budget, 0)
 	}
-	gap = m.width - VisualLen(hints) - VisualLen(gauge) - 2
+	gap = m.frameWidth() - VisualLen(hints) - VisualLen(gauge) - 2
 	if gap < 1 {
 		gap = 1
 	}
 	status := hints + strings.Repeat(" ", gap) + gauge
-	status = PadRight(clampToWidth(status, m.width-2), m.width-2)
+	status = PadRight(clampToWidth(status, m.frameWidth()-2), m.frameWidth()-2)
 	sb.WriteString(styleStatusBar.Render(status))
 
 	return sb.String()

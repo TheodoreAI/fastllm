@@ -437,3 +437,20 @@ func (r *Router) ListModels(ctx context.Context) ([]Model, error) {
 	}
 	return out, nil
 }
+
+// StreamChatWithTools streams a tool-aware completion for a local, unprefixed
+// model. A provider-prefixed model falls back to the non-streaming path and
+// reports nothing streamed, because only the OpenAI-compatible local client
+// implements streamed tool-call accumulation so far; the caller then renders the
+// finished answer exactly as it did before streaming existed.
+//
+// Without this method the Router fails the caller's streamingLLMClient type
+// assertion outright, which silently disables streaming for every model --
+// including local ones -- since the harness always wraps its client in a Router.
+func (r *Router) StreamChatWithTools(ctx context.Context, model string, messages []Message, tools []Tool, thinkLevel string, onToken func(string), onReasoning func(string)) (ChatResult, bool, error) {
+	if _, _, prefixed := stripProviderPrefix(model); !prefixed {
+		return r.Local.StreamChatWithTools(ctx, model, messages, tools, thinkLevel, onToken, onReasoning)
+	}
+	result, err := r.ChatWithUsage(ctx, model, messages, tools, thinkLevel)
+	return result, false, err
+}
