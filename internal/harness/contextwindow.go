@@ -51,15 +51,17 @@ var knownContextWindows = map[string]int{
 	"qwen2.5-coder":     32768,
 	"qwen2.5":           32768,
 	"qwen3":             40960,
-	"gemma-4":           128000,
-	"gemma3":            131072,
-	"gemma2":            8192,
-	"deepseek":          65536,
-	"mistral":           32768,
-	"mixtral":           32768,
-	"phi-4":             16384,
-	"glm-5":             131072,
-	"glm-4":             131072,
+	// Confirmed against the served endpoint's max_model_len, not inferred from
+	// the model name: GET /v1/models on the vLLM host reports 262144.
+	"gemma-4":  262144,
+	"gemma3":   131072,
+	"gemma2":   8192,
+	"deepseek": 65536,
+	"mistral":  32768,
+	"mixtral":  32768,
+	"phi-4":    16384,
+	"glm-5":    131072,
+	"glm-4":    131072,
 }
 
 // ResolveContextWindow returns the context window in tokens for modelID, using

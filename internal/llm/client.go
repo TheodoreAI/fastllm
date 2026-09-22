@@ -749,9 +749,11 @@ func readChatError(resp *http.Response) error {
 type chatStreamChunk struct {
 	Choices []struct {
 		Delta struct {
-			Content   string `json:"content"`
-			Reasoning string `json:"reasoning"`
+			Content   string                `json:"content"`
+			Reasoning string                `json:"reasoning"`
+			ToolCalls []streamToolCallDelta `json:"tool_calls"`
 		} `json:"delta"`
+		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
 	// Usage only arrives on the final chunk of a stream, and only when the
 	// request carried stream_options.include_usage — see chatRequest.

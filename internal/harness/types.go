@@ -57,6 +57,12 @@ type RunRequest struct {
 	// Authorize is an optional interactive approval callback used by terminal
 	// clients in ask mode. Non-interactive callers leave it nil.
 	Authorize func(toolName, summary string) bool `json:"-"`
+
+	// StreamTokens makes the run emit EventTokenDelta as assistant text arrives,
+	// instead of only the finished answer at turn end. Opt-in: a token-rate event
+	// stream is useful to a live UI and pure overhead to a batch caller, and it
+	// has no effect when the configured client cannot stream.
+	StreamTokens bool `json:"-"`
 }
 
 // InitialMessage represents a prior conversation turn.
@@ -105,6 +111,13 @@ const (
 	EventToolResult   EventType = "tool_result"
 	EventTurnComplete EventType = "turn_complete"
 	EventTaskFinished EventType = "task_finished"
+	// EventTokenDelta carries assistant text as it streams in, before the turn
+	// completes. Response holds the incremental fragment, not the whole answer.
+	EventTokenDelta EventType = "token_delta"
+	// EventTokenDiscard tells the consumer to drop every EventTokenDelta shown
+	// for the current turn: the text was a tool call written as prose, or the
+	// stream failed and is about to be retried from the beginning.
+	EventTokenDiscard EventType = "token_discard"
 )
 
 // Event is emitted in real time during a harness run.
