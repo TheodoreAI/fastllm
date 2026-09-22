@@ -225,6 +225,15 @@ var spawnAgentTool = llm.Tool{Type: "function", Function: llm.ToolFunction{
 		"working_dir": map[string]any{"type": "string", "description": "Optional directory within the current workspace."},
 		"model":       map[string]any{"type": "string", "description": "Optional model override when the client routes models to endpoints; direct clients must use the parent's active model."},
 		"max_turns":   map[string]any{"type": "integer", "description": "Maximum child turns, from 1 to 50."},
+		"capabilities": map[string]any{
+			"type":        "array",
+			"items":       map[string]any{"type": "string"},
+			"description": "Optional explicit capabilities conferred to the child agent: 'read', 'write', 'network', 'commands', 'delegate'.",
+		},
+		"network_policy": map[string]any{
+			"type":        "string",
+			"description": "Optional network confinement policy: 'none' (blocks all outbound web requests) or 'public'.",
+		},
 	}, "required": []string{"task"}},
 }}
 

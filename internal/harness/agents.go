@@ -34,15 +34,20 @@ func (r *Runner) executeAgentTool(ctx context.Context, parent RunRequest, name, 
 	switch name {
 	case "spawn_agent":
 		var args struct {
-			Task       string `json:"task"`
-			WorkingDir string `json:"working_dir"`
-			Model      string `json:"model"`
-			MaxTurns   int    `json:"max_turns"`
+			Task          string   `json:"task"`
+			WorkingDir    string   `json:"working_dir"`
+			Model         string   `json:"model"`
+			MaxTurns      int      `json:"max_turns"`
+			Capabilities  []string `json:"capabilities"`
+			NetworkPolicy string   `json:"network_policy"`
 		}
 		if err := decodeToolArguments(rawArgs, &args); err != nil {
 			return "Error: invalid spawn_agent arguments: " + err.Error()
 		}
-		id, err := r.agents.Spawn(parent, args.Task, args.WorkingDir, args.Model, args.MaxTurns)
+		id, err := r.agents.Spawn(parent, args.Task, args.WorkingDir, args.Model, args.MaxTurns, SpawnOptions{
+			Capabilities:  args.Capabilities,
+			NetworkPolicy: args.NetworkPolicy,
+		})
 		if err != nil {
 			return "Error spawning agent: " + err.Error()
 		}
@@ -103,20 +108,27 @@ const (
 )
 
 type AgentRecord struct {
-	ID         string
-	Task       string
-	WorkingDir string
-	Model      string
-	State      AgentState
-	StartedAt  time.Time
-	FinishedAt time.Time
-	Result     *RunResult
-	Error      string
-	Metrics    SessionMetrics
+	ID            string
+	Task          string
+	WorkingDir    string
+	Model         string
+	State         AgentState
+	Capabilities  []string
+	NetworkPolicy string
+	StartedAt     time.Time
+	FinishedAt    time.Time
+	Result        *RunResult
+	Error         string
+	Metrics       SessionMetrics
 
 	cancel context.CancelFunc
 	inbox  chan string
 	done   chan struct{}
+}
+
+type SpawnOptions struct {
+	Capabilities  []string
+	NetworkPolicy string
 }
 
 type AgentManager struct {
@@ -148,7 +160,7 @@ func (m *AgentManager) Tools(depth int) []llm.Tool {
 	return []llm.Tool{spawnAgentTool, agentStatusTool, sendAgentMessageTool, cancelAgentTool}
 }
 
-func (m *AgentManager) Spawn(parent RunRequest, task, requestedDir, model string, maxTurns int) (string, error) {
+func (m *AgentManager) Spawn(parent RunRequest, task, requestedDir, model string, maxTurns int, opts ...SpawnOptions) (string, error) {
 	if m == nil {
 		return "", fmt.Errorf("agent manager is unavailable")
 	}
@@ -158,6 +170,11 @@ func (m *AgentManager) Spawn(parent RunRequest, task, requestedDir, model string
 	}
 	if parent.AgentDepth >= m.maxDepth {
 		return "", fmt.Errorf("maximum delegation depth (%d) reached", m.maxDepth)
+	}
+
+	var opt SpawnOptions
+	if len(opts) > 0 {
+		opt = opts[0]
 	}
 
 	workingDir, err := childWorkingDirectory(parent.WorkingDir, requestedDir)
@@ -191,6 +208,7 @@ func (m *AgentManager) Spawn(parent RunRequest, task, requestedDir, model string
 	ctx, cancel := context.WithCancel(m.ctx)
 	record := &AgentRecord{
 		ID: id, Task: task, WorkingDir: workingDir, Model: model,
+		Capabilities: opt.Capabilities, NetworkPolicy: opt.NetworkPolicy,
 		State: AgentPending, cancel: cancel, inbox: make(chan string, 16), done: make(chan struct{}),
 	}
 	m.agents[id] = record
@@ -202,6 +220,7 @@ func (m *AgentManager) Spawn(parent RunRequest, task, requestedDir, model string
 		AllowCommands: parent.AllowCommands, CommandsConfigured: true, CommandTimeout: parent.CommandTimeout,
 		ThinkLevel: parent.ThinkLevel, AgentDepth: parent.AgentDepth + 1,
 		AgentInbox: record.inbox, PermissionMode: parent.PermissionMode,
+		Capabilities: opt.Capabilities, NetworkPolicy: opt.NetworkPolicy,
 	}
 	go m.run(ctx, record, childReq)
 	return id, nil

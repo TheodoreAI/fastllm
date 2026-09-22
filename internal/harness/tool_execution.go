@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"fastllm/internal/files"
@@ -120,10 +121,19 @@ func (r *Runner) executeTool(execCtx toolExecutionContext, name, rawArgs string)
 		}
 		return toolExecutionResult{output: r.executeGlobFiles(execCtx.ctx, execCtx.workingDir, args.Pattern, args.Path)}
 
-	case "spawn_agent", "agent_status", "send_agent_message", "cancel_agent":
+	case "spawn_agent":
+		if len(execCtx.request.Capabilities) > 0 && !hasCapability(execCtx.request.Capabilities, "delegate", "spawn_agent") {
+			return toolExecutionResult{output: "Agent delegation is disabled by capability policy."}
+		}
+		return toolExecutionResult{output: r.executeAgentTool(execCtx.ctx, execCtx.request, name, rawArgs)}
+
+	case "agent_status", "send_agent_message", "cancel_agent":
 		return toolExecutionResult{output: r.executeAgentTool(execCtx.ctx, execCtx.request, name, rawArgs)}
 
 	case "web_search":
+		if strings.EqualFold(execCtx.request.NetworkPolicy, "none") || (len(execCtx.request.Capabilities) > 0 && !hasCapability(execCtx.request.Capabilities, "network", "network_fetch", "web")) {
+			return toolExecutionResult{output: "Network access is denied by policy for this agent."}
+		}
 		args, err := decodeArguments[struct {
 			Query      string `json:"query"`
 			MaxResults int    `json:"max_results"`
@@ -134,6 +144,9 @@ func (r *Runner) executeTool(execCtx toolExecutionContext, name, rawArgs string)
 		return toolExecutionResult{output: webtools.SearchFormatted(execCtx.ctx, args.Query, args.MaxResults)}
 
 	case "web_fetch":
+		if strings.EqualFold(execCtx.request.NetworkPolicy, "none") || (len(execCtx.request.Capabilities) > 0 && !hasCapability(execCtx.request.Capabilities, "network", "network_fetch", "web")) {
+			return toolExecutionResult{output: "Network access is denied by policy for this agent."}
+		}
 		args, err := decodeArguments[struct {
 			URL      string `json:"url"`
 			MaxBytes int    `json:"max_bytes"`

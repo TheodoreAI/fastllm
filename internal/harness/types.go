@@ -63,6 +63,13 @@ type RunRequest struct {
 	// stream is useful to a live UI and pure overhead to a batch caller, and it
 	// has no effect when the configured client cannot stream.
 	StreamTokens bool `json:"-"`
+
+	// Capabilities defines an explicit capability list for the run (attenuation).
+	// E.g. "read", "write", "network", "commands", "delegate".
+	Capabilities []string `json:"capabilities,omitempty"`
+
+	// NetworkPolicy specifies network confinement: "none" or "public".
+	NetworkPolicy string `json:"network_policy,omitempty"`
 }
 
 // InitialMessage represents a prior conversation turn.
