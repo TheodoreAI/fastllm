@@ -3,8 +3,10 @@ package harness
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -41,6 +43,79 @@ func TestTeaShellDirectoryChangePersists(t *testing.T) {
 	}
 	if !strings.Contains(m.historyText.String(), child) {
 		t.Fatalf("history does not report changed directory: %q", m.historyText.String())
+	}
+}
+
+func TestEscapeCancelsActiveAgentTurn(t *testing.T) {
+	ta := textarea.New()
+	canceled := false
+	m := &teaModel{
+		input:       ta,
+		viewport:    viewport.New(80, 6),
+		ready:       true,
+		width:       80,
+		isExecuting: true,
+		cancelTurn:  func() { canceled = true },
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(*teaModel)
+
+	if !canceled {
+		t.Fatal("Escape did not cancel the active agent turn")
+	}
+	if m.statusNotice != "Canceled active agent turn." {
+		t.Fatalf("status notice = %q", m.statusNotice)
+	}
+}
+
+func TestEscapeCancelsActiveShellCommand(t *testing.T) {
+	ta := textarea.New()
+	m := &teaModel{
+		workingDir: t.TempDir(),
+		input:      ta,
+		viewport:   viewport.New(80, 6),
+		ready:      true,
+		width:      80,
+	}
+	marker := filepath.Join(m.workingDir, "shell-started")
+	command := fmt.Sprintf("touch %q; sleep 30", marker)
+	if runtime.GOOS == "windows" {
+		command = fmt.Sprintf("Set-Content -LiteralPath '%s' -Value started; Start-Sleep -Seconds 30", strings.ReplaceAll(marker, "'", "''"))
+	}
+	run := m.handleShellSubmit(command)
+	result := make(chan tea.Msg, 1)
+	go func() { result <- run() }()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(marker); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("shell command did not start")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(*teaModel)
+
+	select {
+	case msg := <-result:
+		done, ok := msg.(teaShellDoneMsg)
+		if !ok {
+			t.Fatalf("shell result type = %T", msg)
+		}
+		if !done.Canceled {
+			t.Fatalf("shell result was not marked canceled: %+v", done)
+		}
+		updated, _ = m.Update(done)
+		m = updated.(*teaModel)
+		if m.shellExecuting || m.cancelShell != nil {
+			t.Fatal("completed cancellation left shell execution active")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Escape did not stop the active shell command")
 	}
 }
 

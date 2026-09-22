@@ -137,8 +137,10 @@ type permissionDecision struct {
 	GrantSession bool
 }
 type teaShellDoneMsg struct {
-	Output string
-	Err    error
+	Output       string
+	Err          error
+	ShellCommand bool
+	Canceled     bool
 }
 type teaImageDoneMsg struct {
 	Path     string
@@ -177,6 +179,8 @@ type teaModel struct {
 	activeTool       string
 	activeArgs       string
 	cancelTurn       context.CancelFunc
+	cancelShell      context.CancelFunc
+	shellExecuting   bool
 	eventChan        chan Event
 	permissionChan   chan teaPermissionRequestMsg
 	statusNotice     string
@@ -402,8 +406,12 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.Type {
 		case tea.KeyCtrlC:
 			if m.isExecuting && m.cancelTurn != nil {
-				m.cancelTurn()
-				m.statusNotice = "Canceled active agent turn."
+				m.cancelActiveOperation()
+				cmds = append(cmds, m.clearStatusAfter(3*time.Second))
+				return m, tea.Batch(cmds...)
+			}
+			if m.shellExecuting && m.cancelShell != nil {
+				m.cancelActiveOperation()
 				cmds = append(cmds, m.clearStatusAfter(3*time.Second))
 				return m, tea.Batch(cmds...)
 			}
@@ -494,6 +502,11 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, inputCmd
 
 		case tea.KeyEsc:
+			if m.isExecuting || m.shellExecuting {
+				m.cancelActiveOperation()
+				cmds = append(cmds, m.clearStatusAfter(3*time.Second))
+				return m, tea.Batch(cmds...)
+			}
 			if m.historyIdx != -1 {
 				m.historyIdx = -1
 				m.input.SetValue(m.historyDraft)
@@ -593,10 +606,16 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case teaShellDoneMsg:
+		if msg.ShellCommand {
+			m.shellExecuting = false
+			m.cancelShell = nil
+		}
 		if msg.Output != "" {
 			m.appendHistory(msg.Output + "\n")
 		}
-		if msg.Err != nil {
+		if msg.Canceled {
+			m.appendHistory(styleMuted.Render("[Command canceled]\n"))
+		} else if msg.Err != nil {
 			m.appendHistory(styleDiffDel.Render(fmt.Sprintf("$ %v\n", msg.Err)))
 		}
 		m.appendHistory("\n")
@@ -725,7 +744,30 @@ func (m *teaModel) resolvePermission(allow, grant bool) {
 	m.input.Focus()
 }
 
+func (m *teaModel) cancelActiveOperation() {
+	canceledAgent := m.cancelTurn != nil
+	if m.cancelTurn != nil {
+		m.cancelTurn()
+	}
+	canceledShell := m.cancelShell != nil
+	if m.cancelShell != nil {
+		m.cancelShell()
+	}
+	switch {
+	case canceledAgent && canceledShell:
+		m.statusNotice = "Canceled active operations."
+	case canceledAgent:
+		m.statusNotice = "Canceled active agent turn."
+	case canceledShell:
+		m.statusNotice = "Canceled active shell command."
+	}
+}
+
 func (m *teaModel) handleShellSubmit(cmdStr string) tea.Cmd {
+	if m.isExecuting || m.shellExecuting {
+		m.statusNotice = "An operation is already running — Esc cancels it."
+		return m.clearStatusAfter(3 * time.Second)
+	}
 	if cmdStr == "exit" || cmdStr == "quit" || cmdStr == "/exit" || cmdStr == "/shell" {
 		m.mode = modeAgent
 		m.statusNotice = "Returned to Agent Mode."
@@ -747,14 +789,19 @@ func (m *teaModel) handleShellSubmit(cmdStr string) tea.Cmd {
 	}
 
 	m.appendHistory(styleShellBadge.Render("$ "+cmdStr) + "\n")
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelShell = cancel
+	m.shellExecuting = true
 
 	return func() tea.Msg {
-		cmd := newInteractiveShellCommand(cmdStr)
+		cmd := newInteractiveShellCommandContext(ctx, cmdStr)
 		cmd.Dir = m.workingDir
 		out, err := cmd.CombinedOutput()
 		return teaShellDoneMsg{
-			Output: strings.TrimRight(string(out), "\r\n"),
-			Err:    err,
+			Output:       strings.TrimRight(string(out), "\r\n"),
+			Err:          err,
+			ShellCommand: true,
+			Canceled:     ctx.Err() != nil,
 		}
 	}
 }
@@ -1021,9 +1068,9 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 	//
 	// One turn at a time. Without this a multi-line paste submits once per
 	// pasted line, and the resulting workers race over the event channel.
-	if m.isExecuting {
+	if m.isExecuting || m.shellExecuting {
 		m.input.SetValue(inputVal)
-		m.statusNotice = "A turn is already running — Ctrl+C cancels it."
+		m.statusNotice = "An operation is already running — Esc cancels it."
 		return m.clearStatusAfter(3 * time.Second)
 	}
 	m.appendHistory(formatSubmittedPrompt(inputVal))
@@ -1161,6 +1208,8 @@ func (m *teaModel) View() string {
 		if m.activeTool != "" {
 			rightInfo += " " + tuiToolBadge(m.activeTool)
 		}
+	} else if m.shellExecuting {
+		rightInfo = fmt.Sprintf("%s Shell command", m.spinner.View())
 	} else if m.statusNotice != "" {
 		rightInfo = styleStatusNotice.Render(m.statusNotice)
 	} else if m.latestMetrics != nil {
@@ -1214,6 +1263,10 @@ func (m *teaModel) View() string {
 	if m.mode == modeShell {
 		hints = "Tab: Agent  •  Enter: Run  •  ↑/↓: History  •  Ctrl+V: Paste  •  exit: Leave Shell"
 		shortHints = "Tab: Agent  •  Enter: Run  •  exit: Leave Shell"
+	}
+	if m.isExecuting || m.shellExecuting {
+		hints = "Esc: Cancel  •  Ctrl+C: Cancel"
+		shortHints = hints
 	}
 	if VisualLen(hints) > m.width {
 		hints = shortHints

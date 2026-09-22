@@ -1172,12 +1172,20 @@ func runInteractiveCommand(dir, command string) error {
 }
 
 func newInteractiveShellCommand(command string) *exec.Cmd {
+	return newInteractiveShellCommandContext(context.Background(), command)
+}
+
+func newInteractiveShellCommandContext(ctx context.Context, command string) *exec.Cmd {
+	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		return exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command)
+		cmd = exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command)
+	} else {
+		shell := os.Getenv("SHELL")
+		if shell == "" {
+			shell = "sh"
+		}
+		cmd = exec.CommandContext(ctx, shell, "-c", command)
 	}
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		shell = "sh"
-	}
-	return exec.Command(shell, "-c", command)
+	configureCommandTreeCancellation(cmd)
+	return cmd
 }
