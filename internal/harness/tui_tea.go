@@ -249,7 +249,7 @@ func newTeaModel(runner *Runner, req RunRequest) (*teaModel, error) {
 		maxTurns = runner.DefaultMaxTurns
 	}
 	if maxTurns <= 0 {
-		maxTurns = 20
+		maxTurns = 50
 	}
 	commandTimeout := req.CommandTimeout
 	if commandTimeout <= 0 {
