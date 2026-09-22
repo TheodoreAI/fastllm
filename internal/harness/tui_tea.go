@@ -614,21 +614,31 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.retractStreamedText()
 
 		case EventTurnComplete:
-			// Text already on screen from EventTokenDelta must not be appended a
-			// second time here; only the held partial last line is still missing.
-			if m.stream.Active() || m.streamHeaderShown {
-				if tail := m.stream.Flush(); strings.TrimSpace(tail) != "" {
+			// Whether this turn streamed is decided by what actually reached the
+			// transcript, never by stream.Active(): the buffer is marked active at
+			// turn start, before any token arrives, so a turn that streamed nothing
+			// (a provider that cannot stream, or a reply sent whole) would take the
+			// streaming branch and render no answer at all.
+			tail := m.stream.Flush()
+			streamedAnything := m.streamHeaderShown || tail != ""
+			switch {
+			case streamedAnything:
+				if strings.TrimSpace(tail) != "" {
+					// The final line usually arrives without a trailing newline, and
+					// a one-line answer never showed a header, so write it here.
+					if !m.streamHeaderShown {
+						m.appendHistory(streamAnswerHeader())
+						m.streamHeaderShown = true
+					}
 					m.appendHistory(FormatMarkdownWidth(tail, m.contentWidth()) + "\n")
 				}
 				if ev.Response != "" {
 					m.lastResponse = ev.Response
 					m.hasResponseTurn = true
 				}
-				if m.streamHeaderShown {
-					m.appendHistory("\n")
-				}
+				m.appendHistory("\n")
 				m.streamHeaderShown = false
-			} else if ev.Response != "" {
+			case ev.Response != "":
 				m.lastResponse = ev.Response
 				m.hasResponseTurn = true
 				m.appendHistory(formatAssistantAnswer(ev.Response, m.contentWidth()))
