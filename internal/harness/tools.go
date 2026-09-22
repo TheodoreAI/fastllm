@@ -224,7 +224,7 @@ var spawnAgentTool = llm.Tool{Type: "function", Function: llm.ToolFunction{
 		"task":        map[string]any{"type": "string", "description": "Concrete task for the child agent."},
 		"working_dir": map[string]any{"type": "string", "description": "Optional directory within the current workspace."},
 		"model":       map[string]any{"type": "string", "description": "Optional model override when the client routes models to endpoints; direct clients must use the parent's active model."},
-		"max_turns":   map[string]any{"type": "integer", "description": "Maximum child turns, from 1 to 20."},
+		"max_turns":   map[string]any{"type": "integer", "description": "Maximum child turns, from 1 to 50."},
 	}, "required": []string{"task"}},
 }}
 

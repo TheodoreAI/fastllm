@@ -78,7 +78,7 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 		maxTurns = r.DefaultMaxTurns
 	}
 	if maxTurns <= 0 {
-		maxTurns = 20
+		maxTurns = 50
 	}
 	cmdTimeout := initialReq.CommandTimeout
 	if cmdTimeout <= 0 {
@@ -206,7 +206,7 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 		model = loaded.Model
 		maxTurns = loaded.Runtime.MaxTurns
 		if maxTurns <= 0 {
-			maxTurns = 20
+			maxTurns = 50
 		}
 		cmdTimeout = loaded.Runtime.CommandTimeout
 		if cmdTimeout <= 0 {

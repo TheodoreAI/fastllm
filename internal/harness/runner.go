@@ -133,7 +133,7 @@ func NewRunner(llmClient LLMClient, defaultWorkingDir, defaultModel string) *Run
 		LLM:               llmClient,
 		DefaultWorkingDir: defaultWorkingDir,
 		DefaultModel:      defaultModel,
-		DefaultMaxTurns:   20,
+		DefaultMaxTurns:   50,
 		AllowCommands:     true,
 		CommandTimeout:    60 * time.Second,
 	}
@@ -192,7 +192,7 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 		maxTurns = r.DefaultMaxTurns
 	}
 	if maxTurns <= 0 {
-		maxTurns = 20
+		maxTurns = 50
 	}
 
 	cmdTimeout := req.CommandTimeout
