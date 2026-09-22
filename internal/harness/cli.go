@@ -36,7 +36,7 @@ func RunCLI(args []string) int {
 	modelFlag := fs.String("model", "", "Model name (defaults to config default_model or llama3.1)")
 	urlFlag := fs.String("url", "", "LLM API base URL (defaults to model endpoint URL or http://localhost:11434/v1)")
 	keyFlag := fs.String("key", "", "LLM API key (defaults to LLM_API_KEY)")
-	maxTurnsFlag := fs.Int("max-turns", 20, "Maximum tool execution turns")
+	maxTurnsFlag := fs.Int("max-turns", 50, "Maximum tool execution turns")
 	timeoutFlag := fs.Int("timeout", 60, "Command timeout in seconds for run_command")
 	systemFlag := fs.String("system", "", "Custom system prompt override")
 	thinkFlag := fs.String("think", "", "Reasoning effort level (e.g. low, medium, high)")

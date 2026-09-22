@@ -173,8 +173,8 @@ func (m *AgentManager) Spawn(parent RunRequest, task, requestedDir, model string
 	if maxTurns <= 0 {
 		maxTurns = 10
 	}
-	if maxTurns > 20 {
-		maxTurns = 20
+	if maxTurns > 50 {
+		maxTurns = 50
 	}
 
 	m.mu.Lock()
