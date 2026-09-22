@@ -16,14 +16,53 @@ type usageLLMClient interface {
 	ChatWithUsage(context.Context, string, []llm.Message, []llm.Tool, string) (llm.ChatResult, error)
 }
 
+// streamingLLMClient is implemented by clients that can stream assistant text
+// while still returning tool calls. Checked at runtime like usageLLMClient, so a
+// client without it (a test double, a provider not yet converted) silently keeps
+// the non-streaming path.
+type streamingLLMClient interface {
+	StreamChatWithTools(ctx context.Context, model string, messages []llm.Message, tools []llm.Tool, thinkLevel string, onToken func(string), onReasoning func(string)) (llm.ChatResult, bool, error)
+}
+
+// streamSink receives assistant text as it arrives.
+//
+// Discard is called when text already handed to Emit turns out not to be part of
+// the answer: a model that wrote its tool call as prose, or channel markers
+// stripped at end of stream. The sink must then remove everything it showed for
+// this attempt. Retry does the same, because a stream that dies partway has
+// already emitted text that the next attempt will emit again.
+type streamSink struct {
+	Emit    func(string)
+	Discard func()
+}
+
 func chatWithRetry(ctx context.Context, client LLMClient, model string, messages []llm.Message, tools []llm.Tool, thinkLevel string, notify func(int, time.Duration, error)) (llm.ChatResult, error) {
+	return chatWithRetryStreaming(ctx, client, model, messages, tools, thinkLevel, notify, nil)
+}
+
+// chatWithRetryStreaming is chatWithRetry with an optional streaming sink. A nil
+// sink, or a client that cannot stream, behaves exactly as before.
+func chatWithRetryStreaming(ctx context.Context, client LLMClient, model string, messages []llm.Message, tools []llm.Tool, thinkLevel string, notify func(int, time.Duration, error), sink *streamSink) (llm.ChatResult, error) {
+	streamClient, canStream := client.(streamingLLMClient)
+	streaming := canStream && sink != nil && sink.Emit != nil
+	usageClient, hasUsage := client.(usageLLMClient)
+
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
 		var result llm.ChatResult
 		var err error
-		if usageClient, ok := client.(usageLLMClient); ok {
+		switch {
+		case streaming:
+			var discard bool
+			result, discard, err = streamClient.StreamChatWithTools(ctx, model, messages, tools, thinkLevel, sink.Emit, nil)
+			// Anything shown must come back off the screen when the stream failed
+			// (the retry re-emits it) or when the text was not the answer after all.
+			if (err != nil || discard) && sink.Discard != nil {
+				sink.Discard()
+			}
+		case hasUsage:
 			result, err = usageClient.ChatWithUsage(ctx, model, messages, tools, thinkLevel)
-		} else {
+		default:
 			result.Message, err = client.Chat(ctx, model, messages, tools, thinkLevel)
 		}
 		if err == nil {

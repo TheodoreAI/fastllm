@@ -172,22 +172,24 @@ type teaModel struct {
 	historyText strings.Builder
 
 	// Execution state
-	isExecuting      bool
-	hasResponseTurn  bool
-	agentWorkStarted bool
-	lastResponse     string
-	activeTurn       int
-	activeTool       string
-	activeArgs       string
-	cancelTurn       context.CancelFunc
-	cancelShell      context.CancelFunc
-	shellExecuting   bool
-	eventChan        chan Event
-	permissionChan   chan teaPermissionRequestMsg
-	statusNotice     string
-	latestMetrics    *TurnMetrics
-	pendingPrompt    string
-	taskStarted      time.Time
+	isExecuting       bool
+	hasResponseTurn   bool
+	stream            streamBuffer
+	streamHeaderShown bool
+	agentWorkStarted  bool
+	lastResponse      string
+	activeTurn        int
+	activeTool        string
+	activeArgs        string
+	cancelTurn        context.CancelFunc
+	cancelShell       context.CancelFunc
+	shellExecuting    bool
+	eventChan         chan Event
+	permissionChan    chan teaPermissionRequestMsg
+	statusNotice      string
+	latestMetrics     *TurnMetrics
+	pendingPrompt     string
+	taskStarted       time.Time
 
 	// Persistent conversation and runtime state.
 	sessionStore      *SessionStore
@@ -599,8 +601,34 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.appendHistory(FormatToolResult(ev.ToolCall.Name, ev.ToolCall.Result, previewLines) + "\n\n")
 			}
 
+		case EventTokenDelta:
+			if ready := m.stream.Add(ev.Response); ready != "" {
+				if !m.streamHeaderShown {
+					m.appendHistory(streamAnswerHeader())
+					m.streamHeaderShown = true
+				}
+				m.appendHistory(FormatMarkdownWidth(ready, m.contentWidth()) + "\n")
+			}
+
+		case EventTokenDiscard:
+			m.retractStreamedText()
+
 		case EventTurnComplete:
-			if ev.Response != "" {
+			// Text already on screen from EventTokenDelta must not be appended a
+			// second time here; only the held partial last line is still missing.
+			if m.stream.Active() || m.streamHeaderShown {
+				if tail := m.stream.Flush(); strings.TrimSpace(tail) != "" {
+					m.appendHistory(FormatMarkdownWidth(tail, m.contentWidth()) + "\n")
+				}
+				if ev.Response != "" {
+					m.lastResponse = ev.Response
+					m.hasResponseTurn = true
+				}
+				if m.streamHeaderShown {
+					m.appendHistory("\n")
+				}
+				m.streamHeaderShown = false
+			} else if ev.Response != "" {
 				m.lastResponse = ev.Response
 				m.hasResponseTurn = true
 				m.appendHistory(formatAssistantAnswer(ev.Response, m.contentWidth()))
@@ -1166,6 +1194,8 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 	m.taskStarted = time.Now()
 	m.isExecuting = true
 	m.hasResponseTurn = false
+	m.stream.Start()
+	m.streamHeaderShown = false
 	m.agentWorkStarted = false
 	m.activeTurn = 1
 
@@ -1198,6 +1228,7 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 			CommandsConfigured: true,
 			PermissionMode:     m.permissionMode,
 			InitialMessages:    priorMessages,
+			StreamTokens:       true,
 		}
 		if m.permissionMode == PermissionAsk {
 			req.Authorize = func(toolName, summary string) bool {

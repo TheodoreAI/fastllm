@@ -314,7 +314,21 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 		promptTokens := countApproxTokens(messages)
 
 		modelMessages := observations.Project(messages, turn)
-		chatResult, err := chatWithRetry(ctx, r.LLM, routed, modelMessages, tools, req.ThinkLevel, nil)
+		// The sink is per-turn: a discard must only retract the text streamed for
+		// the turn being attempted, never an earlier turn's committed answer.
+		var sink *streamSink
+		if req.StreamTokens {
+			streamedTurn := turn
+			sink = &streamSink{
+				Emit: func(fragment string) {
+					emit(Event{Type: EventTokenDelta, Turn: streamedTurn, Response: fragment})
+				},
+				Discard: func() {
+					emit(Event{Type: EventTokenDiscard, Turn: streamedTurn})
+				},
+			}
+		}
+		chatResult, err := chatWithRetryStreaming(ctx, r.LLM, routed, modelMessages, tools, req.ThinkLevel, nil, sink)
 		turnDuration := time.Since(turnStart)
 		if err != nil {
 			result.Error = fmt.Sprintf("LLM chat error on turn %d: %v", turn, err)
