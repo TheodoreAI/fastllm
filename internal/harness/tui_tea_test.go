@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"fastllm/internal/config"
 	"fastllm/internal/llm"
 
 	"github.com/charmbracelet/bubbles/textarea"
@@ -850,13 +851,27 @@ func TestContextUsageTracksCompactionInput(t *testing.T) {
 	if want := messageCharacterCount(m.sessionMessages); used != want {
 		t.Fatalf("gauge numerator = %d, want %d (sessionMessages only)", used, want)
 	}
-	if budget != DefaultCompactionConfig().MaxTotalChars {
-		t.Fatalf("gauge budget = %d, want compaction budget", budget)
+	if want := m.compactionConfig().MaxTotalChars; budget != want {
+		t.Fatalf("gauge budget = %d, want this model's compaction budget %d", budget, want)
 	}
 
 	// An empty session reads zero no matter how large the system prompt grows.
 	m.sessionMessages = nil
 	if used, _ := m.contextUsage(); used != 0 {
 		t.Fatalf("empty session gauge = %d, want 0", used)
+	}
+
+	// The denominator follows /model: a 200k-window model must not be gauged
+	// against the window of whatever model the session started on.
+	m.settings = &config.Settings{Models: []config.ModelEndpoint{
+		{ID: "small", ContextWindow: 8192},
+		{ID: "big", ContextWindow: 200000},
+	}}
+	m.modelName = "small"
+	_, smallBudget := m.contextUsage()
+	m.modelName = "big"
+	_, bigBudget := m.contextUsage()
+	if bigBudget <= smallBudget {
+		t.Fatalf("gauge budget did not follow the model switch: small=%d big=%d", smallBudget, bigBudget)
 	}
 }

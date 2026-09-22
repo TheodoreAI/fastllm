@@ -949,8 +949,9 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 
 		case "/compact":
 			m.appendHistory(styleUserPrompt.Render("❯ /compact") + "\n")
+			budget := m.compactionConfig()
 			before := messageCharacterCount(m.sessionMessages)
-			compacted, didCompact := ForceCompactMessages(m.sessionMessages, DefaultCompactionConfig())
+			compacted, didCompact := ForceCompactMessages(m.sessionMessages, budget)
 			if !didCompact {
 				m.appendHistory(styleMuted.Render("Nothing to compact yet; the transcript has no completed older turns to collapse.\n\n"))
 				return nil
@@ -962,8 +963,8 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 			}
 			m.appendHistory(styleMuted.Render(fmt.Sprintf("Compacted context from %s to %s (%d%% of the %s budget).",
 				formatCharCount(before), formatCharCount(after),
-				after*100/DefaultCompactionConfig().MaxTotalChars,
-				formatCharCount(DefaultCompactionConfig().MaxTotalChars))) + "\n\n")
+				after*100/budget.MaxTotalChars,
+				formatCharCount(budget.MaxTotalChars))) + "\n\n")
 			return nil
 
 		case "/rules":
@@ -1287,6 +1288,12 @@ func (m *teaModel) selectSkillFromModal() {
 	m.input.CursorEnd()
 }
 
+// compactionConfig sizes compaction against the active model's context window.
+// Read through this rather than caching: /model and /dir both change the answer.
+func (m *teaModel) compactionConfig() CompactionConfig {
+	return CompactionConfigForModel(m.settings, m.modelName)
+}
+
 // contextUsage reports progress toward automatic compaction. The numerator must
 // stay exactly what OnlineCompactMessages measures -- sessionMessages alone.
 // systemPrompt travels as RunRequest.SystemPrompt and is never an element of
@@ -1294,7 +1301,7 @@ func (m *teaModel) selectSkillFromModal() {
 // by the whole prompt: ~18% of budget in a repo with a large skill catalog,
 // enough to show red while compaction was still far from firing.
 func (m *teaModel) contextUsage() (int, int) {
-	return messageCharacterCount(m.sessionMessages), DefaultCompactionConfig().MaxTotalChars
+	return messageCharacterCount(m.sessionMessages), m.compactionConfig().MaxTotalChars
 }
 
 func formatContextGauge(used, budget, barWidth int) string {

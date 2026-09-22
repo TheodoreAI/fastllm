@@ -1,0 +1,4 @@
+- decided_at: 2026-09-22T04:07:03+00:00
+  event: initial
+  value: Size the compaction budget from the active model's context window: endpoint context_window in config.json, then a built-in model-ID table, then a 32k default; compact at 75% of the window converted at 4 chars/token, with an 8k floor.
+  reason: A fixed 60k-char budget compacted a 200k model ~10x too early and a small model too late. Resolution is offline by design: the configured endpoints are frequently-unreachable tunnels, so a startup /v1/models probe would make the budget depend on whether a port happened to be forwarded. 75% reserves room for the reply (max_tokens 4-8k), tool schemas, and the chars/4 approximation understating code and JSON.

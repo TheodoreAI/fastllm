@@ -98,6 +98,25 @@ prompt ready for its task, and Esc or `q` to dismiss. The status bar also
 shows current context usage against the automatic compaction threshold, turning
 yellow at 75% and red at 90%.
 
+Compaction is sized from the active model's context window rather than a fixed
+character count, so a 200k-token model is not trimmed as aggressively as an 8k
+one. The window is resolved per endpoint: an explicit `context_window` (in
+tokens) in `config.json` wins, then a built-in table keyed on the model ID, then
+a conservative 32k default. Set it explicitly for a self-hosted endpoint whose
+model the table cannot recognize, or for a vLLM server started with a reduced
+`--max-model-len`. Compaction runs at 75% of the window, leaving room for the
+reply and tool schemas. `/compact` collapses older turns on demand without
+waiting for that threshold.
+
+```json
+{
+  "id": "muse-glimmer",
+  "url": "http://127.0.0.1:8010/v1",
+  "context_window": 32768,
+  "parameters": { "temperature": 0.2, "max_tokens": 4096 }
+}
+```
+
 Use `/image <prompt>` to call the configured image-generation endpoint. FastLLM
 selects `qwen-image` when present, otherwise the first configured model whose ID
 or name contains `image`. The endpoint must implement OpenAI's
