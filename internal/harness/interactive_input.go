@@ -107,7 +107,7 @@ func inputComplete(line []rune) bool {
 	return quote == 0 && braces <= 0 && brackets <= 0 && parens <= 0 && !strings.HasSuffix(text, "\\")
 }
 
-var slashCommands = []string{"/clear", "/cls", "/delete-session", "/diff", "/dir", "/exit", "/fetch", "/help", "/image", "/kill", "/model", "/models", "/new", "/ps", "/quit", "/rename", "/resume", "/rules", "/search", "/session", "/sessions", "/set", "/shell", "/skills", "/status", "/undo"}
+var slashCommands = []string{"/clear", "/cls", "/compact", "/delete-session", "/diff", "/dir", "/exit", "/fetch", "/help", "/image", "/kill", "/model", "/models", "/new", "/ps", "/quit", "/rename", "/resume", "/rules", "/search", "/session", "/sessions", "/set", "/shell", "/skills", "/status", "/undo"}
 
 func interactiveCompletions(line string, cursor int, cwd string, models, sessions []string) []string {
 	if cursor < 0 || cursor > len(line) {

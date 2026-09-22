@@ -202,6 +202,8 @@ type teaModel struct {
 	expandedTools     bool
 	sessionGrants     map[string]bool
 	pendingPermission *teaPermissionRequestMsg
+	skillsModal       bool
+	skillCursor       int
 
 	// Prompt history navigation
 	promptHistory []string
@@ -393,6 +395,44 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				case 'n', 'N':
 					m.resolvePermission(false, false)
 					return m, m.waitForNextEvent()
+				}
+			}
+			return m, nil
+		}
+		if m.skillsModal {
+			switch msg.Type {
+			case tea.KeyEsc, tea.KeyCtrlC:
+				m.closeSkillsModal()
+			case tea.KeyEnter:
+				m.selectSkillFromModal()
+			case tea.KeyUp:
+				if m.skillCursor > 0 {
+					m.skillCursor--
+				}
+			case tea.KeyDown:
+				if m.skillCursor < len(m.skills)-1 {
+					m.skillCursor++
+				}
+			case tea.KeyHome:
+				m.skillCursor = 0
+			case tea.KeyEnd:
+				if len(m.skills) > 0 {
+					m.skillCursor = len(m.skills) - 1
+				}
+			case tea.KeyRunes:
+				if len(msg.Runes) > 0 {
+					switch msg.Runes[0] {
+					case 'q', 'Q':
+						m.closeSkillsModal()
+					case 'j':
+						if m.skillCursor < len(m.skills)-1 {
+							m.skillCursor++
+						}
+					case 'k':
+						if m.skillCursor > 0 {
+							m.skillCursor--
+						}
+					}
 				}
 			}
 			return m, nil
@@ -907,6 +947,25 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 			}
 			return nil
 
+		case "/compact":
+			m.appendHistory(styleUserPrompt.Render("❯ /compact") + "\n")
+			before := messageCharacterCount(m.sessionMessages)
+			compacted, didCompact := ForceCompactMessages(m.sessionMessages, DefaultCompactionConfig())
+			if !didCompact {
+				m.appendHistory(styleMuted.Render("Nothing to compact yet; the transcript has no completed older turns to collapse.\n\n"))
+				return nil
+			}
+			m.sessionMessages = compacted
+			after := messageCharacterCount(m.sessionMessages)
+			if err := m.saveSession(); err != nil {
+				m.appendHistory(styleMuted.Render("Session autosave failed: "+err.Error()) + "\n\n")
+			}
+			m.appendHistory(styleMuted.Render(fmt.Sprintf("Compacted context from %s to %s (%d%% of the %s budget).",
+				formatCharCount(before), formatCharCount(after),
+				after*100/DefaultCompactionConfig().MaxTotalChars,
+				formatCharCount(DefaultCompactionConfig().MaxTotalChars))) + "\n\n")
+			return nil
+
 		case "/rules":
 			m.appendHistory(styleUserPrompt.Render("❯ /rules") + "\n")
 			if len(m.rules) == 0 {
@@ -921,8 +980,7 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 		case "/skills":
 			name, task := parseSkillInvocation(inputVal)
 			if name == "" || (strings.EqualFold(name, "list") && task == "") {
-				m.appendHistory(styleUserPrompt.Render("❯ /skills") + "\n")
-				m.appendHistory(formatSkillList(m.skills) + "\n\n")
+				m.openSkillsModal()
 				return nil
 			}
 			skill, ok := findSkill(m.skills, name)
@@ -1201,10 +1259,163 @@ func (m *teaModel) startAgentWork(turn int) {
 	m.appendHistory("\n" + styleMuted.Bold(true).Render(label) + "\n")
 }
 
+func (m *teaModel) openSkillsModal() {
+	m.skillsModal = true
+	if m.skillCursor >= len(m.skills) {
+		m.skillCursor = 0
+	}
+	m.input.Blur()
+}
+
+func (m *teaModel) closeSkillsModal() {
+	m.skillsModal = false
+	m.input.Focus()
+}
+
+// selectSkillFromModal closes the picker and stages the highlighted skill as a
+// /skills invocation, leaving the cursor after the trailing space so the task
+// can be typed straight away. Staging rather than submitting keeps the skill
+// from running against an empty task on a stray Enter.
+func (m *teaModel) selectSkillFromModal() {
+	if m.skillCursor < 0 || m.skillCursor >= len(m.skills) {
+		m.closeSkillsModal()
+		return
+	}
+	skill := m.skills[m.skillCursor]
+	m.closeSkillsModal()
+	m.input.SetValue("/skills " + skill.Name + " ")
+	m.input.CursorEnd()
+}
+
+// contextUsage reports progress toward automatic compaction. The numerator must
+// stay exactly what OnlineCompactMessages measures -- sessionMessages alone.
+// systemPrompt travels as RunRequest.SystemPrompt and is never an element of
+// sessionMessages, so counting it here (or the unsent draft) inflated the gauge
+// by the whole prompt: ~18% of budget in a repo with a large skill catalog,
+// enough to show red while compaction was still far from firing.
+func (m *teaModel) contextUsage() (int, int) {
+	return messageCharacterCount(m.sessionMessages), DefaultCompactionConfig().MaxTotalChars
+}
+
+func formatContextGauge(used, budget, barWidth int) string {
+	if budget <= 0 {
+		return ""
+	}
+	if used < 0 {
+		used = 0
+	}
+	percent := used * 100 / budget
+	if percent > 100 {
+		percent = 100
+	}
+	label := fmt.Sprintf("ctx %d%%", percent)
+	if barWidth > 0 {
+		filled := (percent*barWidth + 99) / 100
+		if filled > barWidth {
+			filled = barWidth
+		}
+		label = fmt.Sprintf("ctx [%s%s] %s/%s", strings.Repeat("█", filled), strings.Repeat("░", barWidth-filled), compactCount(used), compactCount(budget))
+	}
+	color := tuiColorGreen
+	if percent >= 90 {
+		color = tuiColorRed
+	} else if percent >= 75 {
+		color = tuiColorYellow
+	}
+	return lipgloss.NewStyle().Foreground(color).Render(label)
+}
+
+func (m *teaModel) renderSkillsModal() string {
+	width, height := m.width, m.height
+	if width < 1 {
+		width = 80
+	}
+	if height < 1 {
+		height = 24
+	}
+	contentWidth := width - 8
+	if contentWidth > 100 {
+		contentWidth = 100
+	}
+	if contentWidth < 32 {
+		contentWidth = 32
+	}
+	visibleRows := height - 8
+	if visibleRows < 1 {
+		visibleRows = 1
+	}
+
+	start := m.skillCursor - visibleRows/2
+	if start < 0 {
+		start = 0
+	}
+	if maxStart := len(m.skills) - visibleRows; start > maxStart && maxStart > 0 {
+		start = maxStart
+	}
+	end := start + visibleRows
+	if end > len(m.skills) {
+		end = len(m.skills)
+	}
+
+	lines := []string{styleAgentBadge.Render(fmt.Sprintf("SKILLS · %d available", len(m.skills))), ""}
+	if len(m.skills) == 0 {
+		lines = append(lines, styleMuted.Render("No project or global skills found."))
+	} else {
+		nameWidth := 24
+		if contentWidth < 52 {
+			nameWidth = contentWidth - 6
+		}
+		for i := start; i < end; i++ {
+			skill := m.skills[i]
+			name := truncateText(skill.Name, nameWidth)
+			descriptionWidth := contentWidth - nameWidth - 6
+			row := fmt.Sprintf("  %-*s", nameWidth, name)
+			if descriptionWidth >= 8 {
+				row += "  " + truncateText(skillSummary(skill.Description, 160), descriptionWidth)
+			}
+			if i == m.skillCursor {
+				row = lipgloss.NewStyle().Bold(true).Foreground(tuiColorDarkBg).Background(tuiColorCyan).Width(contentWidth).Render("› " + strings.TrimPrefix(row, "  "))
+			}
+			lines = append(lines, row)
+		}
+	}
+	footer := "↑/↓ or j/k navigate · Enter select · Esc/q close"
+	if len(m.skills) == 0 {
+		footer = "Esc/q close"
+	}
+	lines = append(lines, "", styleMuted.Render(footer))
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(tuiColorCyan).
+		Background(tuiColorCardBg).
+		Padding(0, 1).
+		Width(contentWidth).
+		Render(strings.Join(lines, "\n"))
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box,
+		lipgloss.WithWhitespaceBackground(tuiColorDarkBg))
+}
+
+func truncateText(value string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= width {
+		return value
+	}
+	if width <= 3 {
+		return string(runes[:width])
+	}
+	return string(runes[:width-3]) + "..."
+}
+
 // View implements tea.Model
 func (m *teaModel) View() string {
 	if !m.ready {
 		return "Initializing fastllm..."
+	}
+	if m.skillsModal {
+		return m.renderSkillsModal()
 	}
 
 	var sb strings.Builder
@@ -1295,10 +1506,21 @@ func (m *teaModel) View() string {
 		hints = "Esc: Cancel  •  Ctrl+C: Cancel"
 		shortHints = hints
 	}
-	if VisualLen(hints) > m.width {
+	used, budget := m.contextUsage()
+	gauge := formatContextGauge(used, budget, 10)
+	if VisualLen(hints)+VisualLen(gauge)+2 > m.width {
 		hints = shortHints
 	}
-	sb.WriteString(styleStatusBar.Width(m.width).Render(clampToWidth(hints, m.width)))
+	if VisualLen(hints)+VisualLen(gauge)+2 > m.width {
+		gauge = formatContextGauge(used, budget, 0)
+	}
+	gap = m.width - VisualLen(hints) - VisualLen(gauge) - 2
+	if gap < 1 {
+		gap = 1
+	}
+	status := hints + strings.Repeat(" ", gap) + gauge
+	status = PadRight(clampToWidth(status, m.width-2), m.width-2)
+	sb.WriteString(styleStatusBar.Render(status))
 
 	return sb.String()
 }

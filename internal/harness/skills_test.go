@@ -98,8 +98,8 @@ func TestSkillsListAliasDoesNotStartAgentTurn(t *testing.T) {
 	if m.isExecuting {
 		t.Fatal("/skills list started an agent turn")
 	}
-	if output := StripANSI(m.historyText.String()); !strings.Contains(output, "Available Skills") || !strings.Contains(output, "review") {
-		t.Fatalf("list output = %q", output)
+	if !m.skillsModal {
+		t.Fatal("/skills list did not open the skills modal")
 	}
 }
 
