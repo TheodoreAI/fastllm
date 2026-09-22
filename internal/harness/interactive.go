@@ -62,6 +62,9 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 	discoveredRules := DiscoverWorkspaceRules(absWorkingDir)
 	rulesPrompt := FormatRulesForPrompt(discoveredRules)
 	discoveredSkills := DiscoverWorkspaceSkills(absWorkingDir)
+	currentSystemPrompt := func() string {
+		return systemPrompt + rulesPrompt + formatSkillCatalogPrompt(discoveredSkills)
+	}
 
 	allowCmds := r.AllowCommands
 	maxTurns := initialReq.MaxTurns
@@ -96,7 +99,7 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 	fileReader := files.New(absWorkingDir, true)
 
 	sessionMessages := []llm.Message{
-		{Role: "system", Content: systemPrompt + rulesPrompt},
+		{Role: "system", Content: currentSystemPrompt()},
 	}
 	sessionStore, sessionStoreErr := DefaultSessionStore()
 	var completionModels, completionSessions []string
@@ -183,7 +186,7 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 		discoveredSkills = DiscoverWorkspaceSkills(absWorkingDir)
 		settings, configPath = newSettings, newConfigPath
 		sessionMessages = []llm.Message{
-			{Role: "system", Content: systemPrompt + rulesPrompt},
+			{Role: "system", Content: currentSystemPrompt()},
 		}
 		fmt.Println(FormatWelcomeBanner(absWorkingDir, model, configPath, checkpointMgr.IsGitRepo(), len(discoveredRules), allowCmds))
 		return nil
@@ -214,7 +217,7 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 		if err := switchWorkspace(resolvedDir); err != nil {
 			return err
 		}
-		sessionMessages = append([]llm.Message{{Role: "system", Content: systemPrompt + rulesPrompt}}, loaded.Messages...)
+		sessionMessages = append([]llm.Message{{Role: "system", Content: currentSystemPrompt()}}, loaded.Messages...)
 		loaded.ClosedAt = nil
 		activeSession = loaded
 		if observationStore != nil {
@@ -302,7 +305,7 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 			if line == "/c" || line == "/clear" {
 				ClearScreen()
 				sessionMessages = []llm.Message{
-					{Role: "system", Content: systemPrompt + rulesPrompt},
+					{Role: "system", Content: currentSystemPrompt()},
 				}
 				fmt.Println(ColorGreen("  " + SymCheck + " Conversation and screen cleared."))
 				saveSession()
@@ -368,7 +371,7 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 			case "/c", "/clear":
 				ClearScreen()
 				sessionMessages = []llm.Message{
-					{Role: "system", Content: systemPrompt + rulesPrompt},
+					{Role: "system", Content: currentSystemPrompt()},
 				}
 				fmt.Println(FormatWelcomeBanner(absWorkingDir, model, configPath, checkpointMgr.IsGitRepo(), len(discoveredRules), allowCmds))
 				fmt.Println(ColorGreen("  " + SymCheck + " Conversation and screen cleared."))
@@ -506,7 +509,7 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 					activeSession.ClosedAt = &now
 				}
 				saveSession()
-				sessionMessages = []llm.Message{{Role: "system", Content: systemPrompt + rulesPrompt}}
+				sessionMessages = []llm.Message{{Role: "system", Content: currentSystemPrompt()}}
 				sessionMetrics = SessionMetrics{}
 				if sessionStore != nil {
 					activeSession = sessionStore.New(absWorkingDir, model, InteractiveRuntime{
@@ -615,7 +618,7 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 
 			case "/skills":
 				name, task := parseSkillInvocation(line)
-				if name == "" {
+				if name == "" || (strings.EqualFold(name, "list") && task == "") {
 					fmt.Println(formatSkillList(discoveredSkills))
 					continue
 				}

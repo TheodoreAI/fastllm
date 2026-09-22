@@ -35,7 +35,7 @@ func TestDiscoverWorkspaceSkillsDeduplicatesByNearestPrecedence(t *testing.T) {
 	wantPath := writeTestSkill(t, child, ".agents", "review-local", "---\nname: review\ndescription: nearest copy\n---\nnearest")
 	writeTestSkill(t, root, ".agents", "testing", "---\nname: testing\ndescription: 'Run focused tests'\n---\ntest")
 
-	skills := DiscoverWorkspaceSkills(child)
+	skills := discoverSkills(child, t.TempDir())
 	if len(skills) != 2 {
 		t.Fatalf("skills = %#v; want 2", skills)
 	}
@@ -48,6 +48,32 @@ func TestDiscoverWorkspaceSkillsDeduplicatesByNearestPrecedence(t *testing.T) {
 	}
 }
 
+func TestDiscoverSkillsSupportsCodexOpenCodeAndLegacyAGYSources(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestSkill(t, root, ".codex", "codex-project", "---\nname: codex-project\ndescription: Codex project skill\n---\nproject")
+	writeTestSkill(t, root, ".opencode", "opencode-project", "---\nname: opencode-project\ndescription: OpenCode project skill\n---\nproject")
+	writeTestSkill(t, home, ".codex", "codex-global", "---\nname: codex-global\ndescription: Codex global skill\n---\nglobal")
+	writeTestSkill(t, home, ".agent", "agy-legacy", "---\nname: agy-legacy\ndescription: Legacy AGY skill\n---\nglobal")
+	flatPath := filepath.Join(home, ".config", "opencode", "skills", "flat-open-code.md")
+	if err := os.MkdirAll(filepath.Dir(flatPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(flatPath, []byte("---\nname: flat-open-code\ndescription: Flat OpenCode skill\n---\nflat"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	skills := discoverSkills(root, home)
+	for _, name := range []string{"codex-project", "opencode-project", "codex-global", "agy-legacy", "flat-open-code"} {
+		if _, ok := findSkill(skills, name); !ok {
+			t.Errorf("missing %s in %#v", name, skills)
+		}
+	}
+}
+
 func TestSkillInvocationAndPrompt(t *testing.T) {
 	name, task := parseSkillInvocation("/skills clean-code refactor the parser")
 	if name != "clean-code" || task != "refactor the parser" {
@@ -57,6 +83,23 @@ func TestSkillInvocationAndPrompt(t *testing.T) {
 	prompt := formatSkillPrompt(skill, "project")
 	if !strings.Contains(prompt, "Active Skill: clean-code") || !strings.Contains(prompt, "Keep functions small.") {
 		t.Fatalf("prompt = %q", prompt)
+	}
+	catalog := formatSkillCatalogPrompt([]Skill{{Name: "clean-code", Description: "Keep code maintainable"}})
+	if !strings.Contains(catalog, "clean-code: Keep code maintainable") || !strings.Contains(catalog, "instructions are not loaded") {
+		t.Fatalf("catalog prompt = %q", catalog)
+	}
+}
+
+func TestSkillsListAliasDoesNotStartAgentTurn(t *testing.T) {
+	m := &teaModel{skills: []Skill{{Name: "review", Description: "Review code"}}}
+	if cmd := m.handleAgentSubmit("/skills list"); cmd != nil {
+		t.Fatal("/skills list returned an asynchronous command")
+	}
+	if m.isExecuting {
+		t.Fatal("/skills list started an agent turn")
+	}
+	if output := StripANSI(m.historyText.String()); !strings.Contains(output, "Available Skills") || !strings.Contains(output, "review") {
+		t.Fatalf("list output = %q", output)
 	}
 }
 

@@ -17,15 +17,38 @@ type Skill struct {
 	Content     string
 }
 
-var skillDirectories = []string{
-	filepath.Join(".agents", "skills"),
-	filepath.Join(".claude", "skills"),
+type skillSource struct {
+	path      string
+	flatFiles bool
+}
+
+var projectSkillSources = []skillSource{
+	{path: filepath.Join(".agents", "skills")},
+	{path: filepath.Join(".claude", "skills")},
+	{path: filepath.Join(".codex", "skills")},
+	{path: filepath.Join(".opencode", "skills"), flatFiles: true},
+	{path: filepath.Join(".agent", "skills")},
+}
+
+var globalSkillSources = []skillSource{
+	{path: filepath.Join(".agents", "skills")},
+	{path: filepath.Join(".claude", "skills")},
+	{path: filepath.Join(".codex", "skills")},
+	{path: filepath.Join(".config", "opencode", "skills"), flatFiles: true},
+	{path: filepath.Join(".opencode", "skills"), flatFiles: true},
+	{path: filepath.Join(".agent", "skills")},
 }
 
 // DiscoverWorkspaceSkills finds skills in the working directory and its parents,
-// stopping at the repository root. Nearest definitions win, with .agents taking
-// precedence over .claude when both define the same skill.
+// stopping at the repository root, then adds user-level skills. Project-local
+// definitions win over global ones; within a scope, sources are ordered by the
+// lists above and the nearest project definition wins.
 func DiscoverWorkspaceSkills(workingDir string) []Skill {
+	homeDir, _ := os.UserHomeDir()
+	return discoverSkills(workingDir, homeDir)
+}
+
+func discoverSkills(workingDir, homeDir string) []Skill {
 	absDir, err := filepath.Abs(workingDir)
 	if err != nil {
 		return nil
@@ -33,32 +56,8 @@ func DiscoverWorkspaceSkills(workingDir string) []Skill {
 
 	byName := make(map[string]Skill)
 	for current := absDir; ; current = filepath.Dir(current) {
-		for _, relRoot := range skillDirectories {
-			root := filepath.Join(current, relRoot)
-			entries, err := os.ReadDir(root)
-			if err != nil {
-				continue
-			}
-			for _, entry := range entries {
-				if !entry.IsDir() {
-					continue
-				}
-				path := filepath.Join(root, entry.Name(), "SKILL.md")
-				info, err := os.Lstat(path)
-				if err != nil || !info.Mode().IsRegular() || info.Size() > 512*1024 {
-					continue
-				}
-				content, err := os.ReadFile(path)
-				if err != nil || strings.TrimSpace(string(content)) == "" {
-					continue
-				}
-				name, description := skillMetadata(string(content), entry.Name())
-				key := strings.ToLower(name)
-				if _, exists := byName[key]; exists {
-					continue
-				}
-				byName[key] = Skill{Name: name, Description: description, Path: path, Content: string(content)}
-			}
+		for _, source := range projectSkillSources {
+			discoverSkillSource(filepath.Join(current, source.path), source.flatFiles, byName)
 		}
 
 		if isRepoRoot(current) {
@@ -67,6 +66,11 @@ func DiscoverWorkspaceSkills(workingDir string) []Skill {
 		parent := filepath.Dir(current)
 		if parent == current {
 			break
+		}
+	}
+	if homeDir != "" {
+		for _, source := range globalSkillSources {
+			discoverSkillSource(filepath.Join(homeDir, source.path), source.flatFiles, byName)
 		}
 	}
 
@@ -78,6 +82,46 @@ func DiscoverWorkspaceSkills(workingDir string) []Skill {
 		return strings.ToLower(skills[i].Name) < strings.ToLower(skills[j].Name)
 	})
 	return skills
+}
+
+func discoverSkillSource(root string, flatFiles bool, byName map[string]Skill) {
+	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if entry != nil && entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.IsDir() {
+			if path != root && entry.Type()&os.ModeSymlink != 0 {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		isBundle := entry.Name() == "SKILL.md"
+		isFlat := flatFiles && filepath.Dir(path) == root && strings.EqualFold(filepath.Ext(path), ".md")
+		if !isBundle && !isFlat {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil || !info.Mode().IsRegular() || info.Size() > 512*1024 {
+			return nil
+		}
+		content, err := os.ReadFile(path)
+		if err != nil || strings.TrimSpace(string(content)) == "" {
+			return nil
+		}
+		fallbackName := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
+		if isBundle {
+			fallbackName = filepath.Base(filepath.Dir(path))
+		}
+		name, description := skillMetadata(string(content), fallbackName)
+		key := strings.ToLower(name)
+		if _, exists := byName[key]; !exists {
+			byName[key] = Skill{Name: name, Description: description, Path: path, Content: string(content)}
+		}
+		return nil
+	})
 }
 
 func skillMetadata(content, fallbackName string) (string, string) {
@@ -138,19 +182,42 @@ func parseSkillInvocation(input string) (name, task string) {
 
 func formatSkillList(skills []Skill) string {
 	if len(skills) == 0 {
-		return "No project skills found under .agents/skills or .claude/skills."
+		return "No project or global skills found."
 	}
 	var b strings.Builder
-	b.WriteString("Project Skills\n")
+	b.WriteString("Available Skills\n")
 	for _, skill := range skills {
-		description := skill.Description
-		if description == "" {
-			description = "No description"
-		}
+		description := skillSummary(skill.Description, 160)
 		fmt.Fprintf(&b, "  %-24s %s\n", skill.Name, description)
 	}
-	b.WriteString("\nUse /skills <name> to inspect or /skills <name> <task> to run.")
+	b.WriteString("\nUse /skills NAME to inspect or /skills NAME TASK to run.")
 	return b.String()
+}
+
+func formatSkillCatalogPrompt(skills []Skill) string {
+	if len(skills) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n\n# Available Skills\n")
+	b.WriteString("The following skill metadata is available in this session. Full instructions are not loaded unless the user invokes `/skills NAME TASK`. If asked what skills are available, answer from this list.\n")
+	for _, skill := range skills {
+		description := skillSummary(skill.Description, 160)
+		fmt.Fprintf(&b, "- %s: %s\n", skill.Name, description)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func skillSummary(description string, limit int) string {
+	description = strings.Join(strings.Fields(description), " ")
+	if description == "" {
+		return "No description"
+	}
+	runes := []rune(description)
+	if limit > 3 && len(runes) > limit {
+		return string(runes[:limit-3]) + "..."
+	}
+	return description
 }
 
 func formatSkillDetails(skill Skill, workingDir string) string {

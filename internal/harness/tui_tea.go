@@ -284,7 +284,7 @@ func newTeaModel(runner *Runner, req RunRequest) (*teaModel, error) {
 		rules:          rules,
 		skills:         skills,
 		settings:       settings,
-		systemPrompt:   DefaultSystemPrompt + rulesPrompt,
+		systemPrompt:   DefaultSystemPrompt + rulesPrompt + formatSkillCatalogPrompt(skills),
 		input:          ta,
 		spinner:        sp,
 		promptHistory:  hist,
@@ -822,7 +822,7 @@ func (m *teaModel) changeWorkingDirectory(path string) error {
 	m.checkpointMgr = NewCheckpointManager(newDir)
 	m.rules = DiscoverWorkspaceRules(newDir)
 	m.skills = DiscoverWorkspaceSkills(newDir)
-	m.systemPrompt = DefaultSystemPrompt + FormatRulesForPrompt(m.rules)
+	m.systemPrompt = DefaultSystemPrompt + FormatRulesForPrompt(m.rules) + formatSkillCatalogPrompt(m.skills)
 	m.settings, m.configPath = settings, configPath
 	m.statusNotice = "Directory changed to " + filepath.Base(newDir)
 	_ = m.saveSession()
@@ -920,7 +920,7 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 
 		case "/skills":
 			name, task := parseSkillInvocation(inputVal)
-			if name == "" {
+			if name == "" || (strings.EqualFold(name, "list") && task == "") {
 				m.appendHistory(styleUserPrompt.Render("❯ /skills") + "\n")
 				m.appendHistory(formatSkillList(m.skills) + "\n\n")
 				return nil
