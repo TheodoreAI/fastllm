@@ -1,0 +1,4 @@
+- decided_at: 2026-09-22T01:47:38+00:00
+  event: initial
+  value: Runner and both terminal modes execute autonomous tools through one strict typed executor with mode-specific context and callbacks.
+  reason: Removes two drifting switch implementations while preserving permission and live-output differences.

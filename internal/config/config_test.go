@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"unicode/utf16"
 )
@@ -38,6 +39,52 @@ func TestLoadAndSaveSettings(t *testing.T) {
 	m := loaded.FindModel("custom-model")
 	if m == nil || m.URL != "http://localhost:9999/v1" {
 		t.Errorf("expected model endpoint with URL 'http://localhost:9999/v1', got %+v", m)
+	}
+}
+
+func TestLoadSettingsReportsMalformedHighestPriorityConfig(t *testing.T) {
+	workingDir := t.TempDir()
+	path := filepath.Join(workingDir, ".fastllm", "config.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{broken"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	settings, loadedPath, err := LoadSettings(workingDir)
+	if err == nil {
+		t.Fatal("malformed config was silently ignored")
+	}
+	if settings == nil || loadedPath != path {
+		t.Fatalf("settings=%#v path=%q, want non-nil defaults and %q", settings, loadedPath, path)
+	}
+}
+
+func TestSaveSettingsAtomicallyReplacesExistingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	settings := DefaultSettings()
+	if _, err := SaveSettings(path, settings); err != nil {
+		t.Fatal(err)
+	}
+	settings.DefaultModel = "replacement-model"
+	if _, err := SaveSettings(path, settings); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"default_model": "replacement-model"`) {
+		t.Fatalf("replacement was not persisted: %s", data)
+	}
+	temps, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".config.json.tmp-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(temps) != 0 {
+		t.Fatalf("temporary config files were left behind: %v", temps)
 	}
 }
 

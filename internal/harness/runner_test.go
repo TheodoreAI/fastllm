@@ -287,6 +287,20 @@ func TestRunner_EditFileErrors(t *testing.T) {
 	}
 }
 
+func TestExecuteToolRejectsTypeInvalidArguments(t *testing.T) {
+	runner := NewRunner(nil, t.TempDir(), "test-model")
+	defer runner.Close()
+	result := runner.executeTool(toolExecutionContext{
+		ctx:            context.Background(),
+		workingDir:     runner.DefaultWorkingDir,
+		allowCommands:  true,
+		processManager: NewProcessManager(),
+	}, "run_command", `{"command":"echo hi","timeout_seconds":"not-a-number"}`)
+	if !strings.Contains(result.output, "malformed tool arguments") {
+		t.Fatalf("invalid typed arguments were not rejected: %q", result.output)
+	}
+}
+
 func TestRunner_TurnLimit(t *testing.T) {
 	tmpDir := t.TempDir()
 

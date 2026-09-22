@@ -1,0 +1,3 @@
+value: Use one database/sql connection for the low-volume local SQLite store and perform note appends as one UPSERT RETURNING statement.
+reason: A single connection makes connection-scoped PRAGMAs reliable and avoids SQLITE_BUSY pool races; atomic SQL also protects against other writers.
+decided_at: 2026-09-22T01:47:41+00:00

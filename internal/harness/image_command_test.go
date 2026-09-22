@@ -1,10 +1,41 @@
 package harness
 
 import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"fastllm/internal/config"
 )
+
+func TestGenerateConfiguredImageSendsConfiguredModel(t *testing.T) {
+	png := []byte("\x89PNG\r\n\x1a\nvalid-signature")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		if request["model"] != "qwen-image" {
+			t.Fatalf("model = %#v, want qwen-image", request["model"])
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": []any{map[string]string{
+			"b64_json": base64.StdEncoding.EncodeToString(png),
+		}}})
+	}))
+	defer server.Close()
+
+	settings := &config.Settings{Models: []config.ModelEndpoint{{ID: "qwen-image", URL: server.URL}}}
+	path, size, err := generateConfiguredImage(context.Background(), settings, t.TempDir(), "draw a robot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path == "" || size != len(png) {
+		t.Fatalf("path=%q size=%d, want a saved %d-byte image", path, size, len(png))
+	}
+}
 
 func TestConfiguredImageEndpointPrefersConventionalID(t *testing.T) {
 	settings := &config.Settings{Models: []config.ModelEndpoint{

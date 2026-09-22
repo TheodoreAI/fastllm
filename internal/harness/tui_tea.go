@@ -230,7 +230,10 @@ func newTeaModel(runner *Runner, req RunRequest) (*teaModel, error) {
 
 	checkpointMgr := NewCheckpointManager(absWorkingDir)
 	processMgr := NewProcessManager()
-	settings, configPath, _ := config.LoadSettings(absWorkingDir)
+	settings, configPath, err := config.LoadSettings(absWorkingDir)
+	if err != nil {
+		return nil, err
+	}
 	maxTurns := req.MaxTurns
 	if maxTurns <= 0 {
 		maxTurns = runner.DefaultMaxTurns
@@ -761,11 +764,15 @@ func (m *teaModel) changeWorkingDirectory(path string) error {
 	if err != nil {
 		return err
 	}
+	settings, configPath, err := config.LoadSettings(newDir)
+	if err != nil {
+		return err
+	}
 	m.workingDir = newDir
 	m.checkpointMgr = NewCheckpointManager(newDir)
 	m.rules = DiscoverWorkspaceRules(newDir)
 	m.systemPrompt = DefaultSystemPrompt + FormatRulesForPrompt(m.rules)
-	m.settings, m.configPath, _ = config.LoadSettings(newDir)
+	m.settings, m.configPath = settings, configPath
 	m.statusNotice = "Directory changed to " + filepath.Base(newDir)
 	_ = m.saveSession()
 	return nil

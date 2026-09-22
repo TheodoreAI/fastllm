@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -170,12 +172,18 @@ func GlobalConfigPath() (string, error) {
 // If not found, it creates the default ~/.fastllm/config.json and returns it.
 func LoadSettings(workingDir string) (*Settings, string, error) {
 	for _, p := range CandidateConfigPaths(workingDir) {
-		if data, err := os.ReadFile(p); err == nil {
-			var s Settings
-			if err := json.Unmarshal(data, &s); err == nil {
-				return &s, p, nil
-			}
+		data, err := os.ReadFile(p)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
 		}
+		if err != nil {
+			return DefaultSettings(), p, fmt.Errorf("read settings %q: %w", p, err)
+		}
+		var s Settings
+		if err := json.Unmarshal(data, &s); err != nil {
+			return DefaultSettings(), p, fmt.Errorf("parse settings %q: %w", p, err)
+		}
+		return &s, p, nil
 	}
 
 	// None found, initialize default global config file
@@ -185,7 +193,9 @@ func LoadSettings(workingDir string) (*Settings, string, error) {
 	}
 
 	s := DefaultSettings()
-	_, _ = SaveSettings(globalPath, s)
+	if _, err := SaveSettings(globalPath, s); err != nil {
+		return s, globalPath, fmt.Errorf("initialize settings %q: %w", globalPath, err)
+	}
 	return s, globalPath, nil
 }
 
@@ -211,7 +221,7 @@ func writeKeyFile(modelID, key string) (string, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(filepath.Join(dir, name), []byte(key+"\n"), 0o600); err != nil {
+	if err := writeFileAtomic(filepath.Join(dir, name), []byte(key+"\n"), 0o600); err != nil {
 		return "", err
 	}
 	return "~/.fastllm/keys/" + name, nil
@@ -260,10 +270,44 @@ func SaveSettings(path string, s *Settings) ([]string, error) {
 		return nil, err
 	}
 
-	if err := os.WriteFile(path, append(data, '\n'), 0644); err != nil {
+	if err := writeFileAtomic(path, append(data, '\n'), 0o644); err != nil {
 		return nil, err
 	}
 	return relocated, nil
+}
+
+func writeFileAtomic(path string, data []byte, mode os.FileMode) (err error) {
+	dir := filepath.Dir(path)
+	temp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	defer func() {
+		if temp != nil {
+			_ = temp.Close()
+		}
+		if err != nil {
+			_ = os.Remove(tempPath)
+		}
+	}()
+	if err = temp.Chmod(mode); err != nil {
+		return err
+	}
+	if _, err = temp.Write(data); err != nil {
+		return err
+	}
+	if err = temp.Sync(); err != nil {
+		return err
+	}
+	if err = temp.Close(); err != nil {
+		return err
+	}
+	temp = nil
+	if err = os.Rename(tempPath, path); err != nil {
+		return err
+	}
+	return nil
 }
 
 // ProviderEndpointDefaults is where a named provider lives on this machine. A zero

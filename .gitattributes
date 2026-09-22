@@ -5,6 +5,7 @@
 # command, so a CRLF checkout fails with "$'\r': command not found". These must
 # always be LF, on every platform, regardless of core.autocrlf.
 *.sh text eol=lf
+*.go text eol=lf
 
 # Windows-only scripts keep CRLF for the same reason in reverse.
 *.bat text eol=crlf

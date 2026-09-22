@@ -31,7 +31,10 @@ func generateConfiguredImage(ctx context.Context, settings *config.Settings, wor
 	if endpoint == nil {
 		return "", 0, fmt.Errorf("no image model is configured; add a model whose id or name contains %q", "image")
 	}
-	images, err := imagegen.New(endpoint.URL, endpoint.ResolveAPIKey()).Generate(ctx, imagegen.Request{Prompt: prompt})
+	images, err := imagegen.New(endpoint.URL, endpoint.ResolveAPIKey()).Generate(ctx, imagegen.Request{
+		Prompt: prompt,
+		Model:  endpoint.ID,
+	})
 	if err != nil {
 		return "", 0, err
 	}

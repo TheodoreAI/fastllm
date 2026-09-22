@@ -180,6 +180,37 @@ func TestAgentStatusWaitHonorsContextCancellation(t *testing.T) {
 	}
 }
 
+func TestRunnerCloseCancelsAndJoinsChildren(t *testing.T) {
+	started := make(chan struct{})
+	exited := make(chan struct{})
+	client := &agentTestLLM{chat: func(ctx context.Context, _ []llm.Message) (llm.Message, error) {
+		close(started)
+		<-ctx.Done()
+		close(exited)
+		return llm.Message{}, ctx.Err()
+	}}
+	runner := NewRunner(client, t.TempDir(), "test-model")
+	parent := RunRequest{WorkingDir: runner.DefaultWorkingDir, Model: "test-model", PermissionMode: PermissionReadOnly}
+	if _, err := runner.agents.Spawn(parent, "wait until owner closes", "", "", 2); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("child did not start")
+	}
+
+	runner.Close()
+	select {
+	case <-exited:
+	default:
+		t.Fatal("Close returned before the child exited")
+	}
+	if _, err := runner.agents.Spawn(parent, "late child", "", "", 1); err == nil {
+		t.Fatal("closed runner accepted another child")
+	}
+}
+
 func TestAgentManagerEnforcesConcurrencyAndWorkspace(t *testing.T) {
 	client := &agentTestLLM{chat: func(ctx context.Context, _ []llm.Message) (llm.Message, error) {
 		<-ctx.Done()

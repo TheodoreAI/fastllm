@@ -13,8 +13,6 @@ import (
 	"fastllm/internal/llm"
 )
 
-
-
 func TestHarnessRun_Validation(t *testing.T) {
 	h := &Handler{
 		Files: files.New("", false),

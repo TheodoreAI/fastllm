@@ -1,7 +1,6 @@
 package harness
 
 import (
-	"context"
 	"io"
 	"os"
 	"strings"
@@ -55,28 +54,16 @@ func TestNilSpinnerIsSafe(t *testing.T) {
 	s.Stop()
 }
 
-// stubUsageClient reports server-side counts, like a real *llm.Client does.
-type stubUsageClient struct {
-	usage llm.Usage
-	have  bool
-}
-
-func (s stubUsageClient) Chat(_ context.Context, _ string, _ []llm.Message, _ []llm.Tool, _ string) (llm.Message, error) {
-	return llm.Message{}, nil
-}
-func (s stubUsageClient) LastUsage() (llm.Usage, bool) { return s.usage, s.have }
-
 func TestResolveTurnTokensPrefersServerCounts(t *testing.T) {
-	client := stubUsageClient{usage: llm.Usage{PromptTokens: 6270, CompletionTokens: 412}, have: true}
-	prompt, completion, measured := resolveTurnTokens(client, 6000, 6)
+	usage := llm.Usage{PromptTokens: 6270, CompletionTokens: 412}
+	prompt, completion, measured := resolveTurnTokens(usage, true, 6000, 6)
 	if !measured || prompt != 6270 || completion != 412 {
 		t.Fatalf("expected the server's counts, got (%d, %d, %v)", prompt, completion, measured)
 	}
 }
 
 func TestResolveTurnTokensFallsBackToEstimate(t *testing.T) {
-	client := stubUsageClient{have: false}
-	prompt, completion, measured := resolveTurnTokens(client, 6000, 6)
+	prompt, completion, measured := resolveTurnTokens(llm.Usage{}, false, 6000, 6)
 	if measured || prompt != 6000 || completion != 6 {
 		t.Fatalf("expected the local estimate, got (%d, %d, %v)", prompt, completion, measured)
 	}
@@ -84,24 +71,18 @@ func TestResolveTurnTokensFallsBackToEstimate(t *testing.T) {
 
 func TestResolveTurnTokensFillsZeroFieldsFromEstimate(t *testing.T) {
 	// Some servers report prompt tokens but leave completion at zero.
-	client := stubUsageClient{usage: llm.Usage{PromptTokens: 6270}, have: true}
-	prompt, completion, _ := resolveTurnTokens(client, 6000, 42)
+	usage := llm.Usage{PromptTokens: 6270}
+	prompt, completion, _ := resolveTurnTokens(usage, true, 6000, 42)
 	if prompt != 6270 || completion != 42 {
 		t.Fatalf("expected the zero field backfilled, got (%d, %d)", prompt, completion)
 	}
 }
 
 func TestResolveTurnTokensHandlesClientWithoutUsage(t *testing.T) {
-	prompt, completion, measured := resolveTurnTokens(plainClient{}, 100, 7)
+	prompt, completion, measured := resolveTurnTokens(llm.Usage{}, false, 100, 7)
 	if measured || prompt != 100 || completion != 7 {
 		t.Fatalf("a client that cannot report usage must fall back, got (%d, %d, %v)", prompt, completion, measured)
 	}
-}
-
-type plainClient struct{}
-
-func (plainClient) Chat(_ context.Context, _ string, _ []llm.Message, _ []llm.Tool, _ string) (llm.Message, error) {
-	return llm.Message{}, nil
 }
 
 var _ = os.Getenv
