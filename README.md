@@ -85,12 +85,13 @@ current values. Permission modes are `ask` (the default for model-initiated
 writes and commands), `read-only`, and `auto`. Direct Shell Mode commands are
 already explicit user actions and do not prompt again.
 
-Project-local skills are discovered from `.agents/skills/*/SKILL.md` and
-`.claude/skills/*/SKILL.md` in the workspace or its parent directories up to
-the repository root. Use `/skills` to list them, `/skills <name>` to show a
-skill's details, or `/skills <name> <task>` to apply it to one agent run.
-Nearest definitions take precedence and `.agents` wins over `.claude` when
-both define the same skill.
+Skills are discovered from project and user-level Codex, OpenCode, Claude,
+`.agents`, and legacy AGY `.agent` skill directories. Use `/skills` or
+`/skills list` to list them, `/skills NAME` to show a skill's details, or
+`/skills NAME TASK` to apply it to one agent run. Project definitions override
+global definitions; nearer project definitions and `.agents` sources take
+precedence. Available names and descriptions are advertised to the model, but
+full skill instructions are loaded only for an explicitly invoked run.
 
 Use `/image <prompt>` to call the configured image-generation endpoint. FastLLM
 selects `qwen-image` when present, otherwise the first configured model whose ID
