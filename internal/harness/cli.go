@@ -63,7 +63,11 @@ func RunCLI(args []string) int {
 	}
 
 	// Load settings from .fastllm/config.json or ~/.fastllm/config.json
-	settings, _, _ := config.LoadSettings(workDir)
+	settings, _, err := config.LoadSettings(workDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading settings: %v\n", err)
+		return 1
+	}
 
 	model := strings.TrimSpace(*modelFlag)
 	if model == "" {
@@ -148,6 +152,7 @@ func RunCLI(args []string) int {
 	router := llm.NewRouter(client, CloudConfigFromSettings(settings))
 
 	runner := NewRunner(router, workDir, model)
+	defer runner.Close()
 	runner.EnableObservations = *obsFlag
 	// Route the startup model too, not just later /model switches.
 	if matched != nil {

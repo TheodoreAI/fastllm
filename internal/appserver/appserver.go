@@ -72,7 +72,11 @@ func Build(cfg Config) (*Built, error) {
 	}
 	// Resolve the self-hosted endpoint once, here at the composition root, so no
 	// lower layer has to guess a host or read a key path of its own.
-	userSettings, _, _ := config.LoadSettings("")
+	userSettings, _, err := config.LoadSettings("")
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
 	selfHostedDefaults := config.ResolveProvider(userSettings, "selfhosted")
 
 	llmRouter := llm.NewRouter(llmClient, llm.CloudProviderConfig{

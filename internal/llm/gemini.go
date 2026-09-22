@@ -418,6 +418,11 @@ type geminiResponse struct {
 			Parts []geminiPart `json:"parts"`
 		} `json:"content"`
 	} `json:"candidates"`
+	UsageMetadata struct {
+		PromptTokenCount     int `json:"promptTokenCount"`
+		CandidatesTokenCount int `json:"candidatesTokenCount"`
+		TotalTokenCount      int `json:"totalTokenCount"`
+	} `json:"usageMetadata"`
 }
 
 // Chat sends a single non-streaming completion request with the given
@@ -428,31 +433,36 @@ type geminiResponse struct {
 // is synthesized rather than coming from Gemini itself). Mirrors
 // Client.Chat's role in internal/chat.Handler.runFileTools's tool loop.
 func (c *GeminiClient) Chat(ctx context.Context, model string, messages []Message, tools []Tool, thinkLevel string) (Message, error) {
+	result, err := c.ChatWithUsage(ctx, model, messages, tools, thinkLevel)
+	return result.Message, err
+}
+
+func (c *GeminiClient) ChatWithUsage(ctx context.Context, model string, messages []Message, tools []Tool, thinkLevel string) (ChatResult, error) {
 	body, err := json.Marshal(toGeminiRequest(model, messages, tools, thinkLevel))
 	if err != nil {
-		return Message{}, err
+		return ChatResult{}, err
 	}
 
 	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", model, c.APIKey)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return Message{}, err
+		return ChatResult{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return Message{}, err
+		return ChatResult{}, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return Message{}, geminiError(resp)
+		return ChatResult{}, geminiError(resp)
 	}
 
 	var gr geminiResponse
 	if err := json.NewDecoder(resp.Body).Decode(&gr); err != nil {
-		return Message{}, err
+		return ChatResult{}, err
 	}
 
 	var text strings.Builder
@@ -471,5 +481,14 @@ func (c *GeminiClient) Chat(ctx context.Context, model string, messages []Messag
 			}
 		}
 	}
-	return Message{Role: "assistant", Content: text.String(), ToolCalls: calls}, nil
+	result := ChatResult{Message: Message{Role: "assistant", Content: text.String(), ToolCalls: calls}}
+	if gr.UsageMetadata.PromptTokenCount > 0 || gr.UsageMetadata.CandidatesTokenCount > 0 {
+		result.Usage = Usage{
+			PromptTokens:     gr.UsageMetadata.PromptTokenCount,
+			CompletionTokens: gr.UsageMetadata.CandidatesTokenCount,
+			TotalTokens:      gr.UsageMetadata.TotalTokenCount,
+		}
+		result.HasUsage = true
+	}
+	return result, nil
 }

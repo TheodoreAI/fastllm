@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -132,9 +131,6 @@ type Client struct {
 	// root from user config, never inferred from a model name.
 	ChannelFraming bool
 
-	usageMu   sync.Mutex
-	lastUsage Usage
-	hasUsage  bool
 	// SendThink controls whether StreamChat/Chat include the "think"
 	// field on outgoing requests — Ollama's own extension for picking a
 	// reasoning effort level, not part of the OpenAI chat-completions
@@ -200,6 +196,14 @@ type Usage struct {
 	// parseRateLimitHeaders), simply never sets this rather than reporting
 	// a misleading zero.
 	RateLimit *RateLimit `json:"rate_limit,omitempty"`
+}
+
+// ChatResult keeps provider-reported usage attached to the completion that
+// produced it, so concurrent requests cannot overwrite one another's metrics.
+type ChatResult struct {
+	Message  Message
+	Usage    Usage
+	HasUsage bool
 }
 
 // RateLimit is fastllm's provider-agnostic view of the remaining-capacity
@@ -884,31 +888,12 @@ type chatResponse struct {
 // tool calls (which arrive as accumulated JSON, awkward to stream) are
 // resolved before the user-facing streamed answer begins. If model is
 // empty, c.ChatModel is used.
-// LastUsage returns the token counts the server reported for the most recent
-// completion on this client, and whether any were reported at all. Callers
-// should fall back to their own estimate when ok is false.
-func (c *Client) LastUsage() (Usage, bool) {
-	c.usageMu.Lock()
-	defer c.usageMu.Unlock()
-	return c.lastUsage, c.hasUsage
-}
-
-func (c *Client) recordUsage(u *struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
-}) {
-	c.usageMu.Lock()
-	defer c.usageMu.Unlock()
-	if u == nil || (u.PromptTokens == 0 && u.CompletionTokens == 0) {
-		c.hasUsage = false
-		return
-	}
-	c.lastUsage = Usage{PromptTokens: u.PromptTokens, CompletionTokens: u.CompletionTokens, TotalTokens: u.TotalTokens}
-	c.hasUsage = true
-}
-
 func (c *Client) Chat(ctx context.Context, model string, messages []Message, tools []Tool, thinkLevel string) (Message, error) {
+	result, err := c.ChatWithUsage(ctx, model, messages, tools, thinkLevel)
+	return result.Message, err
+}
+
+func (c *Client) ChatWithUsage(ctx context.Context, model string, messages []Message, tools []Tool, thinkLevel string) (ChatResult, error) {
 	if model == "" {
 		model = c.ChatModel
 	}
@@ -926,12 +911,12 @@ func (c *Client) Chat(ctx context.Context, model string, messages []Message, too
 	}
 	body, err := json.Marshal(creq)
 	if err != nil {
-		return Message{}, err
+		return ChatResult{}, err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return Message{}, err
+		return ChatResult{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if c.APIKey != "" {
@@ -940,23 +925,22 @@ func (c *Client) Chat(ctx context.Context, model string, messages []Message, too
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return Message{}, err
+		return ChatResult{}, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return Message{}, readChatError(resp)
+		return ChatResult{}, readChatError(resp)
 	}
 
 	var cr chatResponse
 	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
-		return Message{}, err
+		return ChatResult{}, err
 	}
 	if len(cr.Choices) == 0 {
-		return Message{}, fmt.Errorf("llm: empty response")
+		return ChatResult{}, fmt.Errorf("llm: empty response")
 	}
 
-	c.recordUsage(cr.Usage)
 	reply := cr.Choices[0].Message
 	if c.ChannelFraming || HasChannelMarkers(reply.Content) {
 		cleaned, _ := SplitChannelContent(reply.Content)
@@ -969,7 +953,16 @@ func (c *Client) Chat(ctx context.Context, model string, messages []Message, too
 			reply.Content = ""
 		}
 	}
-	return reply, nil
+	result := ChatResult{Message: reply}
+	if cr.Usage != nil && (cr.Usage.PromptTokens > 0 || cr.Usage.CompletionTokens > 0) {
+		result.Usage = Usage{
+			PromptTokens:     cr.Usage.PromptTokens,
+			CompletionTokens: cr.Usage.CompletionTokens,
+			TotalTokens:      cr.Usage.TotalTokens,
+		}
+		result.HasUsage = true
+	}
+	return result, nil
 }
 
 // parseFallbackToolCall recovers a tool call from models that don't

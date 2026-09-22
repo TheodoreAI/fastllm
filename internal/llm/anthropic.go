@@ -430,6 +430,10 @@ type anthropicResponse struct {
 		Name  string          `json:"name"`
 		Input json.RawMessage `json:"input"`
 	} `json:"content"`
+	Usage struct {
+		InputTokens  int `json:"input_tokens"`
+		OutputTokens int `json:"output_tokens"`
+	} `json:"usage"`
 }
 
 // Chat sends a single non-streaming completion request with the given
@@ -442,28 +446,33 @@ type anthropicResponse struct {
 // comment), so no ID-packing scheme is needed here: a tool_result message
 // simply carries the same ID straight back.
 func (c *AnthropicClient) Chat(ctx context.Context, model string, messages []Message, tools []Tool, thinkLevel string) (Message, error) {
+	result, err := c.ChatWithUsage(ctx, model, messages, tools, thinkLevel)
+	return result.Message, err
+}
+
+func (c *AnthropicClient) ChatWithUsage(ctx context.Context, model string, messages []Message, tools []Tool, thinkLevel string) (ChatResult, error) {
 	body, err := json.Marshal(toAnthropicRequest(model, messages, tools, false, thinkLevel))
 	if err != nil {
-		return Message{}, err
+		return ChatResult{}, err
 	}
 	req, err := c.newRequest(ctx, body)
 	if err != nil {
-		return Message{}, err
+		return ChatResult{}, err
 	}
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return Message{}, err
+		return ChatResult{}, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return Message{}, anthropicError(resp)
+		return ChatResult{}, anthropicError(resp)
 	}
 
 	var ar anthropicResponse
 	if err := json.NewDecoder(resp.Body).Decode(&ar); err != nil {
-		return Message{}, err
+		return ChatResult{}, err
 	}
 	var text strings.Builder
 	var calls []ToolCall
@@ -478,5 +487,14 @@ func (c *AnthropicClient) Chat(ctx context.Context, model string, messages []Mes
 			calls = append(calls, call)
 		}
 	}
-	return Message{Role: "assistant", Content: text.String(), ToolCalls: calls}, nil
+	result := ChatResult{Message: Message{Role: "assistant", Content: text.String(), ToolCalls: calls}}
+	if ar.Usage.InputTokens > 0 || ar.Usage.OutputTokens > 0 {
+		result.Usage = Usage{
+			PromptTokens:     ar.Usage.InputTokens,
+			CompletionTokens: ar.Usage.OutputTokens,
+			TotalTokens:      ar.Usage.InputTokens + ar.Usage.OutputTokens,
+		}
+		result.HasUsage = true
+	}
+	return result, nil
 }

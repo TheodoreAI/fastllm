@@ -2,11 +2,13 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -74,19 +76,57 @@ func TestRouterReportsUsageFromTheServingClient(t *testing.T) {
 	local := New(server.URL, "", "local-model", "")
 	router := NewRouter(local, CloudProviderConfig{})
 
-	if _, ok := router.LastUsage(); ok {
-		t.Fatal("usage reported before any request")
-	}
-
-	if _, err := router.Chat(context.Background(), "local-model", []Message{{Role: "user", Content: "hi"}}, nil, ""); err != nil {
+	result, err := router.ChatWithUsage(context.Background(), "local-model", []Message{{Role: "user", Content: "hi"}}, nil, "")
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	usage, ok := router.LastUsage()
-	if !ok {
+	if !result.HasUsage {
 		t.Fatal("router reported no usage; callers would fall back to estimated tokens")
 	}
-	if usage.PromptTokens != 123 || usage.CompletionTokens != 45 {
-		t.Fatalf("usage = %+v; want the counts the server reported", usage)
+	if result.Usage.PromptTokens != 123 || result.Usage.CompletionTokens != 45 {
+		t.Fatalf("usage = %+v; want the counts the server reported", result.Usage)
+	}
+}
+
+func TestConcurrentChatsKeepUsageWithTheirOwnResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		promptTokens := 11
+		if request.Model == "second" {
+			promptTokens = 22
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]string{"role": "assistant", "content": request.Model}}},
+			"usage":   map[string]int{"prompt_tokens": promptTokens, "completion_tokens": 3, "total_tokens": promptTokens + 3},
+		})
+	}))
+	defer server.Close()
+
+	router := NewRouter(New(server.URL, "", "", ""), CloudProviderConfig{})
+	results := make([]ChatResult, 2)
+	models := []string{"first", "second"}
+	var wg sync.WaitGroup
+	for i := range models {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			result, err := router.ChatWithUsage(context.Background(), models[i], []Message{{Role: "user", Content: "hi"}}, nil, "")
+			if err != nil {
+				t.Errorf("chat %d: %v", i, err)
+				return
+			}
+			results[i] = result
+		}(i)
+	}
+	wg.Wait()
+
+	if results[0].Usage.PromptTokens != 11 || results[1].Usage.PromptTokens != 22 {
+		t.Fatalf("usage crossed requests: first=%+v second=%+v", results[0].Usage, results[1].Usage)
 	}
 }

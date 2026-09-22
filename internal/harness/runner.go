@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -22,7 +21,6 @@ import (
 	"fastllm/internal/files"
 	"fastllm/internal/gitrepo"
 	"fastllm/internal/llm"
-	"fastllm/internal/webtools"
 )
 
 // LLMClient abstracts any LLM client (such as *llm.Router or *llm.Client)
@@ -117,6 +115,15 @@ func NewRunner(llmClient LLMClient, defaultWorkingDir, defaultModel string) *Run
 	}
 	r.agents = NewAgentManager(r, 3, 2)
 	return r
+}
+
+// Close cancels and joins every child agent owned by this runner. Callers that
+// construct a Runner own its lifetime and must close it when the request or
+// interactive session ends.
+func (r *Runner) Close() {
+	if r != nil {
+		r.agents.Close()
+	}
 }
 
 // localClient reaches the direct OpenAI-compatible client, whether the runner
@@ -283,7 +290,7 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 		promptTokens := countApproxTokens(messages)
 
 		modelMessages := observations.Project(messages, turn)
-		reply, err := chatWithRetry(ctx, r.LLM, routed, modelMessages, tools, req.ThinkLevel, nil)
+		chatResult, err := chatWithRetry(ctx, r.LLM, routed, modelMessages, tools, req.ThinkLevel, nil)
 		turnDuration := time.Since(turnStart)
 		if err != nil {
 			result.Error = fmt.Sprintf("LLM chat error on turn %d: %v", turn, err)
@@ -292,9 +299,10 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 			emit(Event{Type: EventTaskFinished, Result: result, Error: result.Error})
 			return result, err
 		}
+		reply := chatResult.Message
 
 		compTokens := countApproxTokens([]llm.Message{reply})
-		promptTokens, compTokens, _ = resolveTurnTokens(r.LLM, promptTokens, compTokens)
+		promptTokens, compTokens, _ = resolveTurnTokens(chatResult.Usage, chatResult.HasUsage, promptTokens, compTokens)
 		// A provider-routed model always bills; otherwise it depends on whether
 		// the direct client points at a public endpoint or at local hardware.
 		billable := r.routeModel != ""
@@ -343,206 +351,29 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 			}
 			emit(Event{Type: EventToolCall, Turn: turn, ToolCall: &tcRec})
 
-			var toolResult string
+			var execution toolExecutionResult
 			if req.Authorize != nil && requiresPermission(call.Function.Name) && !req.Authorize(call.Function.Name, summarizeArgs(call.Function.Arguments)) {
-				toolResult = "Permission denied by user for " + call.Function.Name + "."
+				execution.output = "Permission denied by user for " + call.Function.Name + "."
 			} else {
-				switch call.Function.Name {
-				case "read_file":
-					var args struct {
-						Path string `json:"path"`
-					}
-					_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
-					toolResult = r.executeReadFile(fileReader, args.Path)
-
-				case "write_file":
-					var args struct {
-						Path    string           `json:"path"`
-						Content string           `json:"content"`
-						ThenRun *FollowUpCommand `json:"then_run"`
-					}
-					_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
-					toolResult = r.executeWriteFile(fileReader, args.Path, args.Content)
-					toolResult = r.executeFollowUp(ctx, absWorkingDir, toolResult, args.ThenRun, cmdTimeout, allowCmds, false)
-
-				case "edit_file":
-					var args struct {
-						Path    string           `json:"path"`
-						Search  string           `json:"search"`
-						Replace string           `json:"replace"`
-						ThenRun *FollowUpCommand `json:"then_run"`
-					}
-					_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
-					toolResult = r.executeEditFile(fileReader, args.Path, args.Search, args.Replace)
-					toolResult = r.executeFollowUp(ctx, absWorkingDir, toolResult, args.ThenRun, cmdTimeout, allowCmds, false)
-
-				case "patch_file":
-					var args struct {
-						Path    string           `json:"path"`
-						Diff    string           `json:"diff"`
-						ThenRun *FollowUpCommand `json:"then_run"`
-					}
-					_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
-					toolResult = r.executePatchFile(fileReader, args.Path, args.Diff)
-					toolResult = r.executeFollowUp(ctx, absWorkingDir, toolResult, args.ThenRun, cmdTimeout, allowCmds, false)
-
-				case "list_files":
-					var args struct {
-						Path string `json:"path"`
-					}
-					_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
-					toolResult = r.executeListFiles(ctx, absWorkingDir, args.Path)
-
-				case "search_files":
-					var args struct {
-						Pattern string `json:"pattern"`
-						Path    string `json:"path"`
-					}
-					_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
-					toolResult = r.executeSearchFiles(ctx, absWorkingDir, args.Pattern, args.Path)
-
-				case "glob_files":
-					var args struct {
-						Pattern string `json:"pattern"`
-						Path    string `json:"path"`
-					}
-					_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
-					toolResult = r.executeGlobFiles(ctx, absWorkingDir, args.Pattern, args.Path)
-
-				case "spawn_agent", "agent_status", "send_agent_message", "cancel_agent":
-					toolResult = r.executeAgentTool(ctx, req, call.Function.Name, call.Function.Arguments)
-
-				case "web_search":
-					var args struct {
-						Query      string `json:"query"`
-						MaxResults int    `json:"max_results"`
-					}
-					_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
-					toolResult = webtools.SearchFormatted(ctx, args.Query, args.MaxResults)
-
-				case "web_fetch":
-					var args struct {
-						URL      string `json:"url"`
-						MaxBytes int    `json:"max_bytes"`
-					}
-					_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
-					content, err := webtools.Fetch(ctx, args.URL, args.MaxBytes)
-					if err != nil {
-						toolResult = fmt.Sprintf("Error fetching %s: %v", args.URL, err)
-					} else {
-						toolResult = content
-					}
-
-				case "read_observation":
-					var args struct {
-						Ref    string `json:"ref"`
-						Offset int    `json:"offset"`
-						Limit  int    `json:"limit"`
-					}
-					_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
-					if observationStore == nil {
-						toolResult = "Error: observation storage is unavailable."
-					} else if content, readErr := observationStore.Slice(args.Ref, args.Offset, args.Limit); readErr != nil {
-						toolResult = "Error reading observation: " + readErr.Error()
-					} else {
-						toolResult = content
-					}
-
-				case "update_plan":
-					var args struct {
-						Goal      string   `json:"goal"`
-						Completed []string `json:"completed"`
-						Current   string   `json:"current"`
-						Remaining []string `json:"remaining"`
-					}
-					_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
-					planBoundary = len(args.Completed) > 0
-					toolResult = formatPlanUpdate(args.Goal, args.Completed, args.Current, args.Remaining)
-
-				case "run_command":
-					if !allowCmds {
-						toolResult = "Error: run_command is disabled for this run."
-					} else {
-						var args struct {
-							Command        string `json:"command"`
-							TimeoutSeconds int    `json:"timeout_seconds"`
-							Background     bool   `json:"background"`
-						}
-						_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
-						if args.Background {
-							proc, err := processMgr.Start(args.Command, absWorkingDir)
-							if err != nil {
-								toolResult = fmt.Sprintf("Error starting background process: %v", err)
-							} else {
-								toolResult = fmt.Sprintf("Process started in background with ID %s (PID %d). Check output with process_status.", proc.ID, proc.PID)
-							}
-						} else {
-							perCallTimeout := cmdTimeout
-							if args.TimeoutSeconds > 0 {
-								perCallTimeout = time.Duration(args.TimeoutSeconds) * time.Second
-							}
-							toolResult = r.executeRunCommand(ctx, absWorkingDir, args.Command, perCallTimeout)
-						}
-					}
-
-				case "process_status":
-					if !allowCmds {
-						toolResult = "Error: process management is disabled for this run."
-					} else {
-						var args struct {
-							ProcessID string `json:"process_id"`
-						}
-						_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
-						if args.ProcessID == "" {
-							toolResult = processMgr.FormatProcessTable()
-						} else {
-							proc, out, err := processMgr.Status(args.ProcessID)
-							if err != nil {
-								toolResult = err.Error()
-							} else {
-								status := "RUNNING"
-								if proc.Exited {
-									status = fmt.Sprintf("EXITED (%d)", proc.ExitCode)
-								}
-								toolResult = fmt.Sprintf("Process %s (PID %d): %s\nCommand: %s\nOutput:\n%s",
-									proc.ID, proc.PID, status, proc.Command, out)
-							}
-						}
-					}
-
-				case "kill_process":
-					if !allowCmds {
-						toolResult = "Error: process management is disabled for this run."
-					} else {
-						var args struct {
-							ProcessID string `json:"process_id"`
-						}
-						_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
-						if err := processMgr.Kill(args.ProcessID); err != nil {
-							toolResult = fmt.Sprintf("Error killing process %s: %v", args.ProcessID, err)
-						} else {
-							toolResult = fmt.Sprintf("Process %s terminated.", args.ProcessID)
-						}
-					}
-
-				case "finish_task":
-					var args struct {
-						Summary string `json:"summary"`
-						Answer  string `json:"answer"`
-					}
-					_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
-					summary := args.Summary
-					if args.Answer != "" {
-						summary = fmt.Sprintf("%s\n\nAnswer: %s", summary, args.Answer)
-					}
-					toolResult = "Task completed successfully."
-					result.FinalResponse = summary
-					result.Success = true
-					taskFinished = true
-
-				default:
-					toolResult = fmt.Sprintf("Error: unknown tool %q", call.Function.Name)
-				}
+				execution = r.executeTool(toolExecutionContext{
+					ctx:              ctx,
+					request:          req,
+					fileReader:       fileReader,
+					workingDir:       absWorkingDir,
+					allowCommands:    allowCmds,
+					commandTimeout:   cmdTimeout,
+					processManager:   processMgr,
+					observationStore: observationStore,
+				}, call.Function.Name, call.Function.Arguments)
+			}
+			toolResult := execution.output
+			if execution.planBoundary {
+				planBoundary = true
+			}
+			if execution.taskFinished {
+				result.FinalResponse = execution.finalResponse
+				result.Success = true
+				taskFinished = true
 			}
 
 			outcome := observations.Process(call.Function.Name, call.Function.Arguments, toolResult, turn)
@@ -575,9 +406,9 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 				Role:    "system",
 				Content: "Turn budget exhausted. Stop calling tools and provide your final response summarizing what was done and what remains.",
 			})
-			finalReply, err := chatWithRetry(ctx, r.LLM, routed, messages, nil, req.ThinkLevel, nil)
-			if err == nil && finalReply.Content != "" {
-				result.FinalResponse = finalReply.Content
+			finalResult, err := chatWithRetry(ctx, r.LLM, routed, messages, nil, req.ThinkLevel, nil)
+			if err == nil && finalResult.Message.Content != "" {
+				result.FinalResponse = finalResult.Message.Content
 			}
 			break
 		}

@@ -62,6 +62,7 @@ func (h *Handler) HarnessRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	runner := harness.NewRunner(h.LLM, req.WorkingDir, req.Model)
+	defer runner.Close()
 
 	saveFinalResponse := func(res *harness.RunResult) {
 		if convID > 0 && h.DB != nil {

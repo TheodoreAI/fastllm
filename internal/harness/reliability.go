@@ -12,12 +12,22 @@ import (
 	"fastllm/internal/llm"
 )
 
-func chatWithRetry(ctx context.Context, client LLMClient, model string, messages []llm.Message, tools []llm.Tool, thinkLevel string, notify func(int, time.Duration, error)) (llm.Message, error) {
+type usageLLMClient interface {
+	ChatWithUsage(context.Context, string, []llm.Message, []llm.Tool, string) (llm.ChatResult, error)
+}
+
+func chatWithRetry(ctx context.Context, client LLMClient, model string, messages []llm.Message, tools []llm.Tool, thinkLevel string, notify func(int, time.Duration, error)) (llm.ChatResult, error) {
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
-		reply, err := client.Chat(ctx, model, messages, tools, thinkLevel)
+		var result llm.ChatResult
+		var err error
+		if usageClient, ok := client.(usageLLMClient); ok {
+			result, err = usageClient.ChatWithUsage(ctx, model, messages, tools, thinkLevel)
+		} else {
+			result.Message, err = client.Chat(ctx, model, messages, tools, thinkLevel)
+		}
 		if err == nil {
-			return reply, nil
+			return result, nil
 		}
 		lastErr = err
 		if !isTransientModelError(err) || attempt == 2 {
@@ -31,11 +41,11 @@ func chatWithRetry(ctx context.Context, client LLMClient, model string, messages
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return llm.Message{}, ctx.Err()
+			return llm.ChatResult{}, ctx.Err()
 		case <-timer.C:
 		}
 	}
-	return llm.Message{}, lastErr
+	return llm.ChatResult{}, lastErr
 }
 
 func isTransientModelError(err error) bool {

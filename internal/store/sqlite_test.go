@@ -2,8 +2,54 @@ package store
 
 import (
 	"database/sql"
+	"fmt"
+	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 )
+
+func TestAppendNotesDoesNotLoseConcurrentUpdates(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "notes.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	const writers = 20
+	var wg sync.WaitGroup
+	errs := make(chan error, writers)
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, appendErr := AppendNotes(db, defaultWorkspaceID, fmt.Sprintf("note-%02d", i))
+			errs <- appendErr
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	content, err := GetNotes(db, defaultWorkspaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := make(map[string]bool)
+	for _, line := range strings.Split(content, "\n") {
+		seen[line] = true
+	}
+	for i := 0; i < writers; i++ {
+		want := fmt.Sprintf("note-%02d", i)
+		if !seen[want] {
+			t.Errorf("concurrent append lost %q; content=%q", want, content)
+		}
+	}
+}
 
 func openTestDB(t *testing.T) *sql.DB {
 	t.Helper()
@@ -83,8 +129,8 @@ func TestCloudProviderSettings(t *testing.T) {
 	db := openTestDB(t)
 
 	s := CloudProviderSettings{
-		AnthropicAPIKey: "sk-ant-test",
-		SelfHostedBaseURL:      "http://localhost:8010/v1",
+		AnthropicAPIKey:   "sk-ant-test",
+		SelfHostedBaseURL: "http://localhost:8010/v1",
 	}
 	if err := SaveCloudProviderSettings(db, s); err != nil {
 		t.Fatalf("SaveCloudProviderSettings failed: %v", err)

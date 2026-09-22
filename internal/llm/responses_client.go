@@ -159,8 +159,8 @@ func toResponsesInput(messages []Message) []responsesInputItem {
 }
 
 type responsesRequest struct {
-	Model  string `json:"model"`
-	Input  any    `json:"input"` // string (StreamChat) or []responsesInputItem (Chat, when tools are involved)
+	Model  string          `json:"model"`
+	Input  any             `json:"input"` // string (StreamChat) or []responsesInputItem (Chat, when tools are involved)
 	Tools  []responsesTool `json:"tools,omitempty"`
 	Stream bool            `json:"stream"`
 }
@@ -306,8 +306,13 @@ type responsesOutputItem struct {
 }
 
 type responsesResponse struct {
-	OutputText string                 `json:"output_text"`
-	Output     []responsesOutputItem  `json:"output"`
+	OutputText string                `json:"output_text"`
+	Output     []responsesOutputItem `json:"output"`
+	Usage      struct {
+		InputTokens  int `json:"input_tokens"`
+		OutputTokens int `json:"output_tokens"`
+		TotalTokens  int `json:"total_tokens"`
+	} `json:"usage"`
 }
 
 // extractText concatenates every text content part of a "message"-type
@@ -357,40 +362,56 @@ func toToolCalls(items []responsesOutputItem) []ToolCall {
 // for tools — not every Responses-API model is assumed tool-capable just
 // because this method accepts a tools argument.
 func (c *ResponsesClient) Chat(ctx context.Context, model string, messages []Message, tools []Tool, thinkLevel string) (Message, error) {
+	result, err := c.ChatWithUsage(ctx, model, messages, tools, thinkLevel)
+	return result.Message, err
+}
+
+func (c *ResponsesClient) ChatWithUsage(ctx context.Context, model string, messages []Message, tools []Tool, thinkLevel string) (ChatResult, error) {
 	var input any = responsesInput(messages)
 	if len(tools) > 0 {
 		input = toResponsesInput(messages)
 	}
 	body, err := json.Marshal(responsesRequest{Model: model, Input: input, Tools: toResponsesTools(tools), Stream: false})
 	if err != nil {
-		return Message{}, err
+		return ChatResult{}, err
 	}
 	req, err := c.newRequest(ctx, body)
 	if err != nil {
-		return Message{}, err
+		return ChatResult{}, err
 	}
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return Message{}, err
+		return ChatResult{}, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return Message{}, responsesError(resp)
+		return ChatResult{}, responsesError(resp)
 	}
 
 	var rr responsesResponse
 	if err := json.NewDecoder(resp.Body).Decode(&rr); err != nil {
-		return Message{}, err
+		return ChatResult{}, err
 	}
 
+	result := ChatResult{}
+	if rr.Usage.InputTokens > 0 || rr.Usage.OutputTokens > 0 {
+		result.Usage = Usage{
+			PromptTokens:     rr.Usage.InputTokens,
+			CompletionTokens: rr.Usage.OutputTokens,
+			TotalTokens:      rr.Usage.TotalTokens,
+		}
+		result.HasUsage = true
+	}
 	if calls := toToolCalls(rr.Output); len(calls) > 0 {
-		return Message{Role: "assistant", ToolCalls: calls}, nil
+		result.Message = Message{Role: "assistant", ToolCalls: calls}
+		return result, nil
 	}
 	text := rr.OutputText
 	if text == "" {
 		text = extractText(rr.Output)
 	}
-	return Message{Role: "assistant", Content: text}, nil
+	result.Message = Message{Role: "assistant", Content: text}
+	return result, nil
 }

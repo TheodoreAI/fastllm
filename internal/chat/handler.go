@@ -435,7 +435,10 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 				var args struct {
 					Path string `json:"path"`
 				}
-				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+				if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+					results[call.ID] = "Error: malformed tool arguments: " + err.Error()
+					continue
+				}
 				results[call.ID] = h.listFiles(ctx, root, args.Path)
 
 			case "search_files":
@@ -443,14 +446,20 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 					Pattern string `json:"pattern"`
 					Path    string `json:"path"`
 				}
-				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+				if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+					results[call.ID] = "Error: malformed tool arguments: " + err.Error()
+					continue
+				}
 				results[call.ID] = h.searchFiles(ctx, root, args.Pattern, args.Path)
 
 			case "read_file":
 				var args struct {
 					Path string `json:"path"`
 				}
-				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+				if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+					results[call.ID] = "Error: malformed tool arguments: " + err.Error()
+					continue
+				}
 
 				var result string
 				fr := fileRead{Path: args.Path}
@@ -478,7 +487,10 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 					Path    string `json:"path"`
 					Content string `json:"content"`
 				}
-				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+				if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+					results[call.ID] = "Error: malformed tool arguments: " + err.Error()
+					continue
+				}
 
 				var result string
 				if !writesEnabled {
@@ -510,7 +522,10 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 					Search  string `json:"search"`
 					Replace string `json:"replace"`
 				}
-				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+				if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+					results[call.ID] = "Error: malformed tool arguments: " + err.Error()
+					continue
+				}
 
 				var result string
 				if !writesEnabled {
@@ -582,7 +597,10 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 					Query      string `json:"query"`
 					MaxResults int    `json:"max_results"`
 				}
-				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+				if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+					results[call.ID] = "Error: malformed tool arguments: " + err.Error()
+					continue
+				}
 				results[call.ID] = webtools.SearchFormatted(ctx, args.Query, args.MaxResults)
 
 			case "web_fetch":
@@ -590,7 +608,10 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 					URL      string `json:"url"`
 					MaxBytes int    `json:"max_bytes"`
 				}
-				_ = json.Unmarshal([]byte(call.Function.Arguments), &args)
+				if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+					results[call.ID] = "Error: malformed tool arguments: " + err.Error()
+					continue
+				}
 				content, err := webtools.Fetch(ctx, args.URL, args.MaxBytes)
 				if err != nil {
 					results[call.ID] = fmt.Sprintf("Error fetching %s: %v", args.URL, err)
