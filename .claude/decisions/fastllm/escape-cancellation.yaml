@@ -1,0 +1,3 @@
+value: Escape cancels the foreground agent turn or direct shell command, while explicitly backgrounded processes remain running; shell cancellation terminates the process tree with a direct-process fallback on Windows.
+reason: Foreground-only cancellation matches user intent without destroying persistent servers; process-tree termination prevents orphaned children, and the Windows fallback handles restricted taskkill environments.
+decided_at: 2026-09-22T02:41:49+00:00
