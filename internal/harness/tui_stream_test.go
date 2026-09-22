@@ -173,3 +173,45 @@ func newStreamTestModel() *teaModel {
 		width:    80,
 	}
 }
+
+// Regression: a turn that streams nothing (a short answer the provider sent
+// whole, or a client that cannot stream) must still render the answer. The
+// buffer is marked active at turn start, before any token arrives, so "active"
+// alone must not be read as "text was already shown".
+func TestTurnCompleteRendersAnswerWhenNothingStreamed(t *testing.T) {
+	m := newStreamTestModel()
+	m.stream.Start() // as handleAgentSubmit does, before any delta
+
+	updated, _ := m.Update(teaAgentEventMsg(Event{
+		Type:     EventTurnComplete,
+		Response: "hello there, this is the answer",
+	}))
+	m = updated.(*teaModel)
+
+	plain := StripANSI(m.historyText.String())
+	if !strings.Contains(plain, "hello there, this is the answer") {
+		t.Fatalf("answer was not rendered:\n%q", plain)
+	}
+	if !strings.Contains(plain, "ASSISTANT") {
+		t.Fatalf("assistant label missing:\n%q", plain)
+	}
+}
+
+// A streamed answer whose final line never ends in a newline must still appear.
+func TestTurnCompleteRendersUnterminatedFinalLine(t *testing.T) {
+	m := newStreamTestModel()
+	m.stream.Start()
+
+	updated, _ := m.Update(teaAgentEventMsg(Event{Type: EventTokenDelta, Response: "one line only"}))
+	m = updated.(*teaModel)
+	updated, _ = m.Update(teaAgentEventMsg(Event{Type: EventTurnComplete, Response: "one line only"}))
+	m = updated.(*teaModel)
+
+	plain := StripANSI(m.historyText.String())
+	if n := strings.Count(plain, "one line only"); n != 1 {
+		t.Fatalf("unterminated final line rendered %d times, want 1:\n%q", n, plain)
+	}
+	if !strings.Contains(plain, "ASSISTANT") {
+		t.Fatalf("assistant label missing:\n%q", plain)
+	}
+}
