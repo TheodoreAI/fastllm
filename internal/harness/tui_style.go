@@ -546,6 +546,7 @@ func FormatHelp() string {
 		{"/import <id|all>", "Import legacy web conversations as sessions"},
 		{"/c, /clear", "Clear conversation context and declutter UI screen"},
 		{"/cls", "Clear terminal screen without resetting context"},
+		{"/compact", "Collapse older turns into a checkpoint without waiting for the budget"},
 		{"/copy, /yank", "Copy last response to OS clipboard (/copy all for full log)"},
 		{"/dir <path>", "Switch active working directory and reload workspace rules"},
 		{"/exit, /quit", "Exit the interactive session"},

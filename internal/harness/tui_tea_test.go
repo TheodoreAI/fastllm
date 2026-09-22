@@ -615,6 +615,87 @@ func TestFrameSizeIsStableAcrossWidthsAndHeaderStates(t *testing.T) {
 	}
 }
 
+func TestContextGaugeUsesCompactionBudget(t *testing.T) {
+	plain := StripANSI(formatContextGauge(45_000, 60_000, 10))
+	if !strings.Contains(plain, "ctx [") || !strings.Contains(plain, "45k/60k") {
+		t.Fatalf("context gauge = %q", plain)
+	}
+	if got := StripANSI(formatContextGauge(75_000, 60_000, 0)); got != "ctx 100%" {
+		t.Fatalf("compact context gauge = %q", got)
+	}
+}
+
+func TestSkillsModalNavigatesAndCloses(t *testing.T) {
+	ta := textarea.New()
+	ta.Focus()
+	m := &teaModel{
+		input: ta, ready: true, width: 80, height: 24,
+		skills: []Skill{
+			{Name: "alpha", Description: "First skill"},
+			{Name: "beta", Description: "Second skill"},
+		},
+	}
+	m.openSkillsModal()
+	plain := StripANSI(m.View())
+	if !strings.Contains(plain, "SKILLS · 2 available") || !strings.Contains(plain, "alpha") || !strings.Contains(plain, "beta") {
+		t.Fatalf("modal = %q", plain)
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(*teaModel)
+	if m.skillCursor != 1 {
+		t.Fatalf("skill cursor = %d", m.skillCursor)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(*teaModel)
+	if m.skillsModal {
+		t.Fatal("Escape did not close skills modal")
+	}
+}
+
+func TestSkillsModalEnterStagesInvocation(t *testing.T) {
+	ta := textarea.New()
+	ta.Focus()
+	m := &teaModel{
+		input: ta, ready: true, width: 80, height: 24,
+		skills: []Skill{
+			{Name: "alpha", Description: "First skill"},
+			{Name: "beta", Description: "Second skill"},
+		},
+	}
+	m.openSkillsModal()
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(*teaModel)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(*teaModel)
+
+	if m.skillsModal {
+		t.Fatal("Enter did not close skills modal")
+	}
+	// Staged, not submitted: the task still has to be typed.
+	if got := m.input.Value(); got != "/skills beta " {
+		t.Fatalf("staged input = %q", got)
+	}
+}
+
+// Enter on an empty catalog has no skill to stage, so it must still dismiss
+// rather than index out of range.
+func TestSkillsModalEnterWithNoSkills(t *testing.T) {
+	ta := textarea.New()
+	ta.Focus()
+	m := &teaModel{input: ta, ready: true, width: 80, height: 24}
+	m.openSkillsModal()
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(*teaModel)
+
+	if m.skillsModal {
+		t.Fatal("Enter did not close empty skills modal")
+	}
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("empty catalog staged input = %q", got)
+	}
+}
+
 // slowLLM blocks until released, so a second submit can race the first.
 type slowLLM struct{ release chan struct{} }
 
@@ -746,5 +827,36 @@ func TestInputBoxGrowsAndKeepsTypedTextVisible(t *testing.T) {
 	m = updated.(*teaModel)
 	if !strings.Contains(StripANSI(m.View()), "END") {
 		t.Fatal("the caret line scrolled out of the input box")
+	}
+}
+
+// The gauge must measure exactly what OnlineCompactMessages measures. Counting the
+// system prompt (which travels as RunRequest.SystemPrompt, never as a sessionMessages
+// element) or the unsent draft made the bar read ~18% on an empty session in a repo
+// with a large skill catalog, so it could show red while compaction was far from firing.
+func TestContextUsageTracksCompactionInput(t *testing.T) {
+	ta := textarea.New()
+	ta.SetValue("an unsent draft that must not count toward the gauge")
+	m := &teaModel{
+		input:        ta,
+		systemPrompt: strings.Repeat("s", 9000),
+		sessionMessages: []llm.Message{
+			{Role: "user", Content: strings.Repeat("u", 1200)},
+			{Role: "assistant", Content: strings.Repeat("a", 800)},
+		},
+	}
+
+	used, budget := m.contextUsage()
+	if want := messageCharacterCount(m.sessionMessages); used != want {
+		t.Fatalf("gauge numerator = %d, want %d (sessionMessages only)", used, want)
+	}
+	if budget != DefaultCompactionConfig().MaxTotalChars {
+		t.Fatalf("gauge budget = %d, want compaction budget", budget)
+	}
+
+	// An empty session reads zero no matter how large the system prompt grows.
+	m.sessionMessages = nil
+	if used, _ := m.contextUsage(); used != 0 {
+		t.Fatalf("empty session gauge = %d, want 0", used)
 	}
 }

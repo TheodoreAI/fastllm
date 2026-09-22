@@ -14,6 +14,11 @@ fastllm.log
 .env
 fastllm_terminal_test.exe
 
+# Go build/test cache from running the suite with GOCACHE pointed at the repo
+# (e.g. sandboxed `GOCACHE=.test-cache go test ./...`). Machine-local hashed
+# objects, hundreds of MB — never a fixture, despite the name.
+.test-cache/
+
 # Local fastllm config. CandidateConfigPaths checks ./.fastllm/config.json
 # before the one in $HOME, so a project-local config is what the TUI writes
 # to — keep it out of the repo rather than trusting it to stay secret-free.

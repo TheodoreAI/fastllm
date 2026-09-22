@@ -154,6 +154,38 @@ func planBoundaryCompactionConfig(cfg CompactionConfig, contextChars int, planBo
 	return cfg
 }
 
+// ForceCompactMessages compacts regardless of how far the transcript is from the
+// budget, for an explicit user request rather than the automatic threshold. It
+// drops the budget just under the current size so the normal path runs; the
+// message-count and checkpoint guards inside still apply, so a short transcript
+// with nothing safe to collapse reports false rather than corrupting the tail.
+//
+// The tool-output ceiling tightens too. When the recent-message window covers the
+// whole trajectory there is no completed span to checkpoint, so OnlineCompactMessages
+// falls back to truncating older tool output -- and at the default 800-char ceiling
+// that reclaims nothing from the mid-size outputs a hand-invoked compaction is
+// usually aimed at, making /compact silently report "nothing to compact".
+func ForceCompactMessages(messages []llm.Message, cfg CompactionConfig) ([]llm.Message, bool) {
+	if cfg.MaxTotalChars <= 0 {
+		cfg = DefaultCompactionConfig()
+	}
+	if current := messageCharacterCount(messages); current-1 < cfg.MaxTotalChars {
+		cfg.MaxTotalChars = current - 1
+	}
+	if cfg.MaxTotalChars < 1 {
+		return messages, false
+	}
+	if cfg.MaxToolOutputChars > forcedMaxToolOutputChars {
+		cfg.MaxToolOutputChars = forcedMaxToolOutputChars
+	}
+	return OnlineCompactMessages(messages, cfg)
+}
+
+// forcedMaxToolOutputChars is the older-tool-output ceiling for a manual compaction.
+// Low enough to reclaim real space from routine command output, high enough that a
+// truncated head and tail still identify what the call did.
+const forcedMaxToolOutputChars = 240
+
 // CompactMessages prunes older tool outputs if total message size exceeds budget,
 // keeping system prompt, user prompt, and recent turns intact.
 func CompactMessages(messages []llm.Message, cfg CompactionConfig) ([]llm.Message, bool) {

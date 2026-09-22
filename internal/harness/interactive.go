@@ -597,6 +597,22 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 				}
 				continue
 
+			case "/compact":
+				before := messageCharacterCount(sessionMessages)
+				compacted, didCompact := ForceCompactMessages(sessionMessages, DefaultCompactionConfig())
+				if !didCompact {
+					fmt.Println(ColorGray("  Nothing to compact yet; the transcript has no completed older turns to collapse."))
+					continue
+				}
+				sessionMessages = compacted
+				after := messageCharacterCount(sessionMessages)
+				saveSession()
+				fmt.Println(ColorGreen(fmt.Sprintf("  %s Compacted context from %s to %s (%d%% of the %s budget).",
+					SymCheck, formatCharCount(before), formatCharCount(after),
+					after*100/DefaultCompactionConfig().MaxTotalChars,
+					formatCharCount(DefaultCompactionConfig().MaxTotalChars))))
+				continue
+
 			case "/rules":
 				if len(discoveredRules) == 0 {
 					fmt.Println(ColorGray("  No workspace instruction files discovered in this directory or parents."))

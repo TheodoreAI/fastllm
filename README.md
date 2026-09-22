@@ -92,6 +92,11 @@ Skills are discovered from project and user-level Codex, OpenCode, Claude,
 global definitions; nearer project definitions and `.agents` sources take
 precedence. Available names and descriptions are advertised to the model, but
 full skill instructions are loaded only for an explicitly invoked run.
+In the full-screen TUI, listing skills opens a scrollable modal; use arrow keys
+or `j`/`k` to navigate, Enter to stage the highlighted skill as a `/skills NAME`
+prompt ready for its task, and Esc or `q` to dismiss. The status bar also
+shows current context usage against the automatic compaction threshold, turning
+yellow at 75% and red at 90%.
 
 Use `/image <prompt>` to call the configured image-generation endpoint. FastLLM
 selects `qwen-image` when present, otherwise the first configured model whose ID
