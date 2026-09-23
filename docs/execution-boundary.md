@@ -129,6 +129,16 @@ directory; the container cannot read `C:\Users`, so shell commands run from a
 `Workspace:` PowerShell drive rooted at the workspace. `Get-Location` shows
 `Workspace:\`; `$PWD.ProviderPath` and native programs see the real path.
 
+The sandbox is opt-in: `/set sandbox on` in either terminal mode, saved with
+the session, or `-sandbox` on the command line. Child agents inherit it and
+cannot turn it off. Where no isolated backend exists, turning it on is refused
+and a sandboxed run fails rather than running unsandboxed. `-revoke-sandbox`
+removes the grants and the identity.
+
+Known gap: Git for Windows, like other MSYS programs, checks every directory
+above its working directory and fails on `C:\Users`, so git commands, and the
+checkpoints built on them, do not yet work inside the sandbox.
+
 It does not isolate the workspace from the model: whatever a command prints is
 returned to the model, a legitimate channel no sandbox can close. It forwards no
 stdin, sets no memory limit, and exists only on Windows; other platforms

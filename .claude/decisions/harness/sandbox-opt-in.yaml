@@ -1,0 +1,3 @@
+value: The sandbox is opt-in per session: RunRequest.Sandbox, /set sandbox on|off in both terminal modes (persisted in InteractiveRuntime), and -sandbox on the CLI; -revoke-sandbox undoes grants. Child agents inherit Sandbox and cannot opt out. sandboxOptions registers the platform IsolatedBackend and sets RequireIsolation, so an unavailable backend fails the run instead of falling back; /set sandbox on is refused where none exists.
+reason: User chose opt-in. The first sandboxed open blocks for a one-time module-cache grant and git does not yet work inside the container, so defaulting it on would silently break checkpoints; inheritance keeps a child from escaping a parent's sandbox (children inherit or narrow).
+decided_at: 2026-09-23T03:14:45+00:00
