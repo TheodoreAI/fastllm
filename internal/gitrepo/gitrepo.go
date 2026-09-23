@@ -15,6 +15,8 @@ import (
 	"errors"
 	"fastllm/internal/execution"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -118,6 +120,168 @@ func statusChar(c byte) string {
 	return string(c)
 }
 
+// RepoStatus holds complete repository state for the TUI / UI.
+type RepoStatus struct {
+	IsRepo       bool             `json:"is_repo"`
+	Branch       string           `json:"branch"`
+	Upstream     string           `json:"upstream"`
+	Ahead        int              `json:"ahead"`
+	Behind       int              `json:"behind"`
+	Files        []RepoFileStatus `json:"files"`
+	LatestCommit string           `json:"latest_commit"`
+}
+
+// RepoFileStatus is one changed file in the repository.
+type RepoFileStatus struct {
+	Path     string `json:"path"`
+	Staged   string `json:"staged"`   // "M", "A", "D", "R", ""
+	Unstaged string `json:"unstaged"` // "M", "D", "?", ""
+	Added    int    `json:"added"`
+	Removed  int    `json:"removed"`
+}
+
+// GetRepoStatus returns comprehensive repository status including branch,
+// upstream ahead/behind counts, staged and unstaged file lists, and diff stats.
+func GetRepoStatus(ctx context.Context, root string) (RepoStatus, error) {
+	if !IsRepo(ctx, root) {
+		return RepoStatus{IsRepo: false}, ErrNotARepo
+	}
+	out, err := run(ctx, root, "status", "--porcelain=v2", "--branch", "--untracked-files=all")
+	if err != nil {
+		return RepoStatus{IsRepo: false}, err
+	}
+
+	status := RepoStatus{IsRepo: true}
+	fileMap := make(map[string]*RepoFileStatus)
+	var fileList []string
+
+	for _, line := range splitLines(out) {
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "# ") {
+			header := strings.TrimPrefix(line, "# ")
+			parts := strings.SplitN(header, " ", 2)
+			if len(parts) == 2 {
+				key, val := parts[0], parts[1]
+				switch key {
+				case "branch.head":
+					status.Branch = val
+				case "branch.upstream":
+					status.Upstream = val
+				case "branch.ab":
+					abParts := strings.Fields(val)
+					for _, ab := range abParts {
+						if strings.HasPrefix(ab, "+") {
+							if n, err := strconv.Atoi(ab[1:]); err == nil {
+								status.Ahead = n
+							}
+						} else if strings.HasPrefix(ab, "-") {
+							if n, err := strconv.Atoi(ab[1:]); err == nil {
+								status.Behind = n
+							}
+						}
+					}
+				}
+			}
+			continue
+		}
+
+		switch line[0] {
+		case '1', '2':
+			fields := strings.SplitN(line, " ", 9)
+			if len(fields) < 9 {
+				continue
+			}
+			xy := fields[1]
+			path := fields[8]
+			if idx := strings.IndexByte(path, '\t'); idx != -1 {
+				path = path[:idx]
+			}
+			f := &RepoFileStatus{
+				Path:     path,
+				Staged:   statusChar(xy[0]),
+				Unstaged: statusChar(xy[1]),
+			}
+			fileMap[path] = f
+			fileList = append(fileList, path)
+		case '?':
+			path := strings.TrimPrefix(line, "? ")
+			f := &RepoFileStatus{
+				Path:     path,
+				Unstaged: "?",
+			}
+			fileMap[path] = f
+			fileList = append(fileList, path)
+		}
+	}
+
+	// Diff numstats for unstaged changes
+	if numstatOut, err := run(ctx, root, "diff", "--numstat"); err == nil {
+		parseNumstat(numstatOut, fileMap, false)
+	}
+
+	// Diff numstats for staged changes
+	if numstatOut, err := run(ctx, root, "diff", "--cached", "--numstat"); err == nil {
+		parseNumstat(numstatOut, fileMap, true)
+	}
+
+	// For untracked files without diff stats, count lines directly
+	for _, f := range fileMap {
+		if f.Unstaged == "?" && f.Added == 0 {
+			fullPath := filepath.Join(root, filepath.FromSlash(f.Path))
+			if info, err := os.Stat(fullPath); err == nil && !info.IsDir() && info.Size() < 500000 {
+				if data, err := os.ReadFile(fullPath); err == nil {
+					f.Added = countFileLines(string(data))
+				}
+			}
+		}
+	}
+
+	for _, path := range fileList {
+		if f, ok := fileMap[path]; ok {
+			status.Files = append(status.Files, *f)
+		}
+	}
+
+	if logOut, err := run(ctx, root, "log", "-1", "--format=%h %s"); err == nil {
+		status.LatestCommit = strings.TrimSpace(logOut)
+	}
+
+	return status, nil
+}
+
+func parseNumstat(output string, fileMap map[string]*RepoFileStatus, staged bool) {
+	for _, line := range splitLines(output) {
+		parts := strings.Split(line, "\t")
+		if len(parts) < 3 {
+			continue
+		}
+		path := parts[2]
+		f, ok := fileMap[path]
+		if !ok {
+			f = &RepoFileStatus{Path: path}
+			if staged {
+				f.Staged = "M"
+			} else {
+				f.Unstaged = "M"
+			}
+			fileMap[path] = f
+		}
+		added, _ := strconv.Atoi(parts[0])
+		removed, _ := strconv.Atoi(parts[1])
+		f.Added += added
+		f.Removed += removed
+	}
+}
+
+func countFileLines(s string) int {
+	if s == "" {
+		return 0
+	}
+	return strings.Count(strings.TrimSuffix(s, "\n"), "\n") + 1
+}
+
 // Diff returns the diff for one path. staged selects `git diff --staged`
 // (index vs HEAD) instead of the default (worktree vs index).
 func Diff(ctx context.Context, root, path string, staged bool) (string, error) {
@@ -176,6 +340,51 @@ func Discard(ctx context.Context, root string, paths []string) error {
 		return nil
 	}
 	_, err := run(ctx, root, append([]string{"restore", "--"}, paths...)...)
+	return err
+}
+
+// RemoveFileChanges completely discards all uncommitted changes (both staged and unstaged)
+// for a file, or deletes the file from disk if it is untracked.
+func RemoveFileChanges(ctx context.Context, root, path string, isUntracked bool) error {
+	if isUntracked {
+		fullPath := filepath.Join(root, filepath.FromSlash(path))
+		return os.Remove(fullPath)
+	}
+	if !IsRepo(ctx, root) {
+		return ErrNotARepo
+	}
+	if strings.TrimSpace(path) == "" {
+		return nil
+	}
+	// Restore both index and worktree from HEAD
+	_, err := run(ctx, root, "restore", "--source=HEAD", "--staged", "--worktree", "--", path)
+	if err != nil {
+		// Fallback for older git versions
+		_ = Unstage(ctx, root, []string{path})
+		_, err = run(ctx, root, "checkout", "HEAD", "--", path)
+		if err != nil {
+			// If checkout HEAD failed because the file was newly created in this session,
+			// deleting the working tree file completes the discard.
+			fullPath := filepath.Join(root, filepath.FromSlash(path))
+			if _, statErr := os.Stat(fullPath); statErr == nil {
+				return os.Remove(fullPath)
+			}
+		}
+	}
+	return err
+}
+
+// DiscardAll reverts all uncommitted changes across the entire working tree and index.
+func DiscardAll(ctx context.Context, root string) error {
+	if !IsRepo(ctx, root) {
+		return ErrNotARepo
+	}
+	_, err := run(ctx, root, "restore", "--source=HEAD", "--staged", "--worktree", ".")
+	if err != nil {
+		// Fallback
+		_, _ = run(ctx, root, "reset", "HEAD")
+		_, err = run(ctx, root, "checkout", "HEAD", "--", ".")
+	}
 	return err
 }
 

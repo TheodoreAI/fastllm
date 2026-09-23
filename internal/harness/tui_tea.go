@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"fastllm/internal/config"
+	"fastllm/internal/gitrepo"
 	"fastllm/internal/llm"
 	"fastllm/internal/webtools"
 
@@ -138,10 +139,16 @@ type permissionDecision struct {
 	GrantSession bool
 }
 type teaShellDoneMsg struct {
+	Command      string
 	Output       string
 	Err          error
 	ShellCommand bool
 	Canceled     bool
+	Duration     time.Duration
+}
+type teaGitWatchMsg struct{}
+type teaGitRefreshMsg struct {
+	status gitrepo.RepoStatus
 }
 type teaImageDoneMsg struct {
 	Path     string
@@ -208,7 +215,22 @@ type teaModel struct {
 	pendingPermission *teaPermissionRequestMsg
 	skillsModal       bool
 	skillCursor       int
+	modelsModal       bool
+	modelCursor       int
 	changes           sessionChanges
+	gitWatchChan      <-chan struct{}
+	gitWatchStop      func()
+
+	// Diff modal viewer state
+	diffModal          bool
+	diffConfirmDiscard bool
+	diffCursor         int
+	diffViewport       viewport.Model
+	diffPath           string
+	diffStaged         bool
+	diffHasStaged      bool
+	diffHasUnstaged    bool
+	diffReady          bool
 
 	// Prompt history navigation
 	promptHistory []string
@@ -311,6 +333,7 @@ func newTeaModel(runner *Runner, req RunRequest) (*teaModel, error) {
 	// Initial welcome message in history
 	m.appendHistory(m.formatWelcome())
 	m.appendSessionTranscript()
+	m.initGitWatcher()
 
 	return m, nil
 }
@@ -372,11 +395,57 @@ func (m *teaModel) contentWidth() int {
 	return w
 }
 
+func (m *teaModel) initGitWatcher() {
+	if m.gitWatchStop != nil {
+		m.gitWatchStop()
+		m.gitWatchStop = nil
+		m.gitWatchChan = nil
+	}
+	if m.workingDir == "" {
+		return
+	}
+	ch, stop, err := gitrepo.Watch(context.Background(), m.workingDir)
+	if err == nil {
+		m.gitWatchChan = ch
+		m.gitWatchStop = stop
+	}
+}
+
+func (m *teaModel) refreshGitStatusCmd() tea.Cmd {
+	root := m.workingDir
+	return func() tea.Msg {
+		if root == "" {
+			return teaGitRefreshMsg{status: gitrepo.RepoStatus{IsRepo: false}}
+		}
+		status, err := gitrepo.GetRepoStatus(context.Background(), root)
+		if err != nil {
+			return teaGitRefreshMsg{status: gitrepo.RepoStatus{IsRepo: false}}
+		}
+		return teaGitRefreshMsg{status: status}
+	}
+}
+
+func (m *teaModel) waitForGitWatch() tea.Cmd {
+	ch := m.gitWatchChan
+	if ch == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		_, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return teaGitWatchMsg{}
+	}
+}
+
 // Init implements tea.Model
 func (m *teaModel) Init() tea.Cmd {
 	return tea.Batch(
 		textarea.Blink,
 		m.spinner.Tick,
+		m.refreshGitStatusCmd(),
+		m.waitForGitWatch(),
 	)
 }
 
@@ -471,6 +540,126 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.modelsModal {
+			switch msg.Type {
+			case tea.KeyEsc, tea.KeyCtrlC:
+				m.closeModelsModal()
+			case tea.KeyEnter:
+				m.selectModelFromModal()
+			case tea.KeyUp:
+				if m.modelCursor > 0 {
+					m.modelCursor--
+				}
+			case tea.KeyDown:
+				if m.settings != nil && m.modelCursor < len(m.settings.Models)-1 {
+					m.modelCursor++
+				}
+			case tea.KeyHome:
+				m.modelCursor = 0
+			case tea.KeyEnd:
+				if m.settings != nil && len(m.settings.Models) > 0 {
+					m.modelCursor = len(m.settings.Models) - 1
+				}
+			case tea.KeyRunes:
+				if len(msg.Runes) > 0 {
+					switch msg.Runes[0] {
+					case 'q', 'Q':
+						m.closeModelsModal()
+					case 'j':
+						if m.settings != nil && m.modelCursor < len(m.settings.Models)-1 {
+							m.modelCursor++
+						}
+					case 'k':
+						if m.modelCursor > 0 {
+							m.modelCursor--
+						}
+					}
+				}
+			}
+			return m, nil
+		}
+		if m.diffModal {
+			if m.diffConfirmDiscard {
+				switch msg.Type {
+				case tea.KeyEsc, tea.KeyCtrlC:
+					m.diffConfirmDiscard = false
+					return m, nil
+				case tea.KeyEnter:
+					m.diffConfirmDiscard = false
+					m.discardCurrentFile()
+					return m, nil
+				case tea.KeyRunes:
+					if len(msg.Runes) > 0 {
+						switch msg.Runes[0] {
+						case 'y', 'Y':
+							m.diffConfirmDiscard = false
+							m.discardCurrentFile()
+							return m, nil
+						default:
+							m.diffConfirmDiscard = false
+							return m, nil
+						}
+					}
+				}
+				return m, nil
+			}
+
+			switch msg.Type {
+			case tea.KeyEsc, tea.KeyCtrlC:
+				m.closeDiffModal()
+				return m, nil
+			case tea.KeyRight:
+				m.nextDiffFile()
+				return m, nil
+			case tea.KeyLeft:
+				m.prevDiffFile()
+				return m, nil
+			case tea.KeyRunes:
+				if len(msg.Runes) > 0 {
+					switch msg.Runes[0] {
+					case 'q', 'Q':
+						m.closeDiffModal()
+						return m, nil
+					case 'n', 'N':
+						m.nextDiffFile()
+						return m, nil
+					case 'p', 'P':
+						m.prevDiffFile()
+						return m, nil
+					case 's', 'S':
+						m.toggleStageCurrentFile()
+						return m, nil
+					case 'd', 'D':
+						m.toggleDiffStaged()
+						return m, nil
+					case 'x', 'X':
+						m.diffConfirmDiscard = true
+						return m, nil
+					}
+				}
+			}
+			var vpCmd tea.Cmd
+			m.diffViewport, vpCmd = m.diffViewport.Update(msg)
+			return m, vpCmd
+		}
+
+		if msg.Alt && len(msg.Runes) > 0 {
+			switch msg.Runes[0] {
+			case 'c', 'C':
+				if len(m.changes.files) > 0 {
+					targetIdx := 0
+					if m.changes.cursor >= 0 && m.changes.cursor < len(m.changes.files) {
+						targetIdx = m.changes.cursor
+					}
+					m.openDiffModal(targetIdx)
+					return m, nil
+				}
+			case 'm', 'M':
+				m.openModelsModal()
+				return m, nil
+			}
+		}
+
 		// A bracketed paste arrives as one key event carrying the whole
 		// clipboard, newlines included. Insert it literally -- treating those
 		// newlines as Enter submits the paste one line at a time, which also
@@ -491,6 +680,10 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cancelActiveOperation()
 				cmds = append(cmds, m.clearStatusAfter(3*time.Second))
 				return m, tea.Batch(cmds...)
+			}
+			if m.gitWatchStop != nil {
+				m.gitWatchStop()
+				m.gitWatchStop = nil
 			}
 			return m, tea.Quit
 
@@ -519,6 +712,16 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Ctrl+J is universal terminal newline / linefeed
 			m.input.InsertString("\n")
 			return m, nil
+
+		case tea.KeyCtrlO:
+			if len(m.changes.files) > 0 {
+				targetIdx := 0
+				if m.changes.cursor >= 0 && m.changes.cursor < len(m.changes.files) {
+					targetIdx = m.changes.cursor
+				}
+				m.openDiffModal(targetIdx)
+				return m, nil
+			}
 
 		case tea.KeyEnter:
 			if msg.Alt {
@@ -601,6 +804,32 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.MouseMsg:
+		if m.diffModal {
+			var vpCmd tea.Cmd
+			m.diffViewport, vpCmd = m.diffViewport.Update(msg)
+			return m, vpCmd
+		}
+		if m.modelsModal || m.skillsModal {
+			return m, nil
+		}
+		if (msg.Button == tea.MouseButtonLeft || msg.Type == tea.MouseLeft) && msg.Action != tea.MouseActionRelease {
+			if msg.Y == 0 {
+				modelStart := 7 + 1 + 9 + 1 // brand(7) + " " + modeBadge(9) + " " = 18
+				modelEnd := modelStart + VisualLen(m.modelName) + 2
+				if msg.X >= modelStart && msg.X <= modelEnd {
+					m.openModelsModal()
+					return m, nil
+				}
+			}
+			if m.showChangesColumn() && msg.X >= m.frameWidth()-changesColumnWidth && msg.X < m.frameWidth() {
+				if msg.Y >= 2 && msg.Y < 2+m.viewport.Height {
+					if _, idx, ok := m.changes.FileAtRow(msg.Y - 2); ok {
+						m.openDiffModal(idx)
+						return m, nil
+					}
+				}
+			}
+		}
 		// Mouse-wheel events belong exclusively to the conversation viewport.
 		// Never let them reach the textarea or prompt-history navigation.
 		var viewportCmd tea.Cmd
@@ -627,11 +856,43 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.activeTool = ""
 				m.activeArgs = ""
 				m.changes.Record(m.workingDir, ev.ToolCall.Name, ev.ToolCall.Arguments, ev.ToolCall.Result)
-				previewLines := 4
-				if m.expandedTools {
-					previewLines = 10000
+				if ev.ToolCall.Name == "run_command" {
+					var runArgs struct {
+						Command string `json:"command"`
+					}
+					_ = decodeToolArguments(ev.ToolCall.Arguments, &runArgs)
+					cmdText := runArgs.Command
+					if cmdText == "" {
+						cmdText = m.activeArgs
+					}
+					isErr := strings.HasPrefix(strings.TrimSpace(ev.ToolCall.Result), "Error") ||
+						strings.HasPrefix(strings.TrimSpace(ev.ToolCall.Result), "error")
+					exitCode := 0
+					if isErr {
+						exitCode = 1
+					}
+					maxLines := 15
+					if m.expandedTools {
+						maxLines = 10000
+					}
+					box := FormatTerminalBox(TerminalBoxOptions{
+						Command:     cmdText,
+						Output:      ev.ToolCall.Result,
+						Width:       m.contentWidth(),
+						ExitCode:    exitCode,
+						IsError:     isErr,
+						MaxLines:    maxLines,
+						AgentCalled: true,
+					})
+					m.appendHistory(box + "\n\n")
+				} else {
+					previewLines := 4
+					if m.expandedTools {
+						previewLines = 10000
+					}
+					m.appendHistory(FormatToolResult(ev.ToolCall.Name, ev.ToolCall.Result, previewLines) + "\n\n")
 				}
-				m.appendHistory(FormatToolResult(ev.ToolCall.Name, ev.ToolCall.Result, previewLines) + "\n\n")
+				cmds = append(cmds, m.refreshGitStatusCmd())
 			}
 
 		case EventTokenDelta:
@@ -722,20 +983,53 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusNotice = "Permission required for " + msg.ToolName
 		}
 
+	case teaGitWatchMsg:
+		cmds = append(cmds, m.refreshGitStatusCmd(), m.waitForGitWatch())
+
+	case teaGitRefreshMsg:
+		m.changes.UpdateFromGit(msg.status)
+
 	case teaShellDoneMsg:
 		if msg.ShellCommand {
 			m.shellExecuting = false
 			m.cancelShell = nil
+			exitCode := 0
+			isErr := msg.Err != nil
+			output := msg.Output
+			if isErr {
+				exitCode = 1
+				if output == "" {
+					output = msg.Err.Error()
+				}
+			}
+			cmdToRender := msg.Command
+			if cmdToRender == "" {
+				cmdToRender = "command"
+			}
+			terminalBox := FormatTerminalBox(TerminalBoxOptions{
+				Command:     cmdToRender,
+				Output:      output,
+				Width:       m.contentWidth(),
+				ExitCode:    exitCode,
+				Duration:    msg.Duration,
+				IsError:     isErr,
+				Canceled:    msg.Canceled,
+				MaxLines:    500,
+				AgentCalled: false,
+			})
+			m.appendHistory(terminalBox + "\n\n")
+			cmds = append(cmds, m.refreshGitStatusCmd())
+		} else {
+			if msg.Output != "" {
+				m.appendHistory(msg.Output + "\n")
+			}
+			if msg.Canceled {
+				m.appendHistory(styleMuted.Render("[Command canceled]\n"))
+			} else if msg.Err != nil {
+				m.appendHistory(styleDiffDel.Render(fmt.Sprintf("$ %v\n", msg.Err)))
+			}
+			m.appendHistory("\n")
 		}
-		if msg.Output != "" {
-			m.appendHistory(msg.Output + "\n")
-		}
-		if msg.Canceled {
-			m.appendHistory(styleMuted.Render("[Command canceled]\n"))
-		} else if msg.Err != nil {
-			m.appendHistory(styleDiffDel.Render(fmt.Sprintf("$ %v\n", msg.Err)))
-		}
-		m.appendHistory("\n")
 
 	case teaImageDoneMsg:
 		if msg.Err != nil {
@@ -911,10 +1205,10 @@ func (m *teaModel) handleShellSubmit(cmdStr string) tea.Cmd {
 		return nil
 	}
 
-	m.appendHistory(styleShellBadge.Render("$ "+cmdStr) + "\n")
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelShell = cancel
 	m.shellExecuting = true
+	started := time.Now()
 
 	root := m.workingDir
 	return func() tea.Msg {
@@ -924,10 +1218,12 @@ func (m *teaModel) handleShellSubmit(cmdStr string) tea.Cmd {
 			out = "[earlier output truncated]\n" + out
 		}
 		return teaShellDoneMsg{
+			Command:      cmdStr,
 			Output:       strings.TrimRight(string(out), "\r\n"),
 			Err:          err,
 			ShellCommand: true,
 			Canceled:     ctx.Err() != nil,
+			Duration:     time.Since(started),
 		}
 	}
 }
@@ -942,6 +1238,7 @@ func (m *teaModel) changeWorkingDirectory(path string) error {
 		return err
 	}
 	m.workingDir = newDir
+	m.initGitWatcher()
 	m.permissionController().SetWorkspace(newDir)
 	m.checkpointMgr = NewCheckpointManager(newDir)
 	m.rules = DiscoverWorkspaceRules(newDir)
@@ -997,7 +1294,76 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 			m.statusNotice = "Engaged Shell Mode."
 			return m.clearStatusAfter(2 * time.Second)
 
+		case "/changes":
+			if len(m.changes.files) == 0 {
+				m.statusNotice = "No modified files in session or working tree."
+				return m.clearStatusAfter(2 * time.Second)
+			}
+			targetIdx := 0
+			if len(parts) > 1 {
+				arg := strings.TrimSpace(inputVal[len(parts[0]):])
+				for i, f := range m.changes.files {
+					if f.Path == arg || strings.HasSuffix(f.Path, arg) {
+						targetIdx = i
+						break
+					}
+				}
+			} else if m.changes.cursor >= 0 && m.changes.cursor < len(m.changes.files) {
+				targetIdx = m.changes.cursor
+			}
+			m.openDiffModal(targetIdx)
+			return nil
+
+		case "/discard", "/revert":
+			m.appendHistory(styleUserPrompt.Render("❯ "+inputVal) + "\n")
+			if !m.checkpointMgr.IsGitRepo() {
+				m.appendHistory(styleMuted.Render("Not a git repository.\n\n"))
+				return nil
+			}
+			if len(parts) < 2 {
+				m.appendHistory(styleMuted.Render("Usage: /discard <file|all> (or press 'x' in the diff modal to discard individual files)\n\n"))
+				return nil
+			}
+			arg := strings.TrimSpace(inputVal[len(parts[0]):])
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if arg == "all" || arg == "." {
+				if err := gitrepo.DiscardAll(ctx, m.workingDir); err != nil {
+					m.appendHistory(styleDiffDel.Render(fmt.Sprintf("Discard error: %v\n\n", err)))
+				} else {
+					m.statusNotice = "✓ Discarded all uncommitted changes."
+					m.appendHistory(styleStatusNotice.Render("✓ Discarded all uncommitted changes across working tree.\n\n"))
+				}
+				return m.refreshGitStatusCmd()
+			}
+
+			matchedPath := arg
+			isUntracked := false
+			for _, f := range m.changes.files {
+				if f.Path == arg || strings.HasSuffix(f.Path, arg) {
+					matchedPath = f.Path
+					isUntracked = f.Status == "?"
+					break
+				}
+			}
+			if err := gitrepo.RemoveFileChanges(ctx, m.workingDir, matchedPath, isUntracked); err != nil {
+				m.appendHistory(styleDiffDel.Render(fmt.Sprintf("Discard error: %v\n\n", err)))
+			} else {
+				m.statusNotice = fmt.Sprintf("✓ Discarded %s.", filepath.Base(matchedPath))
+				m.appendHistory(styleStatusNotice.Render(fmt.Sprintf("✓ Discarded changes in %s.\n\n", matchedPath)))
+			}
+			return m.refreshGitStatusCmd()
+
 		case "/diff":
+			if len(parts) > 1 {
+				arg := strings.TrimSpace(inputVal[len(parts[0]):])
+				for i, f := range m.changes.files {
+					if f.Path == arg || strings.HasSuffix(f.Path, arg) {
+						m.openDiffModal(i)
+						return nil
+					}
+				}
+			}
 			m.appendHistory(styleUserPrompt.Render("❯ /diff") + "\n")
 			if !m.checkpointMgr.IsGitRepo() {
 				m.appendHistory(styleMuted.Render("Not a git repository.\n\n"))
@@ -1029,7 +1395,7 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 			} else {
 				m.appendHistory(styleStatusNotice.Render("Successfully rolled back working tree to pre-turn checkpoint.\n\n"))
 			}
-			return nil
+			return m.refreshGitStatusCmd()
 
 		case "/compact":
 			m.appendHistory(styleUserPrompt.Render("❯ /compact") + "\n")
@@ -1146,8 +1512,8 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 			return nil
 
 		case "/model", "/models":
-			m.appendHistory(styleUserPrompt.Render("❯ "+inputVal) + "\n")
 			if len(parts) > 1 && parts[1] != "list" {
+				m.appendHistory(styleUserPrompt.Render("❯ "+inputVal) + "\n")
 				matched := m.settings.FindModel(parts[1])
 				if matched == nil {
 					m.appendHistory(styleDiffDel.Render(fmt.Sprintf("Model %q is not configured. Use /models to list available models.\n\n", parts[1])))
@@ -1163,11 +1529,7 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 				m.appendHistory(styleStatusNotice.Render(fmt.Sprintf("Active model: %s (%s)\nEndpoint: %s", matched.ID, matched.Name, matched.URL)) + "\n\n")
 				return m.clearStatusAfter(2 * time.Second)
 			}
-			if m.settings != nil && len(m.settings.Models) > 0 {
-				m.appendHistory(FormatModelsTable(m.settings.Models, m.modelName, m.configPath) + "\n\n")
-			} else {
-				m.appendHistory(styleMuted.Render("No models configured. Usage: /model <name>\n\n"))
-			}
+			m.openModelsModal()
 			return nil
 
 		case "/ps":
@@ -1220,7 +1582,7 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 				return nil
 			}
 			m.appendHistory(styleStatusNotice.Render(fmt.Sprintf("Working directory changed to %s (%d rules discovered)\n\n", m.workingDir, len(m.rules))))
-			return m.clearStatusAfter(2 * time.Second)
+			return tea.Batch(m.clearStatusAfter(2*time.Second), m.refreshGitStatusCmd(), m.waitForGitWatch())
 		}
 	}
 
@@ -1379,6 +1741,53 @@ func (m *teaModel) selectSkillFromModal() {
 	m.input.CursorEnd()
 }
 
+func (m *teaModel) openModelsModal() {
+	if m.settings == nil || len(m.settings.Models) == 0 {
+		m.statusNotice = "No models configured in config.json."
+		return
+	}
+	m.modelsModal = true
+	m.modelCursor = 0
+	for i, mdl := range m.settings.Models {
+		if strings.EqualFold(mdl.ID, m.modelName) {
+			m.modelCursor = i
+			break
+		}
+	}
+	m.input.Blur()
+}
+
+func (m *teaModel) closeModelsModal() {
+	m.modelsModal = false
+	m.input.Focus()
+}
+
+func (m *teaModel) selectModelFromModal() {
+	if m.settings == nil || m.modelCursor < 0 || m.modelCursor >= len(m.settings.Models) {
+		m.closeModelsModal()
+		return
+	}
+	selected := &m.settings.Models[m.modelCursor]
+	m.closeModelsModal()
+
+	if strings.EqualFold(selected.ID, m.modelName) {
+		m.statusNotice = fmt.Sprintf("Model is already active: %s", selected.ID)
+		return
+	}
+
+	if err := m.runner.SwitchModel(selected); err != nil {
+		m.statusNotice = fmt.Sprintf("Could not switch model: %v", err)
+		m.appendHistory(styleDiffDel.Render(fmt.Sprintf("Could not switch model: %v\n\n", err)))
+		return
+	}
+
+	m.modelName = selected.ID
+	_ = m.saveSession()
+	m.statusNotice = fmt.Sprintf("✓ Switched active model to %s", selected.ID)
+	m.appendHistory(styleStatusNotice.Render(fmt.Sprintf("✓ Switched active model to %s (%s)\nEndpoint: %s",
+		selected.ID, selected.Name, selected.URL)) + "\n\n")
+}
+
 // compactionConfig sizes compaction against the active model's context window.
 // Read through this rather than caching: /model and /dir both change the answer.
 func (m *teaModel) compactionConfig() CompactionConfig {
@@ -1493,6 +1902,425 @@ func (m *teaModel) renderSkillsModal() string {
 		lipgloss.WithWhitespaceBackground(tuiColorDarkBg))
 }
 
+func (m *teaModel) renderModelsModal() string {
+	width, height := m.width, m.height
+	if width < 1 {
+		width = 80
+	}
+	if height < 1 {
+		height = 24
+	}
+	contentWidth := width - 8
+	if contentWidth > 110 {
+		contentWidth = 110
+	}
+	if contentWidth < 40 {
+		contentWidth = 40
+	}
+
+	models := []config.ModelEndpoint{}
+	if m.settings != nil {
+		models = m.settings.Models
+	}
+
+	header := fmt.Sprintf("MODELS · %d configured", len(models))
+	lines := []string{styleAgentBadge.Render(header), ""}
+
+	if len(models) == 0 {
+		lines = append(lines, styleMuted.Render("No models configured in config.json."))
+	} else {
+		visibleRows := (height - 8) / 2
+		if visibleRows < 1 {
+			visibleRows = 1
+		}
+		start := m.modelCursor - visibleRows/2
+		if start < 0 {
+			start = 0
+		}
+		if maxStart := len(models) - visibleRows; start > maxStart && maxStart > 0 {
+			start = maxStart
+		}
+		end := start + visibleRows
+		if end > len(models) {
+			end = len(models)
+		}
+
+		for i := start; i < end; i++ {
+			mdl := models[i]
+			isActive := strings.EqualFold(mdl.ID, m.modelName)
+			isSelected := i == m.modelCursor
+
+			activeIndicator := styleMuted.Render("○ ")
+			if isActive {
+				activeIndicator = ColorGreen("● ")
+			}
+
+			idStr := ColorBrightWhite(StyleBold(mdl.ID))
+			if isSelected {
+				idStr = ColorCyan(StyleBold(mdl.ID))
+			}
+
+			activeTag := ""
+			if isActive {
+				activeTag = " " + styleStatusNotice.Render("(Active)")
+			}
+
+			nameStr := ""
+			if mdl.Name != "" && !strings.EqualFold(mdl.Name, mdl.ID) {
+				nameStr = styleMuted.Render(" · " + mdl.Name)
+			}
+
+			prefix := "  "
+			if isSelected {
+				prefix = ColorCyan(StyleBold("› "))
+			}
+
+			row1 := prefix + activeIndicator + idStr + nameStr + activeTag
+
+			var details []string
+			if mdl.Provider != "" {
+				details = append(details, fmt.Sprintf("Provider: %s", mdl.Provider))
+			}
+			if mdl.URL != "" {
+				details = append(details, fmt.Sprintf("URL: %s", mdl.URL))
+			}
+			if mdl.ContextWindow > 0 {
+				details = append(details, fmt.Sprintf("Ctx: %s tok", compactCount(mdl.ContextWindow)))
+			}
+			detailStr := "    " + styleMuted.Render(strings.Join(details, " · "))
+
+			lines = append(lines, clampToWidth(row1, contentWidth-2))
+			if len(details) > 0 {
+				lines = append(lines, clampToWidth(detailStr, contentWidth-2))
+			}
+			if i < end-1 {
+				lines = append(lines, "")
+			}
+		}
+	}
+
+	footer := "↑/↓ or j/k: Navigate · Enter: Select & Switch · Esc/q: Cancel"
+	if len(models) == 0 {
+		footer = "Esc/q: Close"
+	}
+	lines = append(lines, "", styleMuted.Render(footer))
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(tuiColorCyan).
+		Background(tuiColorCardBg).
+		Padding(0, 1).
+		Width(contentWidth).
+		Render(strings.Join(lines, "\n"))
+
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box,
+		lipgloss.WithWhitespaceBackground(tuiColorDarkBg))
+}
+
+func (m *teaModel) openDiffModal(fileIdx int) {
+	if len(m.changes.files) == 0 {
+		m.statusNotice = "No modified files to inspect."
+		return
+	}
+	if fileIdx < 0 {
+		fileIdx = 0
+	}
+	if fileIdx >= len(m.changes.files) {
+		fileIdx = len(m.changes.files) - 1
+	}
+
+	m.diffModal = true
+	m.diffConfirmDiscard = false
+	m.diffCursor = fileIdx
+	m.changes.SetCursor(fileIdx)
+	f := m.changes.files[fileIdx]
+	m.diffPath = f.Path
+	m.diffStaged = f.Staged
+
+	diffText := ""
+	if m.checkpointMgr.IsGitRepo() {
+		if f.Status == "?" {
+			fullPath := filepath.Join(m.workingDir, filepath.FromSlash(f.Path))
+			if data, err := os.ReadFile(fullPath); err == nil {
+				diffText = FormatUntrackedAsDiff(f.Path, string(data))
+			} else {
+				diffText = fmt.Sprintf("Error reading untracked file %s: %v", f.Path, err)
+			}
+		} else {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			dt, err := gitrepo.Diff(ctx, m.workingDir, f.Path, m.diffStaged)
+			cancel()
+			if err != nil {
+				diffText = fmt.Sprintf("Diff error: %v", err)
+			} else {
+				diffText = dt
+			}
+		}
+	} else {
+		diffText = fmt.Sprintf("File: %s\nAdded: +%d lines\nRemoved: -%d lines", f.Path, f.Added, f.Removed)
+	}
+
+	if strings.TrimSpace(diffText) == "" {
+		if m.diffStaged {
+			diffText = "No staged diff for this file. Press 'd' to view unstaged changes."
+		} else {
+			diffText = "No diff detected for this file."
+		}
+	}
+
+	highlighted := HighlightDiff(diffText)
+
+	width := m.width
+	if width < 1 {
+		width = 80
+	}
+	height := m.height
+	if height < 1 {
+		height = 24
+	}
+
+	modalWidth := width - 6
+	if modalWidth > 120 {
+		modalWidth = 120
+	}
+	if modalWidth < 40 {
+		modalWidth = 40
+	}
+	modalHeight := height - 4
+	if modalHeight < 10 {
+		modalHeight = 10
+	}
+	vpWidth := modalWidth - 4
+	vpHeight := modalHeight - 7
+	if vpHeight < 3 {
+		vpHeight = 3
+	}
+
+	m.diffViewport = viewport.New(vpWidth, vpHeight)
+	m.diffViewport.SetContent(highlighted)
+	m.diffViewport.GotoTop()
+	m.diffReady = true
+	m.input.Blur()
+}
+
+func (m *teaModel) closeDiffModal() {
+	m.diffModal = false
+	m.diffReady = false
+	m.diffConfirmDiscard = false
+	m.changes.SetCursor(-1)
+	m.input.Focus()
+}
+
+func (m *teaModel) nextDiffFile() {
+	if len(m.changes.files) <= 1 {
+		return
+	}
+	next := (m.diffCursor + 1) % len(m.changes.files)
+	m.openDiffModal(next)
+}
+
+func (m *teaModel) prevDiffFile() {
+	if len(m.changes.files) <= 1 {
+		return
+	}
+	prev := (m.diffCursor - 1 + len(m.changes.files)) % len(m.changes.files)
+	m.openDiffModal(prev)
+}
+
+func (m *teaModel) toggleStageCurrentFile() {
+	if !m.checkpointMgr.IsGitRepo() || m.diffCursor < 0 || m.diffCursor >= len(m.changes.files) {
+		return
+	}
+	f := m.changes.files[m.diffCursor]
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if f.Staged {
+		_ = gitrepo.Unstage(ctx, m.workingDir, []string{f.Path})
+		m.statusNotice = "Unstaged " + filepath.Base(f.Path)
+	} else {
+		_ = gitrepo.Stage(ctx, m.workingDir, []string{f.Path})
+		m.statusNotice = "Staged " + filepath.Base(f.Path)
+	}
+
+	if status, err := gitrepo.GetRepoStatus(ctx, m.workingDir); err == nil {
+		m.changes.UpdateFromGit(status)
+	}
+	if m.diffCursor >= len(m.changes.files) {
+		m.diffCursor = len(m.changes.files) - 1
+	}
+	if m.diffCursor >= 0 {
+		m.openDiffModal(m.diffCursor)
+	} else {
+		m.closeDiffModal()
+	}
+}
+
+func (m *teaModel) toggleDiffStaged() {
+	m.diffStaged = !m.diffStaged
+	if m.diffCursor >= 0 && m.diffCursor < len(m.changes.files) {
+		f := m.changes.files[m.diffCursor]
+		diffText := ""
+		if m.checkpointMgr.IsGitRepo() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			dt, err := gitrepo.Diff(ctx, m.workingDir, f.Path, m.diffStaged)
+			cancel()
+			if err != nil {
+				diffText = fmt.Sprintf("Diff error: %v", err)
+			} else {
+				diffText = dt
+			}
+		}
+		if strings.TrimSpace(diffText) == "" {
+			if m.diffStaged {
+				diffText = "No staged diff for this file. Press 'd' to toggle back."
+			} else {
+				diffText = "No unstaged diff for this file. Press 'd' to toggle back."
+			}
+		}
+		m.diffViewport.SetContent(HighlightDiff(diffText))
+		m.diffViewport.GotoTop()
+	}
+}
+
+func (m *teaModel) discardCurrentFile() {
+	if m.diffCursor < 0 || m.diffCursor >= len(m.changes.files) {
+		return
+	}
+	f := m.changes.files[m.diffCursor]
+	fileName := filepath.Base(f.Path)
+
+	if m.checkpointMgr.IsGitRepo() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		isUntracked := f.Status == "?"
+		if err := gitrepo.RemoveFileChanges(ctx, m.workingDir, f.Path, isUntracked); err != nil {
+			m.statusNotice = fmt.Sprintf("Discard failed: %v", err)
+			return
+		}
+		if status, err := gitrepo.GetRepoStatus(ctx, m.workingDir); err == nil {
+			m.changes.UpdateFromGit(status)
+		} else {
+			m.changes.RemoveFile(f.Path)
+		}
+	} else {
+		fullPath := filepath.Join(m.workingDir, filepath.FromSlash(f.Path))
+		_ = os.Remove(fullPath)
+		m.changes.RemoveFile(f.Path)
+	}
+
+	if len(m.changes.files) == 0 {
+		m.closeDiffModal()
+		m.statusNotice = fmt.Sprintf("✓ Discarded %s. Working tree clean.", fileName)
+		return
+	}
+
+	if m.diffCursor >= len(m.changes.files) {
+		m.diffCursor = len(m.changes.files) - 1
+	}
+	m.openDiffModal(m.diffCursor)
+	m.statusNotice = fmt.Sprintf("✓ Discarded %s.", fileName)
+}
+
+func (m *teaModel) renderDiffModal() string {
+	width, height := m.width, m.height
+	if width < 1 {
+		width = 80
+	}
+	if height < 1 {
+		height = 24
+	}
+
+	modalWidth := width - 6
+	if modalWidth > 120 {
+		modalWidth = 120
+	}
+	if modalWidth < 40 {
+		modalWidth = 40
+	}
+	modalHeight := height - 4
+	if modalHeight < 10 {
+		modalHeight = 10
+	}
+
+	vpWidth := modalWidth - 4
+	vpHeight := modalHeight - 7
+	if vpHeight < 3 {
+		vpHeight = 3
+	}
+	if m.diffViewport.Width != vpWidth || m.diffViewport.Height != vpHeight {
+		m.diffViewport.Width = vpWidth
+		m.diffViewport.Height = vpHeight
+	}
+
+	badge := styleDiffHdr.Render("[Modified]")
+	if m.diffCursor >= 0 && m.diffCursor < len(m.changes.files) {
+		f := m.changes.files[m.diffCursor]
+		if f.Staged {
+			badge = styleDiffAdd.Render("[Staged]")
+		} else if f.Status == "?" {
+			badge = styleMuted.Render("[Untracked]")
+		} else if f.Status == "D" {
+			badge = styleDiffDel.Render("[Deleted]")
+		}
+	}
+
+	counter := ""
+	if total := len(m.changes.files); total > 0 {
+		counter = fmt.Sprintf(" · File %d of %d", m.diffCursor+1, total)
+	}
+
+	pathHeader := ColorBrightWhite(StyleBold(m.diffPath))
+	titleRow := fmt.Sprintf("%s  %s%s", badge, pathHeader, styleMuted.Render(counter))
+
+	var queueItems []string
+	for i, cf := range m.changes.files {
+		marker := "M"
+		if cf.Staged {
+			marker = "S"
+		} else if cf.Status == "?" {
+			marker = "?"
+		} else if cf.Status == "D" {
+			marker = "D"
+		}
+		item := fmt.Sprintf("[%s] %s", marker, filepath.Base(cf.Path))
+		if i == m.diffCursor {
+			queueItems = append(queueItems, ColorCyan(StyleBold("› "+item)))
+		} else {
+			queueItems = append(queueItems, ColorGray(item))
+		}
+	}
+	queueRow := styleMuted.Render("Queue: ") + strings.Join(queueItems, "  ")
+	queueRow = clampToWidth(queueRow, vpWidth)
+
+	legend := "n/p: Next/Prev  •  s: Stage/Unstage  •  d: Toggle Staged  •  x: Discard  •  Esc/q: Close"
+	if m.diffConfirmDiscard {
+		legend = ColorRed(StyleBold("⚠️  Discard all changes in " + filepath.Base(m.diffPath) + "?  [y] Confirm   [n/Esc] Cancel"))
+	} else {
+		legend = styleMuted.Render(legend)
+	}
+
+	lines := []string{
+		titleRow,
+		queueRow,
+		legend,
+		styleMuted.Render(strings.Repeat("─", vpWidth)),
+		m.diffViewport.View(),
+	}
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(tuiColorCyan).
+		Background(tuiColorCardBg).
+		Padding(0, 1).
+		Width(modalWidth).
+		Render(strings.Join(lines, "\n"))
+
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box,
+		lipgloss.WithWhitespaceBackground(tuiColorDarkBg))
+}
+
+
 func truncateText(value string, width int) string {
 	if width <= 0 {
 		return ""
@@ -1511,6 +2339,12 @@ func truncateText(value string, width int) string {
 func (m *teaModel) View() string {
 	if !m.ready {
 		return "Initializing fastllm..."
+	}
+	if m.diffModal {
+		return m.renderDiffModal()
+	}
+	if m.modelsModal {
+		return m.renderModelsModal()
 	}
 	if m.skillsModal {
 		return m.renderSkillsModal()

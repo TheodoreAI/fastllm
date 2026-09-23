@@ -158,3 +158,71 @@ func TestShellPromptAndHelp(t *testing.T) {
 	// Ensure ClearScreen does not panic
 	ClearScreen()
 }
+
+func TestFormatTerminalBox(t *testing.T) {
+	// 1. Success execution
+	out := FormatTerminalBox(TerminalBoxOptions{
+		Command:     "git push origin main",
+		Output:      "Everything up-to-date",
+		Width:       60,
+		ExitCode:    0,
+		Duration:    350 * time.Millisecond,
+		AgentCalled: false,
+	})
+	plain := StripANSI(out)
+	if !strings.Contains(plain, "terminal") {
+		t.Errorf("expected 'terminal' header in box:\n%s", plain)
+	}
+	if !strings.Contains(plain, "git push origin main") {
+		t.Errorf("expected command line in box:\n%s", plain)
+	}
+	if !strings.Contains(plain, "Everything up-to-date") {
+		t.Errorf("expected output in box:\n%s", plain)
+	}
+	if !strings.Contains(plain, "exit 0") || !strings.Contains(plain, "350ms") {
+		t.Errorf("expected exit status and duration in box footer:\n%s", plain)
+	}
+
+	// 2. Error execution
+	errOut := FormatTerminalBox(TerminalBoxOptions{
+		Command:     "go test ./...",
+		Output:      "FAIL",
+		Width:       60,
+		ExitCode:    1,
+		IsError:     true,
+		Duration:    1200 * time.Millisecond,
+		AgentCalled: true,
+	})
+	errPlain := StripANSI(errOut)
+	if !strings.Contains(errPlain, "agent") {
+		t.Errorf("expected 'agent' in header for agent tool:\n%s", errPlain)
+	}
+	if !strings.Contains(errPlain, "exit 1") {
+		t.Errorf("expected 'exit 1' in footer:\n%s", errPlain)
+	}
+
+	// 3. Canceled execution
+	cancelOut := FormatTerminalBox(TerminalBoxOptions{
+		Command:  "sleep 10",
+		Width:    50,
+		Canceled: true,
+	})
+	cancelPlain := StripANSI(cancelOut)
+	if !strings.Contains(cancelPlain, "canceled") {
+		t.Errorf("expected 'canceled' in box:\n%s", cancelPlain)
+	}
+
+	// 4. Truncated output
+	multiLines := strings.Repeat("line\n", 50)
+	truncOut := FormatTerminalBox(TerminalBoxOptions{
+		Command:  "cat bigfile",
+		Output:   multiLines,
+		Width:    60,
+		MaxLines: 5,
+	})
+	truncPlain := StripANSI(truncOut)
+	if !strings.Contains(truncPlain, "more lines") {
+		t.Errorf("expected 'more lines' truncation hint:\n%s", truncPlain)
+	}
+}
+
