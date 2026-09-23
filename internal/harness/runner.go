@@ -2,22 +2,19 @@ package harness
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"time"
 
 	"fastllm/internal/config"
+	"fastllm/internal/execution"
 	"fastllm/internal/files"
 	"fastllm/internal/gitrepo"
 	"fastllm/internal/llm"
@@ -51,6 +48,7 @@ type Runner struct {
 	// constructed without settings (tests, embedders) working unchanged.
 	ContextBudgetChars int
 	agents             *AgentManager
+	executions         *execution.Manager
 }
 
 // compactionConfig returns the runner's budget, preferring a window-derived one.
@@ -138,6 +136,7 @@ func NewRunner(llmClient LLMClient, defaultWorkingDir, defaultModel string) *Run
 		CommandTimeout:    60 * time.Second,
 	}
 	r.agents = NewAgentManager(r, 3, 2)
+	r.executions = execution.NewManager()
 	return r
 }
 
@@ -147,6 +146,9 @@ func NewRunner(llmClient LLMClient, defaultWorkingDir, defaultModel string) *Run
 func (r *Runner) Close() {
 	if r != nil {
 		r.agents.Close()
+		if r.executions != nil {
+			_ = r.executions.Close(context.Background())
+		}
 	}
 }
 
@@ -220,6 +222,19 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 	req.Model = model
 	req.AllowCommands = allowCmds
 	req.CommandsConfigured = true
+	owner := r.executions
+	if owner == nil {
+		owner = execution.NewManager()
+		defer owner.Close(context.Background())
+	}
+	scope, err := owner.Open(ctx, execution.Options{Workspace: absWorkingDir, Policy: executionPolicy(req, allowCmds), Timeout: cmdTimeout, MaxOutputBytes: 64 * 1024})
+	if err != nil {
+		return nil, err
+	}
+	defer scope.Close(context.Background())
+	ctx = execution.WithScope(ctx, scope)
+	absWorkingDir = scope.Workspace()
+	req.WorkingDir = absWorkingDir
 
 	systemPrompt := req.SystemPrompt
 	if strings.TrimSpace(systemPrompt) == "" {
@@ -233,13 +248,13 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 	}
 
 	// Initialize git checkpoint manager and capture initial state
-	checkpointMgr := NewCheckpointManager(absWorkingDir)
+	checkpointMgr := NewCheckpointManager(absWorkingDir, scope)
 	if checkpointMgr.IsGitRepo() {
 		_, _ = checkpointMgr.CreateCheckpoint(ctx, "task-start: "+req.Task)
 	}
 
 	// Initialize background process manager
-	processMgr := NewProcessManager()
+	processMgr := NewProcessManager(scope)
 	defer processMgr.KillAll()
 	var observationStore *ObservationStore
 	if r.EnableObservations {
@@ -763,85 +778,10 @@ func compileGlob(glob string) (*regexp.Regexp, error) {
 }
 
 func (r *Runner) executeRunCommand(ctx context.Context, root, command string, timeout time.Duration) string {
-	if strings.TrimSpace(command) == "" {
-		return "Error: command is required."
-	}
-
-	ctxTimeout, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.CommandContext(ctxTimeout, "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command)
-	} else {
-		cmd = exec.CommandContext(ctxTimeout, "sh", "-c", command)
-	}
-	cmd.Dir = root
-	cmd.Env = SanitizedEnvironment()
-
-	var outBuf bytes.Buffer
-	cmd.Stdout = &outBuf
-	cmd.Stderr = &outBuf
-
-	runErr := cmd.Run()
-
-	output := outBuf.String()
-	const maxOutputBytes = 64 * 1024
-	if len(output) > maxOutputBytes {
-		output = output[:maxOutputBytes] + "\n\n[output truncated to 64KB]"
-	}
-
-	if ctxTimeout.Err() == context.DeadlineExceeded {
-		return fmt.Sprintf("Command timed out after %v.\nOutput so far:\n%s", timeout, output)
-	}
-
-	exitCode := 0
-	if runErr != nil {
-		exitCode = 1
-		var exitErr *exec.ExitError
-		if errors.As(runErr, &exitErr) {
-			exitCode = exitErr.ExitCode()
-		}
-		return fmt.Sprintf("Exit code: %d (Error: %v)\nOutput:\n%s", exitCode, runErr, output)
-	}
-
-	return fmt.Sprintf("Exit code: 0\nOutput:\n%s", output)
+	return r.executeCommand(ctx, root, command, timeout, false)
 }
-
 func (r *Runner) executeRunCommandLive(ctx context.Context, root, command string, timeout time.Duration) string {
-	if strings.TrimSpace(command) == "" {
-		return "Error: command is required."
-	}
-	ctxTimeout, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.CommandContext(ctxTimeout, "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command)
-	} else {
-		cmd = exec.CommandContext(ctxTimeout, "sh", "-c", command)
-	}
-	cmd.Dir = root
-	cmd.Env = SanitizedEnvironment()
-	var buffer bytes.Buffer
-	writer := io.MultiWriter(os.Stdout, &buffer)
-	cmd.Stdout, cmd.Stderr = writer, writer
-	runErr := cmd.Run()
-	output := buffer.String()
-	if len(output) > 64*1024 {
-		output = output[:64*1024] + "\n\n[output truncated to 64KB]"
-	}
-	if ctxTimeout.Err() == context.DeadlineExceeded {
-		return fmt.Sprintf("Command timed out after %v.\nOutput so far:\n%s", timeout, output)
-	}
-	if runErr != nil {
-		exitCode := 1
-		var exitErr *exec.ExitError
-		if errors.As(runErr, &exitErr) {
-			exitCode = exitErr.ExitCode()
-		}
-		return fmt.Sprintf("Exit code: %d (Error: %v)\nOutput:\n%s", exitCode, runErr, output)
-	}
-	return fmt.Sprintf("Exit code: 0\nOutput:\n%s", output)
+	return r.executeCommand(ctx, root, command, timeout, true)
 }
 
 func (r *Runner) executeFollowUp(ctx context.Context, root, mutationResult string, followUp *FollowUpCommand, defaultTimeout time.Duration, allowCommands, live bool) string {

@@ -1,6 +1,6 @@
 //go:build !windows
 
-package harness
+package execution
 
 import (
 	"errors"
@@ -9,9 +9,9 @@ import (
 	"syscall"
 )
 
-func configureCommandTreeCancellation(cmd *exec.Cmd) {
+func configureProcess(cmd *exec.Cmd) (func(), func() error, error) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
+	kill := func() error {
 		if cmd.Process == nil {
 			return os.ErrProcessDone
 		}
@@ -21,4 +21,6 @@ func configureCommandTreeCancellation(cmd *exec.Cmd) {
 		}
 		return err
 	}
+	cmd.Cancel = kill
+	return func() { _ = kill() }, func() error { return nil }, nil
 }

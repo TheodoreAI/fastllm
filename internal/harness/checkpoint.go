@@ -1,10 +1,9 @@
 package harness
 
 import (
-	"bytes"
 	"context"
+	"fastllm/internal/execution"
 	"fmt"
-	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -22,24 +21,41 @@ type Checkpoint struct {
 // CheckpointManager manages git snapshots and rollbacks for a working directory.
 type CheckpointManager struct {
 	mu          sync.Mutex
+	scope       *execution.Scope
 	workingDir  string
 	checkpoints []Checkpoint
 }
 
 // NewCheckpointManager creates a new CheckpointManager for the specified directory.
-func NewCheckpointManager(workingDir string) *CheckpointManager {
+func NewCheckpointManager(workingDir string, scopes ...*execution.Scope) *CheckpointManager {
+	var scope *execution.Scope
+	if len(scopes) > 0 {
+		scope = scopes[0]
+	}
 	return &CheckpointManager{
+		scope:       scope,
 		workingDir:  workingDir,
 		checkpoints: make([]Checkpoint, 0),
 	}
 }
 
 // IsGitRepo checks whether the working directory is inside a Git repository.
+func (cm *CheckpointManager) git(ctx context.Context, args ...string) (string, error) {
+	if cm.scope != nil {
+		ctx = execution.WithScope(ctx, cm.scope)
+	}
+	result, err := execution.RunLocal(ctx, cm.workingDir, execution.LocalPolicy(), execution.Command{Executable: "git", Args: args})
+	if err != nil {
+		return "", err
+	}
+	if result.Truncated {
+		return "", fmt.Errorf("git output exceeded capture limit")
+	}
+	return result.Output, result.Err()
+}
 func (cm *CheckpointManager) IsGitRepo() bool {
-	cmd := exec.Command("git", "rev-parse", "--is-inside-work-tree")
-	cmd.Dir = cm.workingDir
-	out, err := cmd.Output()
-	return err == nil && strings.TrimSpace(string(out)) == "true"
+	out, err := cm.git(context.Background(), "rev-parse", "--is-inside-work-tree")
+	return err == nil && strings.TrimSpace(out) == "true"
 }
 
 // CreateCheckpoint creates a new snapshot point of the repository state.
@@ -52,9 +68,7 @@ func (cm *CheckpointManager) CreateCheckpoint(ctx context.Context, label string)
 	}
 
 	// 1. Get current HEAD commit hash
-	cmdHead := exec.CommandContext(ctx, "git", "rev-parse", "HEAD")
-	cmdHead.Dir = cm.workingDir
-	headOut, err := cmdHead.Output()
+	headOut, err := cm.git(ctx, "rev-parse", "HEAD")
 	headCommit := strings.TrimSpace(string(headOut))
 	if err != nil {
 		headCommit = "initial"
@@ -62,9 +76,10 @@ func (cm *CheckpointManager) CreateCheckpoint(ctx context.Context, label string)
 
 	// 2. Create a stash commit without touching working tree
 	// git stash create creates a commit in objects/ representing dirty state
-	cmdStash := exec.CommandContext(ctx, "git", "stash", "create")
-	cmdStash.Dir = cm.workingDir
-	stashOut, _ := cmdStash.Output()
+	stashOut, stashErr := cm.git(ctx, "stash", "create")
+	if stashErr != nil && headCommit != "initial" {
+		return nil, stashErr
+	}
 	stashHash := strings.TrimSpace(string(stashOut))
 
 	id := fmt.Sprintf("cp-%d", time.Now().UnixNano())
@@ -112,27 +127,21 @@ func (cm *CheckpointManager) Rollback(ctx context.Context, id string) error {
 
 	// Reset tracked files to HEAD
 	if target.Commit != "" && target.Commit != "initial" {
-		resetCmd := exec.CommandContext(ctx, "git", "reset", "--hard", target.Commit)
-		resetCmd.Dir = cm.workingDir
-		if out, err := resetCmd.CombinedOutput(); err != nil {
+		if out, err := cm.git(ctx, "reset", "--hard", target.Commit); err != nil {
 			return fmt.Errorf("git reset --hard failed: %s: %w", string(out), err)
 		}
 	} else {
-		checkoutCmd := exec.CommandContext(ctx, "git", "checkout", "--", ".")
-		checkoutCmd.Dir = cm.workingDir
-		_ = checkoutCmd.Run()
+		_, _ = cm.git(ctx, "checkout", "--", ".")
 	}
 
 	// Clean untracked files and directories
-	cleanCmd := exec.CommandContext(ctx, "git", "clean", "-fd")
-	cleanCmd.Dir = cm.workingDir
-	_ = cleanCmd.Run()
+	if _, err := cm.git(ctx, "clean", "-fd"); err != nil {
+		return err
+	}
 
 	// If there was a stash at checkpoint time, re-apply it
 	if target.Stash != "" {
-		applyCmd := exec.CommandContext(ctx, "git", "stash", "apply", target.Stash)
-		applyCmd.Dir = cm.workingDir
-		if out, err := applyCmd.CombinedOutput(); err != nil {
+		if out, err := cm.git(ctx, "stash", "apply", target.Stash); err != nil {
 			return fmt.Errorf("git stash apply %s failed: %s: %w", target.Stash, string(out), err)
 		}
 	}
@@ -146,19 +155,14 @@ func (cm *CheckpointManager) Diff(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("directory %q is not a git repository", cm.workingDir)
 	}
 
-	cmd := exec.CommandContext(ctx, "git", "diff", "HEAD")
-	cmd.Dir = cm.workingDir
-	var outBuf bytes.Buffer
-	cmd.Stdout = &outBuf
-	cmd.Stderr = &outBuf
-	_ = cmd.Run()
-
-	diff := outBuf.String()
-
-	// Also check untracked files
-	statusCmd := exec.CommandContext(ctx, "git", "status", "-s")
-	statusCmd.Dir = cm.workingDir
-	statusOut, _ := statusCmd.Output()
+	diff, err := cm.git(ctx, "diff", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	statusOut, err := cm.git(ctx, "status", "-s")
+	if err != nil {
+		return "", err
+	}
 
 	if len(statusOut) > 0 {
 		return fmt.Sprintf("=== Working Tree Status ===\n%s\n=== Diff ===\n%s", string(statusOut), diff), nil

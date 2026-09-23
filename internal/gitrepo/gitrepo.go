@@ -11,11 +11,10 @@
 package gitrepo
 
 import (
-	"bytes"
 	"context"
 	"errors"
+	"fastllm/internal/execution"
 	"fmt"
-	"os/exec"
 	"strconv"
 	"strings"
 )
@@ -24,29 +23,21 @@ import (
 var ErrNotARepo = errors.New("gitrepo: not a git repository")
 
 func run(ctx context.Context, root string, args ...string) (string, error) {
-	cmd := gitCommand(ctx, args...)
-	cmd.Dir = root
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		msg := strings.TrimSpace(stderr.String())
+	result, err := execution.RunLocal(ctx, root, execution.LocalPolicy(), execution.Command{Executable: "git", Args: args})
+	if err != nil {
+		return "", err
+	}
+	if err = result.Err(); err != nil {
+		msg := strings.TrimSpace(result.Stderr)
 		if msg == "" {
 			msg = err.Error()
 		}
 		return "", errors.New(msg)
 	}
-	// A few subcommands (notably `push`) write their meaningful
-	// human-readable output to stderr even on success — git treats it as
-	// progress/diagnostic output, not data, regardless of exit code. Combine
-	// both so callers that want to show "what happened" (e.g. Push) get it,
-	// while callers that parse stdout as structured data (status, ls-files,
-	// diff) are unaffected since those commands' stderr is empty on success.
-	out := stdout.String()
-	if stderr.Len() > 0 {
-		out += stderr.String()
+	if result.Truncated {
+		return "", errors.New("git output exceeded capture limit")
 	}
-	return out, nil
+	return result.Stdout + result.Stderr, nil
 }
 
 // IsRepo reports whether root is inside a git working tree.
@@ -343,27 +334,20 @@ func Search(ctx context.Context, root, query string) ([]SearchMatch, error) {
 	// -n includes line numbers; -F treats query as a literal string,
 	// not a regex, so search input can't be used to inject grep/regex
 	// syntax the user didn't intend.
-	cmd := gitCommand(ctx, "grep", "-n", "-I", "-F", "--untracked", "-e", query)
-	cmd.Dir = root
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	runErr := cmd.Run()
-	if runErr != nil {
-		// git grep exits 1 as a normal "nothing matched" signal (not an
-		// error) and >1 for a real failure — ExitError with code 1 is
-		// the only case to treat as success-with-no-results.
-		var exitErr *exec.ExitError
-		if errors.As(runErr, &exitErr) && exitErr.ExitCode() == 1 {
-			return nil, nil
-		}
-		msg := strings.TrimSpace(stderr.String())
-		if msg == "" {
-			msg = runErr.Error()
-		}
-		return nil, errors.New(msg)
+	result, err := execution.RunLocal(ctx, root, execution.LocalPolicy(), execution.Command{Executable: "git", Args: []string{"grep", "-n", "-I", "-F", "--untracked", "-e", query}})
+	if err != nil {
+		return nil, err
 	}
-	out := stdout.String()
+	if result.Reason == "exit" && result.ExitCode == 1 {
+		return nil, nil
+	}
+	if err = result.Err(); err != nil {
+		return nil, fmt.Errorf("git grep: %w: %s", err, result.Stderr)
+	}
+	if result.Truncated {
+		return nil, errors.New("git search output exceeded capture limit")
+	}
+	out := result.Stdout
 
 	lines := splitLines(out)
 	matches := make([]SearchMatch, 0, min(len(lines), MaxSearchMatches))

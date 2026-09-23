@@ -1,17 +1,13 @@
-// Package buildcheck lets the chat model verify its own proposed file
-// writes before a human reviews them: it copies the sandboxed project
-// into a temp directory, applies the proposed (not-yet-approved) content
-// on top, and runs "go build ./..." there. Nothing in this package ever
-// touches the real sandbox root — it only ever reads from it and writes
-// into a throwaway copy, so a failing or even malicious build check can't
-// affect the user's actual files.
+// Package buildcheck applies proposed edits to scratch copies before compiling.
+// A scratch copy protects against accidental edits, not malicious build/test
+// code. Subprocess admission and lifetime belong to internal/execution.
 package buildcheck
 
 import (
 	"context"
 	"errors"
+	"fastllm/internal/execution"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -66,24 +62,56 @@ type Result struct {
 // should check for that (or catch ErrNoGoModule) before offering the
 // run_build tool to the model at all.
 func Run(ctx context.Context, root string, overlays []Overlay) (Result, error) {
+	if scope := execution.FromContext(ctx); scope != nil {
+		if err := scope.Check(); err != nil {
+			return Result{}, err
+		}
+		if filepath.Clean(root) != filepath.Clean(scope.Workspace()) {
+			return Result{}, errors.New("build root differs from execution workspace")
+		}
+	}
 	scratch, err := scratchCopy(root, overlays)
 	if err != nil {
 		return Result{}, err
 	}
 	defer os.RemoveAll(scratch)
+	if execution.FromContext(ctx) != nil {
+		scope, err := execution.DeriveScratch(ctx, scratch)
+		if err != nil {
+			return Result{}, err
+		}
+		defer scope.Close(context.Background())
+		ctx = execution.WithScope(ctx, scope)
+	}
 	return runGoCommand(ctx, scratch, Timeout, "build", "./...")
 }
 
 // RunTests is Run's counterpart for "go test ./...": same scratch-copy-
-// and-overlay mechanism (never touches the real sandbox root), so the
+// and-overlay mechanism (commands still have local host authority), so the
 // model can check its proposed, not-yet-approved writes against the test
 // suite the same way it can check they compile.
 func RunTests(ctx context.Context, root string, overlays []Overlay) (Result, error) {
+	if scope := execution.FromContext(ctx); scope != nil {
+		if err := scope.Check(); err != nil {
+			return Result{}, err
+		}
+		if filepath.Clean(root) != filepath.Clean(scope.Workspace()) {
+			return Result{}, errors.New("build root differs from execution workspace")
+		}
+	}
 	scratch, err := scratchCopy(root, overlays)
 	if err != nil {
 		return Result{}, err
 	}
 	defer os.RemoveAll(scratch)
+	if execution.FromContext(ctx) != nil {
+		scope, err := execution.DeriveScratch(ctx, scratch)
+		if err != nil {
+			return Result{}, err
+		}
+		defer scope.Close(context.Background())
+		ctx = execution.WithScope(ctx, scope)
+	}
 	return runGoCommand(ctx, scratch, TestTimeout, "test", "./...")
 }
 
@@ -144,11 +172,14 @@ func runGoCommand(ctx context.Context, dir string, timeout time.Duration, args .
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(runCtx, "go", args...)
-	cmd.Dir = dir
-	output, runErr := cmd.CombinedOutput()
-
-	text := string(output)
+	result, runErr := execution.RunLocal(runCtx, dir, execution.LocalPolicy(), execution.Command{Executable: "go", Args: args, Timeout: timeout})
+	if runErr == nil {
+		runErr = result.Err()
+	}
+	text := result.Output
+	if result.Truncated {
+		text += "\n[output truncated]"
+	}
 	if len(text) > MaxOutputBytes {
 		text = text[:MaxOutputBytes] + "\n[output truncated]"
 	}

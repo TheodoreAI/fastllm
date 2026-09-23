@@ -247,7 +247,7 @@ func TestRunFileToolsRunTest(t *testing.T) {
 	defer server.Close()
 
 	router := llm.NewRouter(llm.New(server.URL, "", "test-model", ""), llm.CloudProviderConfig{})
-	h := New(nil, router, files.New(dir, false))
+	h := New(nil, router, files.New(dir, true))
 
 	messages := []llm.Message{{Role: "user", Content: "are tests passing?"}}
 	_, _, testChecks, _ := h.runFileTools(context.Background(), "test-model", &messages, "", 0)

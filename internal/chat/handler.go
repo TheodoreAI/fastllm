@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fastllm/internal/execution"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -401,6 +402,18 @@ func checkWriteFreshness(lastRead map[string]string, path, currentContent string
 
 func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]llm.Message, thinkLevel string, conversationID int64) ([]fileRead, []buildCheckReport, []testCheckReport, bool) {
 	root, writesEnabled := h.Files.Snapshot()
+	if root == "" {
+		return nil, nil, nil, false
+	}
+	owner := execution.NewManager()
+	defer owner.Close(context.Background())
+	scope, err := owner.Open(ctx, execution.Options{Workspace: root, Policy: execution.Policy{Commands: writesEnabled, Write: writesEnabled, Network: true}, Timeout: buildcheck.TestTimeout})
+	if err != nil {
+		return nil, nil, nil, false
+	}
+	ctx = execution.WithScope(ctx, scope)
+	root = scope.Workspace()
+	reader := files.New(root, writesEnabled)
 	_, statErr := os.Stat(filepath.Join(root, "go.mod"))
 	hasGoModule := statErr == nil
 
@@ -414,11 +427,8 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 		if writesEnabled {
 			tools = append(tools, writeFileTool, editFileTool)
 			if hasGoModule {
-				tools = append(tools, runBuildTool)
+				tools = append(tools, runBuildTool, runTestTool)
 			}
-		}
-		if hasGoModule {
-			tools = append(tools, runTestTool)
 		}
 
 		reply, err := h.LLM.Chat(ctx, model, *messages, tools, thinkLevel)
@@ -463,7 +473,7 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 
 				var result string
 				fr := fileRead{Path: args.Path}
-				content, truncated, readErr := h.Files.Read(args.Path)
+				content, truncated, readErr := reader.Read(args.Path)
 				if readErr != nil {
 					fr.Error = readErr.Error()
 					result = "Error reading file: " + readErr.Error()
@@ -497,16 +507,16 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 					result = "Error: file writes are not enabled."
 				} else if len(args.Content) > files.MaxWriteBytes {
 					result = fmt.Sprintf("Error: proposed content is too large (%d bytes, max %d).", len(args.Content), files.MaxWriteBytes)
-				} else if _, err := h.Files.ResolveForWrite(args.Path); err != nil {
+				} else if _, err := reader.ResolveForWrite(args.Path); err != nil {
 					result = "Error: " + err.Error()
 				} else {
-					existing, exists, existingTruncated, _ := h.Files.ExistingContent(args.Path)
+					existing, exists, existingTruncated, _ := reader.ExistingContent(args.Path)
 					if existingTruncated {
 						result = fmt.Sprintf("Error: %q is too large to safely overwrite via write_file.", args.Path)
 					} else if msg := checkWriteFreshness(lastReadHash, args.Path, existing, exists); msg != "" {
 						result = msg
 					} else {
-						if err := h.Files.Write(args.Path, args.Content); err != nil {
+						if err := reader.Write(args.Path, args.Content); err != nil {
 							result = "Error writing file: " + err.Error()
 						} else {
 							lastReadHash[args.Path] = hashContent(args.Content)
@@ -530,10 +540,10 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 				var result string
 				if !writesEnabled {
 					result = "Error: file writes are not enabled."
-				} else if _, err := h.Files.ResolveForWrite(args.Path); err != nil {
+				} else if _, err := reader.ResolveForWrite(args.Path); err != nil {
 					result = "Error: " + err.Error()
 				} else {
-					existing, exists, existingTruncated, _ := h.Files.ExistingContent(args.Path)
+					existing, exists, existingTruncated, _ := reader.ExistingContent(args.Path)
 					if existingTruncated {
 						result = fmt.Sprintf("Error: %q is too large to safely edit via edit_file.", args.Path)
 					} else if !exists {
@@ -550,7 +560,7 @@ func (h *Handler) runFileTools(ctx context.Context, model string, messages *[]ll
 						newContent := strings.Replace(existing, args.Search, args.Replace, 1)
 						if len(newContent) > files.MaxWriteBytes {
 							result = fmt.Sprintf("Error: resulting file would be too large (%d bytes, max %d).", len(newContent), files.MaxWriteBytes)
-						} else if err := h.Files.Write(args.Path, newContent); err != nil {
+						} else if err := reader.Write(args.Path, newContent); err != nil {
 							result = "Error editing file: " + err.Error()
 						} else {
 							lastReadHash[args.Path] = hashContent(newContent)

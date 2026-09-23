@@ -891,10 +891,13 @@ func (m *teaModel) handleShellSubmit(cmdStr string) tea.Cmd {
 	m.cancelShell = cancel
 	m.shellExecuting = true
 
+	root := m.workingDir
 	return func() tea.Msg {
-		cmd := newInteractiveShellCommandContext(ctx, cmdStr)
-		cmd.Dir = m.workingDir
-		out, err := cmd.CombinedOutput()
+		result, err := runUserCommand(ctx, root, cmdStr)
+		out := result.Output
+		if result.Truncated {
+			out = "[earlier output truncated]\n" + out
+		}
 		return teaShellDoneMsg{
 			Output:       strings.TrimRight(string(out), "\r\n"),
 			Err:          err,

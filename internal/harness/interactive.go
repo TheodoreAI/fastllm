@@ -3,12 +3,11 @@ package harness
 import (
 	"context"
 	"encoding/json"
+	"fastllm/internal/execution"
 	"fmt"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -814,13 +813,6 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 			return nil
 		}
 
-		// Save checkpoint before executing agent turns for this user prompt
-		if checkpointMgr.IsGitRepo() {
-			ctxCp, cancelCp := context.WithTimeout(context.Background(), 5*time.Second)
-			_, _ = checkpointMgr.CreateCheckpoint(ctxCp, "turn: "+line)
-			cancelCp()
-		}
-
 		// Add user turn. Skill instructions apply only to this turn and are
 		// removed before the durable session transcript is saved.
 		baseSystemPrompt := sessionMessages[0].Content
@@ -856,6 +848,7 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 			maxTurns,
 			permissions,
 			processMgr,
+			checkpointMgr,
 			&sessionMetrics,
 			&sessionMessages,
 			expandedTools,
@@ -889,6 +882,7 @@ func (r *Runner) runInteractiveTurn(
 	maxTurns int,
 	permissions *PermissionController,
 	processMgr *ProcessManager,
+	checkpointMgr *CheckpointManager,
 	sessionMetrics *SessionMetrics,
 	sessionMessages *[]llm.Message,
 	expandedTools bool,
@@ -896,6 +890,31 @@ func (r *Runner) runInteractiveTurn(
 	observationStore *ObservationStore,
 	compactionCfg CompactionConfig,
 ) {
+	owner := r.executions
+	if owner == nil {
+		owner = execution.NewManager()
+		defer owner.Close(context.Background())
+	}
+	scope, err := owner.Open(ctx, execution.Options{Workspace: absWorkingDir, Policy: executionPolicy(RunRequest{PermissionMode: permissions.Mode}, allowCmds), Timeout: cmdTimeout, MaxOutputBytes: 64 * 1024})
+	if err != nil {
+		fmt.Println("Execution setup failed:", err)
+		return
+	}
+	defer scope.Close(context.Background())
+	ctx = execution.WithScope(ctx, scope)
+	absWorkingDir = scope.Workspace()
+	fileReader = files.New(absWorkingDir, permissions.Mode != PermissionReadOnly)
+	processMgr.KillAll()
+	processMgr.mu.Lock()
+	processMgr.scope = scope
+	processMgr.owner = nil
+	processMgr.processes = make(map[string]trackedProcess)
+	processMgr.mu.Unlock()
+	if scope.Check() == nil {
+		cpCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		_, _ = checkpointMgr.CreateCheckpoint(cpCtx, "interactive turn")
+		cancel()
+	}
 	var planBoundary bool
 	for turn := 1; turn <= maxTurns; turn++ {
 		if ctx.Err() != nil {
@@ -1189,63 +1208,45 @@ func applyModelParameters(client *llm.Client, params map[string]interface{}) {
 
 // runInteractiveCommand executes a shell command with live terminal IO.
 func runInteractiveCommand(dir, command string) error {
-	trimmed := strings.TrimSpace(command)
-	if trimmed == "" {
+	if strings.TrimSpace(command) == "" {
 		return nil
 	}
-
-	cmd := newInteractiveShellCommand(trimmed)
-	cmd.Dir = dir
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	// Intercept interrupt so Ctrl+C cancels the running child command without terminating the fastllm REPL
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(sigChan)
-
-	if err := cmd.Start(); err != nil {
-		fmt.Println(ColorRed(fmt.Sprintf("  %s Command error: %v", SymCross, err)))
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	owner := execution.NewManager()
+	defer owner.Close(context.Background())
+	scope, err := owner.OpenUser(ctx, dir)
+	if err != nil {
 		return err
 	}
-
-	done := make(chan error, 1)
-	go func() {
-		done <- cmd.Wait()
-	}()
-
-	select {
-	case <-sigChan:
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
-		<-done
-		fmt.Println("\n" + ColorYellow("  [Command canceled]"))
-		return nil
-	case err := <-done:
+	process, err := scope.Start(ctx, execution.Command{Shell: command, Stdin: os.Stdin})
+	if err != nil {
+		return err
+	}
+	var cursor uint64
+	for {
+		out, err := process.ReadOutput(ctx, cursor)
 		if err != nil {
-			fmt.Println(ColorRed(fmt.Sprintf("  %s Command exited with error: %v", SymCross, err)))
+			break
 		}
-		return err
-	}
-}
-
-func newInteractiveShellCommand(command string) *exec.Cmd {
-	return newInteractiveShellCommandContext(context.Background(), command)
-}
-
-func newInteractiveShellCommandContext(ctx context.Context, command string) *exec.Cmd {
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command)
-	} else {
-		shell := os.Getenv("SHELL")
-		if shell == "" {
-			shell = "sh"
+		for _, chunk := range out.Chunks {
+			if chunk.Stream == "stderr" {
+				fmt.Fprint(os.Stderr, chunk.Data)
+			} else {
+				fmt.Print(chunk.Data)
+			}
 		}
-		cmd = exec.CommandContext(ctx, shell, "-c", command)
+		cursor = out.Next
+		if out.Done {
+			break
+		}
 	}
-	configureCommandTreeCancellation(cmd)
-	return cmd
+	result, err := process.Wait(ctx)
+	if err == nil {
+		err = result.Err()
+	}
+	if err != nil {
+		fmt.Println(ColorRed(fmt.Sprintf("Command error: %v", err)))
+	}
+	return err
 }
