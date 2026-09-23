@@ -227,7 +227,11 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 		owner = execution.NewManager()
 		defer owner.Close(context.Background())
 	}
-	scope, err := owner.Open(ctx, execution.Options{Workspace: absWorkingDir, Policy: executionPolicy(req, allowCmds), Timeout: cmdTimeout, MaxOutputBytes: 64 * 1024})
+	opts, err := sandboxOptions(owner, execution.Options{Workspace: absWorkingDir, Policy: executionPolicy(req, allowCmds), Timeout: cmdTimeout, MaxOutputBytes: 64 * 1024}, req.Sandbox)
+	if err != nil {
+		return nil, err
+	}
+	scope, err := owner.Open(ctx, opts)
 	if err != nil {
 		return nil, err
 	}

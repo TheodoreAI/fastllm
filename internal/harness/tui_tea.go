@@ -201,6 +201,7 @@ type teaModel struct {
 	commandTimeout    time.Duration
 	thinkLevel        string
 	allowCommands     bool
+	sandbox           bool
 	permissionMode    PermissionMode
 	expandedTools     bool
 	permissions       *PermissionController
@@ -298,6 +299,7 @@ func newTeaModel(runner *Runner, req RunRequest) (*teaModel, error) {
 		commandTimeout: commandTimeout,
 		thinkLevel:     req.ThinkLevel,
 		allowCommands:  req.AllowCommands,
+		sandbox:        req.Sandbox,
 		permissionMode: permissionMode,
 		permissionChan: make(chan teaPermissionRequestMsg),
 	}
@@ -1114,7 +1116,7 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 			m.appendHistory(styleUserPrompt.Render("❯ /status") + "\n")
 			card := FormatStatusCard(m.workingDir, m.modelName, len(m.rules), m.sessionMetrics, m.processMgr)
 			m.appendHistory(card + "\n\n")
-			m.appendHistory(FormatRuntimeCard(m.maxTurns, m.commandTimeout, m.thinkLevel, m.allowCommands, m.permissionMode, m.activeSessionID()) + "\n\n")
+			m.appendHistory(FormatRuntimeCard(m.runtimeSettings(), m.activeSessionID()) + "\n\n")
 			if summary := m.runner.agents.Summary(); summary.Total > 0 {
 				m.appendHistory(FormatCard("Child Agents", strings.Split(m.runner.agents.Status(""), "\n"), 74) + "\n\n")
 			}
@@ -1256,6 +1258,7 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 		ThinkLevel:         m.thinkLevel,
 		AllowCommands:      m.allowCommands,
 		CommandsConfigured: true,
+		Sandbox:            m.sandbox,
 		PermissionMode:     m.permissionMode,
 		InitialMessages:    priorMessages,
 		StreamTokens:       true,

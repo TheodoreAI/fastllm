@@ -116,6 +116,14 @@ func (m *Manager) Register(b Backend) error {
 	return nil
 }
 
+// HasBackend reports whether a backend with this name is registered.
+func (m *Manager) HasBackend(name string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.backends[name]
+	return ok
+}
+
 type Scope struct {
 	mu          sync.Mutex
 	manager     *Manager

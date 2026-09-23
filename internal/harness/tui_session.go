@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"fastllm/internal/execution"
 	"fastllm/internal/llm"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -18,6 +19,7 @@ func (m *teaModel) runtimeSettings() InteractiveRuntime {
 		AllowCommands:  m.allowCommands,
 		PermissionMode: m.permissionMode,
 		ExpandedTools:  m.expandedTools,
+		Sandbox:        m.sandbox,
 	}
 }
 
@@ -78,6 +80,7 @@ func (m *teaModel) loadSession(session *InteractiveSession) error {
 		m.permissionMode = session.Runtime.PermissionMode
 	}
 	m.expandedTools = session.Runtime.ExpandedTools
+	m.sandbox = session.Runtime.Sandbox
 	m.sessionMessages = append([]llm.Message(nil), session.Messages...)
 	m.sessionMetrics = session.Metrics
 	session.ClosedAt = nil
@@ -423,18 +426,18 @@ func (m *teaModel) handleSessionSlash(input string, parts []string, command stri
 
 	case "/set":
 		if len(parts) == 1 {
-			m.appendHistory(FormatRuntimeCard(m.maxTurns, m.commandTimeout, m.thinkLevel, m.allowCommands, m.permissionMode, m.activeSessionID()) + "\n\n")
+			m.appendHistory(FormatRuntimeCard(m.runtimeSettings(), m.activeSessionID()) + "\n\n")
 			return true, nil
 		}
 		if len(parts) < 3 {
-			m.appendHistory(styleMuted.Render("Usage: /set <turns|timeout|think|commands|permissions|output> <value>\n\n"))
+			m.appendHistory(styleMuted.Render("Usage: /set <turns|timeout|think|commands|sandbox|permissions|output> <value>\n\n"))
 			return true, nil
 		}
 		if err := m.setRuntimeValue(parts[1], parts[2]); err != nil {
 			m.appendHistory(styleDiffDel.Render(err.Error() + "\n\n"))
 		} else {
 			_ = m.saveSession()
-			m.appendHistory(FormatRuntimeCard(m.maxTurns, m.commandTimeout, m.thinkLevel, m.allowCommands, m.permissionMode, m.activeSessionID()) + "\n\n")
+			m.appendHistory(FormatRuntimeCard(m.runtimeSettings(), m.activeSessionID()) + "\n\n")
 		}
 		return true, nil
 	}
@@ -471,6 +474,18 @@ func (m *teaModel) setRuntimeValue(name, value string) error {
 			m.allowCommands = false
 		} else {
 			return fmt.Errorf("commands must be on or off")
+		}
+	case "sandbox":
+		if value == "on" {
+			if _, ok := execution.IsolatedBackend(); !ok {
+				return errSandboxUnavailable()
+			}
+			m.sandbox = true
+			m.appendHistory(styleMuted.Render(sandboxFirstUseNotice + "\n\n"))
+		} else if value == "off" {
+			m.sandbox = false
+		} else {
+			return fmt.Errorf("sandbox must be on or off")
 		}
 	case "permissions", "permission":
 		mode, err := ParsePermissionMode(value)

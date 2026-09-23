@@ -2,9 +2,10 @@
 
 FastLLM routes model commands and workspace-triggered subprocesses through a
 trusted broker in `internal/execution`. This is an execution boundary, **not an
-OS sandbox**. The first backend runs locally; an isolated backend is future work.
-Requesting isolation must fail until a backend can enforce it. Never silently
-fall back to local execution.
+OS sandbox** by itself. The default backend runs locally; on Windows an
+AppContainer backend enforces isolation in the kernel. Requesting isolation
+fails wherever no backend can enforce it. Never silently fall back to local
+execution.
 
 ## Authority and workspace
 
@@ -19,10 +20,11 @@ command, write, and network permission before starting any subprocess, including
 Git helpers. Restricted file searches use an in-process fallback; automatic Git
 checkpoints are skipped when execution is prohibited.
 
-File tools and commands must use the same workspace. The local backend exposes
-that canonical workspace to the existing file adapter. A future worker must
-provide a workspace adapter as well as process execution; copying changes back
-must validate paths and detect conflicting host edits.
+File tools and commands must use the same workspace. Both backends expose the
+canonical host workspace to the existing file adapter; the AppContainer backend
+grants its identity access to that tree in place. A worker that copied the
+workspace would also need a workspace adapter, and copying changes back would
+have to validate paths and detect conflicting host edits.
 
 ## Ownership and lifecycle
 
@@ -86,7 +88,7 @@ narrow one. A backend that reports isolation it does not enforce is a defect, so
 Per-scope backend resources are bound to the scope lifetime and released once.
 The local backend owns nothing; an isolated backend owns its worker.
 
-## Local backend and future isolation
+## Local backend
 
 Local execution provides policy admission, canonical working-directory checks,
 bounded output, time/process limits, environment filtering, and process cleanup.
@@ -94,15 +96,57 @@ It cannot prevent an admitted command from opening files outside its workspace,
 using the network, accessing host services, or defeating Unix process-group
 cleanup. Environment filtering is not credential isolation.
 
-A future backend must establish OS filesystem, network, process, and resource
-restrictions before running untrusted code, contain descendants, and preserve
-the same workspace view. The trusted controller keeps LLM credentials and model
-transport outside the worker. Model transport is a separate data policy.
+## Windows AppContainer backend
+
+`appcontainer` is the isolated backend on Windows, built on `golang.org/x/sys`
+with no external runtime. Every command runs under one fixed AppContainer
+identity, `fastllm.sandbox`, holding no capabilities. The kernel checks every
+file open and connection against that identity, so enforcement does not depend
+on fastllm seeing the command's calls after launch. The token is inherited by
+every descendant, and each command runs suspended until it is assigned to a
+kill-on-close Job Object capped at 512 processes.
+
+What it enforces, each verified by a containment test with a local-backend
+control:
+
+- No reads or writes outside the granted trees, including the user profile.
+- No network, loopback included, so host services such as a local model server
+  are unreachable.
+- No descendant outlives its command.
+
+Opening a scope grants the identity full access to the workspace and read access
+to the Go module cache the workspace resolves, which holds any auto-selected
+toolchain. Windows copies an inheritable grant onto every existing file, so the
+first grant on the module cache takes seconds to minutes; later opens detect it.
+Grants persist and are recorded in the identity's own folder, and
+`RevokeIsolatedBackend` removes them and deletes the identity. Scratch state
+(`TEMP`, `GOCACHE`, `HOME`) lives in that folder, not the profile or workspace.
+
+Two platform details are load-bearing. A custom environment block must carry
+`LOCALAPPDATA`, or process creation fails with an unrelated environment error.
+And PowerShell rebuilds its location from the volume root, checking each
+directory; the container cannot read `C:\Users`, so shell commands run from a
+`Workspace:` PowerShell drive rooted at the workspace. `Get-Location` shows
+`Workspace:\`; `$PWD.ProviderPath` and native programs see the real path.
+
+It does not isolate the workspace from the model: whatever a command prints is
+returned to the model, a legitimate channel no sandbox can close. It forwards no
+stdin, sets no memory limit, and exists only on Windows; other platforms
+register no isolated backend, so isolation requests there still fail.
+
+## Future backends
+
+Another backend must establish the same filesystem, network, process, and
+resource restrictions before running untrusted code, contain descendants, and
+preserve the same workspace view. The trusted controller keeps LLM credentials
+and model transport outside the worker. Model transport is a separate data
+policy.
 
 `Scope.Workspace` stays the canonical host path, because file tools read and
 write it directly. A backend that presents a different path to the process must
-map that exact tree, so a bind mount is the shape that keeps one workspace view;
-a copy would reintroduce path validation and host-edit conflict detection.
+map that exact tree; a copy would reintroduce path validation and host-edit
+conflict detection. The AppContainer backend grants access to the tree in place
+rather than copying it.
 
 ## Validation
 
@@ -113,7 +157,16 @@ selection is covered with a recording backend: refusing unknown and unisolated
 backends, refusing an unavailable one without falling back, releasing a backend
 scope exactly once, inheriting backend and trusted-user standing through derived
 scratch scopes, and confirming the backend receives no launch that admission
-should have stopped. An architecture test rejects production subprocess
-constructors outside execution backends and the audited folder picker. Future
-isolation needs adversarial containment tests before it can be advertised as a
-security boundary.
+should have stopped.
+
+The AppContainer backend has adversarial containment tests: reading a secret
+and writing outside the workspace, connecting to a loopback listener, and a
+descendant outliving its command. Each pairs the sandboxed run with the same
+command on the local backend, which must succeed, and all three fail when the
+container attribute is removed. Further tests cover exit codes, stream
+separation, timeout and stop, subdirectory and absolute-path shell use, a Go
+build on the auto-selected toolchain, and grant revocation.
+
+An architecture test rejects every production process constructor, from
+`exec.Command` to `windows.CreateProcess`, outside the execution backends and
+the audited folder picker.

@@ -224,6 +224,8 @@ func (m *AgentManager) Spawn(parent RunRequest, task, requestedDir, model string
 	childReq := RunRequest{
 		Task: task, WorkingDir: workingDir, Model: model, MaxTurns: maxTurns,
 		AllowCommands: parent.AllowCommands, CommandsConfigured: true, CommandTimeout: parent.CommandTimeout,
+		// A child is sandboxed whenever its parent is; it cannot opt out.
+		Sandbox:    parent.Sandbox,
 		ThinkLevel: parent.ThinkLevel, AgentDepth: parent.AgentDepth + 1,
 		AgentInbox: record.inbox, PermissionMode: parent.PermissionMode,
 		Capabilities: opt.Capabilities, NetworkPolicy: opt.NetworkPolicy,
