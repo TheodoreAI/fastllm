@@ -36,6 +36,7 @@ type sessionChanges struct {
 	behind       int
 	latestCommit string
 	files        []fileChange
+	cursor       int
 }
 
 func (c *sessionChanges) Reset() {
@@ -46,6 +47,50 @@ func (c *sessionChanges) Reset() {
 	c.ahead = 0
 	c.behind = 0
 	c.latestCommit = ""
+	c.cursor = -1
+}
+
+func (c *sessionChanges) Cursor() int {
+	return c.cursor
+}
+
+func (c *sessionChanges) SetCursor(idx int) {
+	if idx < 0 || len(c.files) == 0 {
+		c.cursor = -1
+		return
+	}
+	if idx >= len(c.files) {
+		idx = len(c.files) - 1
+	}
+	c.cursor = idx
+}
+
+// HeaderRows returns the number of visual rows used by the header, subheader, and divider.
+func (c *sessionChanges) HeaderRows() int {
+	headerRows := 2 // Title + divider
+	count, _, _ := c.Totals()
+	if c.isGit {
+		hasSubparts := count > 0 || c.ahead > 0 || c.behind > 0 || (c.upstream != "")
+		if hasSubparts {
+			headerRows = 3
+		}
+	} else if count > 0 {
+		headerRows = 3
+	}
+	return headerRows
+}
+
+// FileAtRow returns the fileChange corresponding to a visual row (0-indexed from top of column).
+func (c *sessionChanges) FileAtRow(rowY int) (fileChange, int, bool) {
+	if len(c.files) == 0 {
+		return fileChange{}, -1, false
+	}
+	hdr := c.HeaderRows()
+	fileIdx := rowY - hdr
+	if fileIdx < 0 || fileIdx >= len(c.files) {
+		return fileChange{}, -1, false
+	}
+	return c.files[fileIdx], fileIdx, true
 }
 
 // UpdateFromGit updates the changes column with accurate working tree and git status.
@@ -206,8 +251,8 @@ func (c *sessionChanges) Render(width, height int) string {
 			// Give up one list row to the "… N more" line.
 			shown = shown[:max(listRows-1, 0)]
 		}
-		for _, f := range shown {
-			rows = append(rows, formatChangeRow(f, inner))
+		for idx, f := range shown {
+			rows = append(rows, formatChangeRow(f, inner, idx == c.cursor))
 		}
 		if hidden := len(c.files) - len(shown); hidden > 0 {
 			rows = append(rows, styleMuted.Render(fmt.Sprintf("… %d more", hidden)))
@@ -229,7 +274,7 @@ func (c *sessionChanges) Render(width, height int) string {
 	return b.String()
 }
 
-func formatChangeRow(f fileChange, width int) string {
+func formatChangeRow(f fileChange, width int, selected bool) string {
 	marker := styleDiffHdr.Render("M")
 	if f.Staged {
 		marker = styleDiffAdd.Render("S")
@@ -240,14 +285,22 @@ func formatChangeRow(f fileChange, width int) string {
 	} else if f.Written {
 		marker = styleDiffAdd.Render("W")
 	}
+	prefix := " "
+	if selected {
+		prefix = ColorCyan(StyleBold("›"))
+		marker = ColorBrightWhite(StyleBold(StripANSI(marker)))
+	}
 	counts := formatLineCounts(f.Added, f.Removed)
-	pathWidth := width - 2 - VisualLen(counts) - 1
+	pathWidth := width - 3 - VisualLen(counts) - 1
 	path := truncatePathLeft(f.Path, pathWidth)
-	gap := width - 2 - VisualLen(path) - VisualLen(counts)
+	if selected {
+		path = ColorBrightWhite(StyleBold(path))
+	}
+	gap := width - 3 - VisualLen(path) - VisualLen(counts)
 	if gap < 1 {
 		gap = 1
 	}
-	return marker + " " + path + strings.Repeat(" ", gap) + counts
+	return prefix + marker + " " + path + strings.Repeat(" ", gap) + counts
 }
 
 func formatLineCounts(added, removed int) string {

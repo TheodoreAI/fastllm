@@ -713,7 +713,8 @@ func FormatHelp() string {
 	})
 
 	renderSection("Git & Checkpoints", []cmdEntry{
-		{"/diff", "Syntax-highlighted git diff of uncommitted changes"},
+		{"/changes [file]", "Inspect changed files list & per-file diff modal (Alt+C / Ctrl+O)"},
+		{"/diff [file]", "Syntax-highlighted diff of uncommitted changes (or inspect file)"},
 		{"/undo", "Rollback working directory to pre-turn git checkpoint"},
 		{"/rules", "Inspect discovered workspace instruction files"},
 		{"/skills [list|name] [task]", "List, inspect, or run an installed skill"},
@@ -934,4 +935,26 @@ func FormatPermissionKeyLegend() string {
 		ColorGreen("[a]") + " all this session   " +
 		ColorRed("[n]") + " deny   " +
 		ColorGray("(enter or esc denies)")
+}
+
+// FormatUntrackedAsDiff formats new or untracked file content as a unified diff with additions.
+func FormatUntrackedAsDiff(path, content string) string {
+	var b strings.Builder
+	cleanPath := filepath.ToSlash(path)
+	b.WriteString(fmt.Sprintf("diff --git a/%s b/%s\n", cleanPath, cleanPath))
+	b.WriteString("new file mode 100644\n")
+	b.WriteString("--- /dev/null\n")
+	b.WriteString(fmt.Sprintf("+++ b/%s\n", cleanPath))
+
+	trimmed := strings.TrimRight(content, "\r\n")
+	if trimmed == "" {
+		b.WriteString("@@ -0,0 +0,0 @@\n")
+		return b.String()
+	}
+	lines := strings.Split(trimmed, "\n")
+	b.WriteString(fmt.Sprintf("@@ -0,0 +1,%d @@\n", len(lines)))
+	for _, l := range lines {
+		b.WriteString("+" + strings.TrimRight(l, "\r") + "\n")
+	}
+	return b.String()
 }

@@ -219,6 +219,16 @@ type teaModel struct {
 	gitWatchChan      <-chan struct{}
 	gitWatchStop      func()
 
+	// Diff modal viewer state
+	diffModal       bool
+	diffCursor      int
+	diffViewport    viewport.Model
+	diffPath        string
+	diffStaged      bool
+	diffHasStaged   bool
+	diffHasUnstaged bool
+	diffReady       bool
+
 	// Prompt history navigation
 	promptHistory []string
 	historyIdx    int
@@ -527,6 +537,54 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.diffModal {
+			switch msg.Type {
+			case tea.KeyEsc, tea.KeyCtrlC:
+				m.closeDiffModal()
+				return m, nil
+			case tea.KeyRight:
+				m.nextDiffFile()
+				return m, nil
+			case tea.KeyLeft:
+				m.prevDiffFile()
+				return m, nil
+			case tea.KeyRunes:
+				if len(msg.Runes) > 0 {
+					switch msg.Runes[0] {
+					case 'q', 'Q':
+						m.closeDiffModal()
+						return m, nil
+					case 'n', 'N':
+						m.nextDiffFile()
+						return m, nil
+					case 'p', 'P':
+						m.prevDiffFile()
+						return m, nil
+					case 's', 'S':
+						m.toggleStageCurrentFile()
+						return m, nil
+					case 'd', 'D':
+						m.toggleDiffStaged()
+						return m, nil
+					}
+				}
+			}
+			var vpCmd tea.Cmd
+			m.diffViewport, vpCmd = m.diffViewport.Update(msg)
+			return m, vpCmd
+		}
+
+		if msg.Alt && len(msg.Runes) > 0 && (msg.Runes[0] == 'c' || msg.Runes[0] == 'C') {
+			if len(m.changes.files) > 0 {
+				targetIdx := 0
+				if m.changes.cursor >= 0 && m.changes.cursor < len(m.changes.files) {
+					targetIdx = m.changes.cursor
+				}
+				m.openDiffModal(targetIdx)
+				return m, nil
+			}
+		}
+
 		// A bracketed paste arrives as one key event carrying the whole
 		// clipboard, newlines included. Insert it literally -- treating those
 		// newlines as Enter submits the paste one line at a time, which also
@@ -579,6 +637,16 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Ctrl+J is universal terminal newline / linefeed
 			m.input.InsertString("\n")
 			return m, nil
+
+		case tea.KeyCtrlO:
+			if len(m.changes.files) > 0 {
+				targetIdx := 0
+				if m.changes.cursor >= 0 && m.changes.cursor < len(m.changes.files) {
+					targetIdx = m.changes.cursor
+				}
+				m.openDiffModal(targetIdx)
+				return m, nil
+			}
 
 		case tea.KeyEnter:
 			if msg.Alt {
@@ -661,6 +729,21 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.MouseMsg:
+		if m.diffModal {
+			var vpCmd tea.Cmd
+			m.diffViewport, vpCmd = m.diffViewport.Update(msg)
+			return m, vpCmd
+		}
+		if (msg.Button == tea.MouseButtonLeft || msg.Type == tea.MouseLeft) && msg.Action != tea.MouseActionRelease {
+			if m.showChangesColumn() && msg.X >= m.frameWidth()-changesColumnWidth && msg.X < m.frameWidth() {
+				if msg.Y >= 2 && msg.Y < 2+m.viewport.Height {
+					if _, idx, ok := m.changes.FileAtRow(msg.Y - 2); ok {
+						m.openDiffModal(idx)
+						return m, nil
+					}
+				}
+			}
+		}
 		// Mouse-wheel events belong exclusively to the conversation viewport.
 		// Never let them reach the textarea or prompt-history navigation.
 		var viewportCmd tea.Cmd
@@ -1125,7 +1208,36 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 			m.statusNotice = "Engaged Shell Mode."
 			return m.clearStatusAfter(2 * time.Second)
 
+		case "/changes":
+			if len(m.changes.files) == 0 {
+				m.statusNotice = "No modified files in session or working tree."
+				return m.clearStatusAfter(2 * time.Second)
+			}
+			targetIdx := 0
+			if len(parts) > 1 {
+				arg := strings.TrimSpace(inputVal[len(parts[0]):])
+				for i, f := range m.changes.files {
+					if f.Path == arg || strings.HasSuffix(f.Path, arg) {
+						targetIdx = i
+						break
+					}
+				}
+			} else if m.changes.cursor >= 0 && m.changes.cursor < len(m.changes.files) {
+				targetIdx = m.changes.cursor
+			}
+			m.openDiffModal(targetIdx)
+			return nil
+
 		case "/diff":
+			if len(parts) > 1 {
+				arg := strings.TrimSpace(inputVal[len(parts[0]):])
+				for i, f := range m.changes.files {
+					if f.Path == arg || strings.HasSuffix(f.Path, arg) {
+						m.openDiffModal(i)
+						return nil
+					}
+				}
+			}
 			m.appendHistory(styleUserPrompt.Render("❯ /diff") + "\n")
 			if !m.checkpointMgr.IsGitRepo() {
 				m.appendHistory(styleMuted.Render("Not a git repository.\n\n"))
@@ -1621,6 +1733,242 @@ func (m *teaModel) renderSkillsModal() string {
 		lipgloss.WithWhitespaceBackground(tuiColorDarkBg))
 }
 
+func (m *teaModel) openDiffModal(fileIdx int) {
+	if len(m.changes.files) == 0 {
+		m.statusNotice = "No modified files to inspect."
+		return
+	}
+	if fileIdx < 0 {
+		fileIdx = 0
+	}
+	if fileIdx >= len(m.changes.files) {
+		fileIdx = len(m.changes.files) - 1
+	}
+
+	m.diffModal = true
+	m.diffCursor = fileIdx
+	m.changes.SetCursor(fileIdx)
+	f := m.changes.files[fileIdx]
+	m.diffPath = f.Path
+	m.diffStaged = f.Staged
+
+	diffText := ""
+	if m.checkpointMgr.IsGitRepo() {
+		if f.Status == "?" {
+			fullPath := filepath.Join(m.workingDir, filepath.FromSlash(f.Path))
+			if data, err := os.ReadFile(fullPath); err == nil {
+				diffText = FormatUntrackedAsDiff(f.Path, string(data))
+			} else {
+				diffText = fmt.Sprintf("Error reading untracked file %s: %v", f.Path, err)
+			}
+		} else {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			dt, err := gitrepo.Diff(ctx, m.workingDir, f.Path, m.diffStaged)
+			cancel()
+			if err != nil {
+				diffText = fmt.Sprintf("Diff error: %v", err)
+			} else {
+				diffText = dt
+			}
+		}
+	} else {
+		diffText = fmt.Sprintf("File: %s\nAdded: +%d lines\nRemoved: -%d lines", f.Path, f.Added, f.Removed)
+	}
+
+	if strings.TrimSpace(diffText) == "" {
+		if m.diffStaged {
+			diffText = "No staged diff for this file. Press 'd' to view unstaged changes."
+		} else {
+			diffText = "No diff detected for this file."
+		}
+	}
+
+	highlighted := HighlightDiff(diffText)
+
+	width := m.width
+	if width < 1 {
+		width = 80
+	}
+	height := m.height
+	if height < 1 {
+		height = 24
+	}
+
+	modalWidth := width - 6
+	if modalWidth > 120 {
+		modalWidth = 120
+	}
+	if modalWidth < 40 {
+		modalWidth = 40
+	}
+	modalHeight := height - 4
+	if modalHeight < 10 {
+		modalHeight = 10
+	}
+	vpWidth := modalWidth - 4
+	vpHeight := modalHeight - 6
+	if vpHeight < 3 {
+		vpHeight = 3
+	}
+
+	m.diffViewport = viewport.New(vpWidth, vpHeight)
+	m.diffViewport.SetContent(highlighted)
+	m.diffViewport.GotoTop()
+	m.diffReady = true
+	m.input.Blur()
+}
+
+func (m *teaModel) closeDiffModal() {
+	m.diffModal = false
+	m.diffReady = false
+	m.changes.SetCursor(-1)
+	m.input.Focus()
+}
+
+func (m *teaModel) nextDiffFile() {
+	if len(m.changes.files) <= 1 {
+		return
+	}
+	next := (m.diffCursor + 1) % len(m.changes.files)
+	m.openDiffModal(next)
+}
+
+func (m *teaModel) prevDiffFile() {
+	if len(m.changes.files) <= 1 {
+		return
+	}
+	prev := (m.diffCursor - 1 + len(m.changes.files)) % len(m.changes.files)
+	m.openDiffModal(prev)
+}
+
+func (m *teaModel) toggleStageCurrentFile() {
+	if !m.checkpointMgr.IsGitRepo() || m.diffCursor < 0 || m.diffCursor >= len(m.changes.files) {
+		return
+	}
+	f := m.changes.files[m.diffCursor]
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if f.Staged {
+		_ = gitrepo.Unstage(ctx, m.workingDir, []string{f.Path})
+		m.statusNotice = "Unstaged " + filepath.Base(f.Path)
+	} else {
+		_ = gitrepo.Stage(ctx, m.workingDir, []string{f.Path})
+		m.statusNotice = "Staged " + filepath.Base(f.Path)
+	}
+
+	if status, err := gitrepo.GetRepoStatus(ctx, m.workingDir); err == nil {
+		m.changes.UpdateFromGit(status)
+	}
+	if m.diffCursor >= len(m.changes.files) {
+		m.diffCursor = len(m.changes.files) - 1
+	}
+	if m.diffCursor >= 0 {
+		m.openDiffModal(m.diffCursor)
+	} else {
+		m.closeDiffModal()
+	}
+}
+
+func (m *teaModel) toggleDiffStaged() {
+	m.diffStaged = !m.diffStaged
+	if m.diffCursor >= 0 && m.diffCursor < len(m.changes.files) {
+		f := m.changes.files[m.diffCursor]
+		diffText := ""
+		if m.checkpointMgr.IsGitRepo() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			dt, err := gitrepo.Diff(ctx, m.workingDir, f.Path, m.diffStaged)
+			cancel()
+			if err != nil {
+				diffText = fmt.Sprintf("Diff error: %v", err)
+			} else {
+				diffText = dt
+			}
+		}
+		if strings.TrimSpace(diffText) == "" {
+			if m.diffStaged {
+				diffText = "No staged diff for this file. Press 'd' to toggle back."
+			} else {
+				diffText = "No unstaged diff for this file. Press 'd' to toggle back."
+			}
+		}
+		m.diffViewport.SetContent(HighlightDiff(diffText))
+		m.diffViewport.GotoTop()
+	}
+}
+
+func (m *teaModel) renderDiffModal() string {
+	width, height := m.width, m.height
+	if width < 1 {
+		width = 80
+	}
+	if height < 1 {
+		height = 24
+	}
+
+	modalWidth := width - 6
+	if modalWidth > 120 {
+		modalWidth = 120
+	}
+	if modalWidth < 40 {
+		modalWidth = 40
+	}
+	modalHeight := height - 4
+	if modalHeight < 10 {
+		modalHeight = 10
+	}
+
+	vpWidth := modalWidth - 4
+	vpHeight := modalHeight - 6
+	if vpHeight < 3 {
+		vpHeight = 3
+	}
+	if m.diffViewport.Width != vpWidth || m.diffViewport.Height != vpHeight {
+		m.diffViewport.Width = vpWidth
+		m.diffViewport.Height = vpHeight
+	}
+
+	badge := styleDiffHdr.Render("[Modified]")
+	if m.diffCursor >= 0 && m.diffCursor < len(m.changes.files) {
+		f := m.changes.files[m.diffCursor]
+		if f.Staged {
+			badge = styleDiffAdd.Render("[Staged]")
+		} else if f.Status == "?" {
+			badge = styleMuted.Render("[Untracked]")
+		} else if f.Status == "D" {
+			badge = styleDiffDel.Render("[Deleted]")
+		}
+	}
+
+	counter := ""
+	if total := len(m.changes.files); total > 0 {
+		counter = fmt.Sprintf(" · File %d of %d", m.diffCursor+1, total)
+	}
+
+	pathHeader := ColorBrightWhite(StyleBold(m.diffPath))
+	titleRow := fmt.Sprintf("%s  %s%s", badge, pathHeader, styleMuted.Render(counter))
+	legend := "n/p: Next/Prev  •  s: Stage/Unstage  •  d: Toggle Staged  •  ↑/↓: Scroll  •  Esc/q: Close"
+
+	lines := []string{
+		titleRow,
+		styleMuted.Render(legend),
+		styleMuted.Render(strings.Repeat("─", vpWidth)),
+		m.diffViewport.View(),
+	}
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(tuiColorCyan).
+		Background(tuiColorCardBg).
+		Padding(0, 1).
+		Width(modalWidth).
+		Render(strings.Join(lines, "\n"))
+
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box,
+		lipgloss.WithWhitespaceBackground(tuiColorDarkBg))
+}
+
+
 func truncateText(value string, width int) string {
 	if width <= 0 {
 		return ""
@@ -1639,6 +1987,9 @@ func truncateText(value string, width int) string {
 func (m *teaModel) View() string {
 	if !m.ready {
 		return "Initializing fastllm..."
+	}
+	if m.diffModal {
+		return m.renderDiffModal()
 	}
 	if m.skillsModal {
 		return m.renderSkillsModal()

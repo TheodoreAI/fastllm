@@ -181,3 +181,173 @@ func TestSessionChangesCleanAndSynced(t *testing.T) {
 	}
 }
 
+func TestSessionChangesFileAtRow(t *testing.T) {
+	var c sessionChanges
+	status := gitrepo.RepoStatus{
+		IsRepo:   true,
+		Branch:   "main",
+		Upstream: "origin/main",
+		Files: []gitrepo.RepoFileStatus{
+			{Path: "file1.go", Unstaged: "M", Added: 5, Removed: 1},
+			{Path: "file2.go", Staged: "M", Added: 10, Removed: 2},
+			{Path: "file3.go", Unstaged: "?", Added: 20, Removed: 0},
+		},
+	}
+	c.UpdateFromGit(status)
+
+	hdr := c.HeaderRows()
+	if hdr < 2 {
+		t.Fatalf("expected header rows >= 2, got %d", hdr)
+	}
+
+	// Click in header row should not resolve to a file
+	for r := 0; r < hdr; r++ {
+		_, _, ok := c.FileAtRow(r)
+		if ok {
+			t.Fatalf("row %d in header unexpectedly resolved to file", r)
+		}
+	}
+
+	// First file row
+	f1, idx1, ok1 := c.FileAtRow(hdr)
+	if !ok1 || idx1 != 0 || f1.Path != "file1.go" {
+		t.Fatalf("expected file 0 file1.go, got ok=%v idx=%d file=%+v", ok1, idx1, f1)
+	}
+
+	// Second file row
+	f2, idx2, ok2 := c.FileAtRow(hdr + 1)
+	if !ok2 || idx2 != 1 || f2.Path != "file2.go" {
+		t.Fatalf("expected file 1 file2.go, got ok=%v idx=%d file=%+v", ok2, idx2, f2)
+	}
+
+	// Third file row
+	f3, idx3, ok3 := c.FileAtRow(hdr + 2)
+	if !ok3 || idx3 != 2 || f3.Path != "file3.go" {
+		t.Fatalf("expected file 2 file3.go, got ok=%v idx=%d file=%+v", ok3, idx3, f3)
+	}
+
+	// Out of bounds row
+	_, _, ok4 := c.FileAtRow(hdr + 3)
+	if ok4 {
+		t.Fatal("expected out of bounds row to return ok=false")
+	}
+}
+
+func TestDiffModalNavigationAndHotkeys(t *testing.T) {
+	tmp := t.TempDir()
+	ta := textarea.New()
+	ta.ShowLineNumbers = false
+	m := &teaModel{
+		runner:        NewRunner(&mockLLM{}, tmp, "test-model"),
+		workingDir:    tmp,
+		checkpointMgr: NewCheckpointManager(tmp),
+		modelName:     "test-model",
+		input:         ta,
+		viewport:      viewport.New(120, 20),
+		width:         120,
+		height:        30,
+	}
+
+	// Populate files
+	m.changes.files = []fileChange{
+		{Path: "alpha.go", Added: 5, Removed: 2, Status: "M"},
+		{Path: "beta.go", Added: 10, Removed: 0, Status: "M"},
+	}
+
+	// 1. Alt+c opens diff modal
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}, Alt: true})
+	m = updated.(*teaModel)
+	if !m.diffModal {
+		t.Fatal("expected diffModal to be open after Alt+c")
+	}
+	if m.diffCursor != 0 {
+		t.Fatalf("expected diffCursor=0, got %d", m.diffCursor)
+	}
+
+	// 2. Next file with 'n'
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m = updated.(*teaModel)
+	if m.diffCursor != 1 {
+		t.Fatalf("expected diffCursor=1, got %d", m.diffCursor)
+	}
+
+	// 3. Prev file with 'p'
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	m = updated.(*teaModel)
+	if m.diffCursor != 0 {
+		t.Fatalf("expected diffCursor=0 after 'p', got %d", m.diffCursor)
+	}
+
+	// 4. Close with Esc
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(*teaModel)
+	if m.diffModal {
+		t.Fatal("expected diffModal to be closed after Esc")
+	}
+
+	// 5. Ctrl+O opens diff modal
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
+	m = updated.(*teaModel)
+	if !m.diffModal {
+		t.Fatal("expected diffModal to be open after Ctrl+O")
+	}
+	if m.diffCursor != 0 {
+		t.Fatalf("expected diffCursor=0 after Ctrl+O, got %d", m.diffCursor)
+	}
+
+	// Close with 'q'
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	m = updated.(*teaModel)
+	if m.diffModal {
+		t.Fatal("expected diffModal to be closed after 'q'")
+	}
+}
+
+func TestMouseClickChangesColumnOpensModal(t *testing.T) {
+	tmp := t.TempDir()
+	ta := textarea.New()
+	ta.ShowLineNumbers = false
+	m := &teaModel{
+		runner:        NewRunner(&mockLLM{}, tmp, "test-model"),
+		workingDir:    tmp,
+		checkpointMgr: NewCheckpointManager(tmp),
+		modelName:     "test-model",
+		input:         ta,
+		viewport:      viewport.New(120, 20),
+		width:         120,
+		height:        30,
+	}
+
+	m.changes.files = []fileChange{
+		{Path: "main.go", Added: 3, Removed: 1, Status: "M"},
+		{Path: "util.go", Added: 8, Removed: 4, Status: "M"},
+	}
+
+	// Terminal width = 120 (>= changesColumnMinFrame so Changes column is shown).
+	// Changes column is at X in [120 - 32, 120) = [88, 120).
+	// Header rows in Changes column is m.changes.HeaderRows()
+	// Row Y in terminal: header is row 0, divider is row 1, viewport + changes column begins at row 2.
+	clickX := 100
+	clickY := 2 + m.changes.HeaderRows() // First file row
+
+	mouseMsg := tea.MouseMsg{
+		X:      clickX,
+		Y:      clickY,
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionPress,
+	}
+
+	updated, _ := m.Update(mouseMsg)
+	m = updated.(*teaModel)
+	if !m.diffModal {
+		t.Fatal("expected mouse click on changes column to open diff modal")
+	}
+	if m.diffCursor != 0 {
+		t.Fatalf("expected diffCursor=0, got %d", m.diffCursor)
+	}
+	if m.diffPath != "main.go" {
+		t.Fatalf("expected diffPath='main.go', got %q", m.diffPath)
+	}
+}
+
+
