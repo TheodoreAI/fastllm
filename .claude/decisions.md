@@ -1,4 +1,4 @@
-# Decision Ledger (local)
+# Context Ledger (local)
 
 Auto-generated — do not edit by hand.
 
