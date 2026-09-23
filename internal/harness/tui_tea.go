@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"fastllm/internal/config"
+	"fastllm/internal/gitrepo"
 	"fastllm/internal/llm"
 	"fastllm/internal/webtools"
 
@@ -138,10 +139,16 @@ type permissionDecision struct {
 	GrantSession bool
 }
 type teaShellDoneMsg struct {
+	Command      string
 	Output       string
 	Err          error
 	ShellCommand bool
 	Canceled     bool
+	Duration     time.Duration
+}
+type teaGitWatchMsg struct{}
+type teaGitRefreshMsg struct {
+	status gitrepo.RepoStatus
 }
 type teaImageDoneMsg struct {
 	Path     string
@@ -209,6 +216,8 @@ type teaModel struct {
 	skillsModal       bool
 	skillCursor       int
 	changes           sessionChanges
+	gitWatchChan      <-chan struct{}
+	gitWatchStop      func()
 
 	// Prompt history navigation
 	promptHistory []string
@@ -311,6 +320,7 @@ func newTeaModel(runner *Runner, req RunRequest) (*teaModel, error) {
 	// Initial welcome message in history
 	m.appendHistory(m.formatWelcome())
 	m.appendSessionTranscript()
+	m.initGitWatcher()
 
 	return m, nil
 }
@@ -372,11 +382,57 @@ func (m *teaModel) contentWidth() int {
 	return w
 }
 
+func (m *teaModel) initGitWatcher() {
+	if m.gitWatchStop != nil {
+		m.gitWatchStop()
+		m.gitWatchStop = nil
+		m.gitWatchChan = nil
+	}
+	if m.workingDir == "" {
+		return
+	}
+	ch, stop, err := gitrepo.Watch(context.Background(), m.workingDir)
+	if err == nil {
+		m.gitWatchChan = ch
+		m.gitWatchStop = stop
+	}
+}
+
+func (m *teaModel) refreshGitStatusCmd() tea.Cmd {
+	root := m.workingDir
+	return func() tea.Msg {
+		if root == "" {
+			return teaGitRefreshMsg{status: gitrepo.RepoStatus{IsRepo: false}}
+		}
+		status, err := gitrepo.GetRepoStatus(context.Background(), root)
+		if err != nil {
+			return teaGitRefreshMsg{status: gitrepo.RepoStatus{IsRepo: false}}
+		}
+		return teaGitRefreshMsg{status: status}
+	}
+}
+
+func (m *teaModel) waitForGitWatch() tea.Cmd {
+	ch := m.gitWatchChan
+	if ch == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		_, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return teaGitWatchMsg{}
+	}
+}
+
 // Init implements tea.Model
 func (m *teaModel) Init() tea.Cmd {
 	return tea.Batch(
 		textarea.Blink,
 		m.spinner.Tick,
+		m.refreshGitStatusCmd(),
+		m.waitForGitWatch(),
 	)
 }
 
@@ -491,6 +547,10 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cancelActiveOperation()
 				cmds = append(cmds, m.clearStatusAfter(3*time.Second))
 				return m, tea.Batch(cmds...)
+			}
+			if m.gitWatchStop != nil {
+				m.gitWatchStop()
+				m.gitWatchStop = nil
 			}
 			return m, tea.Quit
 
@@ -627,11 +687,43 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.activeTool = ""
 				m.activeArgs = ""
 				m.changes.Record(m.workingDir, ev.ToolCall.Name, ev.ToolCall.Arguments, ev.ToolCall.Result)
-				previewLines := 4
-				if m.expandedTools {
-					previewLines = 10000
+				if ev.ToolCall.Name == "run_command" {
+					var runArgs struct {
+						Command string `json:"command"`
+					}
+					_ = decodeToolArguments(ev.ToolCall.Arguments, &runArgs)
+					cmdText := runArgs.Command
+					if cmdText == "" {
+						cmdText = m.activeArgs
+					}
+					isErr := strings.HasPrefix(strings.TrimSpace(ev.ToolCall.Result), "Error") ||
+						strings.HasPrefix(strings.TrimSpace(ev.ToolCall.Result), "error")
+					exitCode := 0
+					if isErr {
+						exitCode = 1
+					}
+					maxLines := 15
+					if m.expandedTools {
+						maxLines = 10000
+					}
+					box := FormatTerminalBox(TerminalBoxOptions{
+						Command:     cmdText,
+						Output:      ev.ToolCall.Result,
+						Width:       m.contentWidth(),
+						ExitCode:    exitCode,
+						IsError:     isErr,
+						MaxLines:    maxLines,
+						AgentCalled: true,
+					})
+					m.appendHistory(box + "\n\n")
+				} else {
+					previewLines := 4
+					if m.expandedTools {
+						previewLines = 10000
+					}
+					m.appendHistory(FormatToolResult(ev.ToolCall.Name, ev.ToolCall.Result, previewLines) + "\n\n")
 				}
-				m.appendHistory(FormatToolResult(ev.ToolCall.Name, ev.ToolCall.Result, previewLines) + "\n\n")
+				cmds = append(cmds, m.refreshGitStatusCmd())
 			}
 
 		case EventTokenDelta:
@@ -722,20 +814,53 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusNotice = "Permission required for " + msg.ToolName
 		}
 
+	case teaGitWatchMsg:
+		cmds = append(cmds, m.refreshGitStatusCmd(), m.waitForGitWatch())
+
+	case teaGitRefreshMsg:
+		m.changes.UpdateFromGit(msg.status)
+
 	case teaShellDoneMsg:
 		if msg.ShellCommand {
 			m.shellExecuting = false
 			m.cancelShell = nil
+			exitCode := 0
+			isErr := msg.Err != nil
+			output := msg.Output
+			if isErr {
+				exitCode = 1
+				if output == "" {
+					output = msg.Err.Error()
+				}
+			}
+			cmdToRender := msg.Command
+			if cmdToRender == "" {
+				cmdToRender = "command"
+			}
+			terminalBox := FormatTerminalBox(TerminalBoxOptions{
+				Command:     cmdToRender,
+				Output:      output,
+				Width:       m.contentWidth(),
+				ExitCode:    exitCode,
+				Duration:    msg.Duration,
+				IsError:     isErr,
+				Canceled:    msg.Canceled,
+				MaxLines:    500,
+				AgentCalled: false,
+			})
+			m.appendHistory(terminalBox + "\n\n")
+			cmds = append(cmds, m.refreshGitStatusCmd())
+		} else {
+			if msg.Output != "" {
+				m.appendHistory(msg.Output + "\n")
+			}
+			if msg.Canceled {
+				m.appendHistory(styleMuted.Render("[Command canceled]\n"))
+			} else if msg.Err != nil {
+				m.appendHistory(styleDiffDel.Render(fmt.Sprintf("$ %v\n", msg.Err)))
+			}
+			m.appendHistory("\n")
 		}
-		if msg.Output != "" {
-			m.appendHistory(msg.Output + "\n")
-		}
-		if msg.Canceled {
-			m.appendHistory(styleMuted.Render("[Command canceled]\n"))
-		} else if msg.Err != nil {
-			m.appendHistory(styleDiffDel.Render(fmt.Sprintf("$ %v\n", msg.Err)))
-		}
-		m.appendHistory("\n")
 
 	case teaImageDoneMsg:
 		if msg.Err != nil {
@@ -911,10 +1036,10 @@ func (m *teaModel) handleShellSubmit(cmdStr string) tea.Cmd {
 		return nil
 	}
 
-	m.appendHistory(styleShellBadge.Render("$ "+cmdStr) + "\n")
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelShell = cancel
 	m.shellExecuting = true
+	started := time.Now()
 
 	root := m.workingDir
 	return func() tea.Msg {
@@ -924,10 +1049,12 @@ func (m *teaModel) handleShellSubmit(cmdStr string) tea.Cmd {
 			out = "[earlier output truncated]\n" + out
 		}
 		return teaShellDoneMsg{
+			Command:      cmdStr,
 			Output:       strings.TrimRight(string(out), "\r\n"),
 			Err:          err,
 			ShellCommand: true,
 			Canceled:     ctx.Err() != nil,
+			Duration:     time.Since(started),
 		}
 	}
 }
@@ -942,6 +1069,7 @@ func (m *teaModel) changeWorkingDirectory(path string) error {
 		return err
 	}
 	m.workingDir = newDir
+	m.initGitWatcher()
 	m.permissionController().SetWorkspace(newDir)
 	m.checkpointMgr = NewCheckpointManager(newDir)
 	m.rules = DiscoverWorkspaceRules(newDir)
@@ -1029,7 +1157,7 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 			} else {
 				m.appendHistory(styleStatusNotice.Render("Successfully rolled back working tree to pre-turn checkpoint.\n\n"))
 			}
-			return nil
+			return m.refreshGitStatusCmd()
 
 		case "/compact":
 			m.appendHistory(styleUserPrompt.Render("❯ /compact") + "\n")
@@ -1220,7 +1348,7 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 				return nil
 			}
 			m.appendHistory(styleStatusNotice.Render(fmt.Sprintf("Working directory changed to %s (%d rules discovered)\n\n", m.workingDir, len(m.rules))))
-			return m.clearStatusAfter(2 * time.Second)
+			return tea.Batch(m.clearStatusAfter(2*time.Second), m.refreshGitStatusCmd(), m.waitForGitWatch())
 		}
 	}
 

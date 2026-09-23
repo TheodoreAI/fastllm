@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"fastllm/internal/gitrepo"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -14,24 +15,75 @@ const (
 	changesColumnWidth    = 32
 )
 
-// fileChange is the running tally for one file the agent modified this session.
+// fileChange is the running tally for one file modified or tracked this session.
 type fileChange struct {
 	Path    string
 	Added   int
 	Removed int
 	Edits   int
-	Written bool // touched by write_file, so the +count is the whole file
+	Written bool   // touched by write_file, so the +count is the whole file
+	Staged  bool   // staged in git index
+	Status  string // "S", "M", "D", "?", etc.
 }
 
-// sessionChanges records files modified by the agent's file tools during the
-// current session, most recently touched first. Line counts come from the tool
-// arguments, not a re-read of the disk, so they cost nothing to maintain.
+// sessionChanges records files modified by the agent's file tools or working tree
+// status reported by git.
 type sessionChanges struct {
-	files []fileChange
+	isGit        bool
+	branch       string
+	upstream     string
+	ahead        int
+	behind       int
+	latestCommit string
+	files        []fileChange
 }
 
 func (c *sessionChanges) Reset() {
 	c.files = nil
+	c.isGit = false
+	c.branch = ""
+	c.upstream = ""
+	c.ahead = 0
+	c.behind = 0
+	c.latestCommit = ""
+}
+
+// UpdateFromGit updates the changes column with accurate working tree and git status.
+func (c *sessionChanges) UpdateFromGit(status gitrepo.RepoStatus) {
+	if !status.IsRepo {
+		c.isGit = false
+		return
+	}
+	c.isGit = true
+	c.branch = status.Branch
+	c.upstream = status.Upstream
+	c.ahead = status.Ahead
+	c.behind = status.Behind
+	c.latestCommit = status.LatestCommit
+
+	var files []fileChange
+	for _, rf := range status.Files {
+		staged := rf.Staged != ""
+		statusMarker := rf.Unstaged
+		if staged {
+			if rf.Unstaged != "" {
+				statusMarker = rf.Staged + rf.Unstaged
+			} else {
+				statusMarker = rf.Staged
+			}
+		}
+		if statusMarker == "" {
+			statusMarker = "M"
+		}
+		files = append(files, fileChange{
+			Path:    filepath.ToSlash(rf.Path),
+			Added:   rf.Added,
+			Removed: rf.Removed,
+			Staged:  staged,
+			Status:  statusMarker,
+		})
+	}
+	c.files = files
 }
 
 // Record folds one completed tool call into the tally. It reports whether the
@@ -65,7 +117,7 @@ func (c *sessionChanges) Record(workingDir, tool, arguments, result string) bool
 	}
 
 	path := displayChangePath(workingDir, args.Path)
-	entry := fileChange{Path: path}
+	entry := fileChange{Path: path, Status: "M"}
 	for i, existing := range c.files {
 		if existing.Path == path {
 			entry = existing
@@ -98,11 +150,56 @@ func (c *sessionChanges) Render(width, height int) string {
 	}
 	var rows []string
 	count, added, removed := c.Totals()
-	rows = append(rows, styleDiffHdr.Render("Changes")+styleMuted.Render(fmt.Sprintf(" · %d %s", count, plural(count, "file", "files"))))
+
+	headerTitle := "Changes"
+	if c.isGit && c.branch != "" {
+		headerTitle = truncateText(c.branch, inner-12)
+	}
+	rows = append(rows, styleDiffHdr.Render(headerTitle)+styleMuted.Render(fmt.Sprintf(" · %d %s", count, plural(count, "file", "files"))))
+
+	if c.isGit {
+		var subParts []string
+		if count > 0 {
+			subParts = append(subParts, formatLineCounts(added, removed))
+		}
+		if c.ahead > 0 {
+			subParts = append(subParts, styleDiffAdd.Render(fmt.Sprintf("↑%d", c.ahead)))
+		}
+		if c.behind > 0 {
+			subParts = append(subParts, styleDiffDel.Render(fmt.Sprintf("↓%d", c.behind)))
+		}
+		if c.ahead == 0 && c.behind == 0 && c.upstream != "" {
+			subParts = append(subParts, styleStatusNotice.Render("synced"))
+		}
+		if len(subParts) > 0 {
+			rows = append(rows, strings.Join(subParts, " · "))
+		}
+	} else if count > 0 {
+		rows = append(rows, formatLineCounts(added, removed))
+	}
+
+	rows = append(rows, styleMuted.Render(strings.Repeat("─", inner)))
+
 	if count == 0 {
-		rows = append(rows, styleMuted.Render(strings.Repeat("─", inner)), styleMuted.Render("No files changed yet."))
+		if c.isGit {
+			rows = append(rows, styleMuted.Render("Working tree clean."))
+			if c.ahead > 0 {
+				rows = append(rows, styleDiffAdd.Render(fmt.Sprintf("↑ %d unpushed %s", c.ahead, plural(c.ahead, "commit", "commits"))))
+				rows = append(rows, styleMuted.Render("Push with 'git push'"))
+			} else if c.behind > 0 {
+				rows = append(rows, styleDiffDel.Render(fmt.Sprintf("↓ %d behind upstream", c.behind)))
+			} else if c.upstream != "" {
+				rows = append(rows, styleStatusNotice.Render(SymCheck+" Synced with remote"))
+			}
+			if c.latestCommit != "" && height-len(rows) >= 3 {
+				rows = append(rows, "")
+				rows = append(rows, styleMuted.Render("Latest commit:"))
+				rows = append(rows, styleMuted.Render(truncateText(c.latestCommit, inner)))
+			}
+		} else {
+			rows = append(rows, styleMuted.Render("No files changed yet."))
+		}
 	} else {
-		rows = append(rows, formatLineCounts(added, removed), styleMuted.Render(strings.Repeat("─", inner)))
 		listRows := height - len(rows)
 		shown := c.files
 		if len(shown) > listRows {
@@ -134,7 +231,13 @@ func (c *sessionChanges) Render(width, height int) string {
 
 func formatChangeRow(f fileChange, width int) string {
 	marker := styleDiffHdr.Render("M")
-	if f.Written {
+	if f.Staged {
+		marker = styleDiffAdd.Render("S")
+	} else if f.Status == "?" {
+		marker = styleMuted.Render("?")
+	} else if f.Status == "D" {
+		marker = styleDiffDel.Render("D")
+	} else if f.Written {
 		marker = styleDiffAdd.Render("W")
 	}
 	counts := formatLineCounts(f.Added, f.Removed)

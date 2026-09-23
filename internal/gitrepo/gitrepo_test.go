@@ -105,6 +105,44 @@ func TestStatusReportsModifiedStagedAndUntracked(t *testing.T) {
 	}
 }
 
+func TestGetRepoStatus(t *testing.T) {
+	dir := newTestRepo(t)
+	mustWrite(t, filepath.Join(dir, "committed.txt"), "changed\nline2\n")
+	mustWrite(t, filepath.Join(dir, "new.txt"), "new file content\n")
+
+	status, err := GetRepoStatus(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.IsRepo {
+		t.Fatal("expected IsRepo to be true")
+	}
+	if status.Branch == "" {
+		t.Error("expected Branch to be set")
+	}
+	if len(status.Files) != 2 {
+		t.Fatalf("expected 2 changed files, got %d", len(status.Files))
+	}
+
+	// Test stage
+	if err := Stage(context.Background(), dir, []string{"committed.txt"}); err != nil {
+		t.Fatal(err)
+	}
+	stagedStatus, err := GetRepoStatus(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stagedFound bool
+	for _, f := range stagedStatus.Files {
+		if f.Path == "committed.txt" && f.Staged != "" {
+			stagedFound = true
+		}
+	}
+	if !stagedFound {
+		t.Error("expected committed.txt to have Staged set after Stage()")
+	}
+}
+
 func TestStageAndUnstage(t *testing.T) {
 	dir := newTestRepo(t)
 	mustWrite(t, filepath.Join(dir, "committed.txt"), "changed\n")

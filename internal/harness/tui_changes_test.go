@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"fastllm/internal/gitrepo"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -102,3 +103,81 @@ func TestChangesColumnKeepsFrameWithinTerminal(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionChangesUpdateFromGit(t *testing.T) {
+	var c sessionChanges
+	status := gitrepo.RepoStatus{
+		IsRepo:   true,
+		Branch:   "main",
+		Upstream: "origin/main",
+		Ahead:    1,
+		Files: []gitrepo.RepoFileStatus{
+			{Path: "internal/harness/tui_tea.go", Staged: "M", Added: 10, Removed: 2},
+			{Path: "internal/harness/tui_style.go", Unstaged: "M", Added: 5, Removed: 1},
+			{Path: "newfile.txt", Unstaged: "?", Added: 1, Removed: 0},
+		},
+	}
+	c.UpdateFromGit(status)
+
+	if len(c.files) != 3 {
+		t.Fatalf("expected 3 files, got %d", len(c.files))
+	}
+	if !c.files[0].Staged || c.files[0].Status != "M" {
+		t.Errorf("expected file 0 to be Staged=true, got %+v", c.files[0])
+	}
+	if c.files[1].Staged {
+		t.Errorf("expected file 1 to be Staged=false, got %+v", c.files[1])
+	}
+
+	rendered := StripANSI(c.Render(changesColumnWidth, 20))
+	if !strings.Contains(rendered, "main") {
+		t.Errorf("expected rendered output to contain branch 'main':\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "↑1") {
+		t.Errorf("expected rendered output to contain ahead indicator '↑1':\n%s", rendered)
+	}
+
+	// Verify exact line sizes
+	for _, line := range strings.Split(c.Render(changesColumnWidth, 15), "\n") {
+		if w := VisualLen(StripANSI(line)); w != changesColumnWidth {
+			t.Fatalf("line width = %d, want %d: %q", w, changesColumnWidth, line)
+		}
+	}
+}
+
+func TestSessionChangesCleanAndSynced(t *testing.T) {
+	var c sessionChanges
+	// 1. Clean tree with 2 unpushed commits
+	c.UpdateFromGit(gitrepo.RepoStatus{
+		IsRepo:       true,
+		Branch:       "feature/tui",
+		Upstream:     "origin/feature/tui",
+		Ahead:        2,
+		LatestCommit: "abc1234 feat: terminal box",
+	})
+
+	rendered := StripANSI(c.Render(changesColumnWidth, 12))
+	if !strings.Contains(rendered, "Working tree clean") {
+		t.Errorf("expected 'Working tree clean', got:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "2 unpushed") {
+		t.Errorf("expected '2 unpushed', got:\n%s", rendered)
+	}
+
+	// 2. Synced with origin (after git push)
+	c.UpdateFromGit(gitrepo.RepoStatus{
+		IsRepo:   true,
+		Branch:   "feature/tui",
+		Upstream: "origin/feature/tui",
+		Ahead:    0,
+		Behind:   0,
+	})
+	syncedRendered := StripANSI(c.Render(changesColumnWidth, 12))
+	if !strings.Contains(syncedRendered, "Working tree clean") {
+		t.Errorf("expected 'Working tree clean', got:\n%s", syncedRendered)
+	}
+	if !strings.Contains(syncedRendered, "Synced") {
+		t.Errorf("expected 'Synced', got:\n%s", syncedRendered)
+	}
+}
+
