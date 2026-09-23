@@ -27,8 +27,12 @@ type Policy struct{ Commands, Write, Network bool }
 func LocalPolicy() Policy { return Policy{true, true, true} }
 
 type Options struct {
-	Workspace        string
-	Policy           Policy
+	Workspace string
+	Policy    Policy
+	// Backend names a registered backend; empty selects the local backend.
+	Backend string
+	// RequireIsolation refuses any backend that does not enforce OS-level
+	// restrictions. It never downgrades to local execution.
 	RequireIsolation bool
 	Timeout          time.Duration
 	MaxOutputBytes   int
@@ -80,17 +84,44 @@ type Process interface {
 }
 
 type Manager struct {
-	mu     sync.Mutex
-	closed bool
-	next   uint64
-	scopes map[*Scope]struct{}
+	mu       sync.Mutex
+	closed   bool
+	next     uint64
+	scopes   map[*Scope]struct{}
+	backends map[string]Backend
 }
 
-func NewManager() *Manager { return &Manager{scopes: make(map[*Scope]struct{})} }
+func NewManager() *Manager {
+	return &Manager{
+		scopes:   make(map[*Scope]struct{}),
+		backends: map[string]Backend{LocalBackendName: localBackend{}},
+	}
+}
+
+// Register adds a backend. The controller decides which backends exist; model
+// arguments only select among the ones already registered.
+func (m *Manager) Register(b Backend) error {
+	if b == nil || b.Name() == "" {
+		return errors.New("backend must have a name")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return ErrClosed
+	}
+	if _, exists := m.backends[b.Name()]; exists {
+		return fmt.Errorf("backend %q is already registered", b.Name())
+	}
+	m.backends[b.Name()] = b
+	return nil
+}
 
 type Scope struct {
 	mu          sync.Mutex
 	manager     *Manager
+	backend     BackendScope
+	backendName string
+	isolated    bool
 	options     Options
 	workspace   string
 	user        bool
@@ -98,9 +129,12 @@ type Scope struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
 	closed      bool
+	closeOnce   sync.Once
+	closeErr    error
+	closeDone   chan struct{}
 	next        uint64
 	id          uint64
-	processes   map[string]*localProcess
+	processes   map[string]Process
 }
 
 func (m *Manager) Open(ctx context.Context, opts Options) (*Scope, error) {
@@ -112,10 +146,26 @@ func (m *Manager) OpenUser(ctx context.Context, workspace string) (*Scope, error
 	return m.open(ctx, Options{Workspace: workspace, Policy: LocalPolicy()}, true)
 }
 
-func (m *Manager) open(ctx context.Context, opts Options, user bool) (*Scope, error) {
-	if opts.RequireIsolation {
-		return nil, ErrUnsupported
+// backendLocked resolves a backend without ever widening the request.
+func (m *Manager) backendLocked(opts Options) (Backend, error) {
+	name := opts.Backend
+	if name == "" {
+		name = LocalBackendName
 	}
+	b, ok := m.backends[name]
+	if !ok {
+		if opts.RequireIsolation {
+			return nil, fmt.Errorf("%w: no backend named %q", ErrUnsupported, name)
+		}
+		return nil, fmt.Errorf("no backend named %q", name)
+	}
+	if opts.RequireIsolation && !b.Isolated() {
+		return nil, fmt.Errorf("%w: backend %q does not isolate", ErrUnsupported, name)
+	}
+	return b, nil
+}
+
+func (m *Manager) open(ctx context.Context, opts Options, user bool) (*Scope, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -136,20 +186,80 @@ func (m *Manager) open(ctx context.Context, opts Options, user bool) (*Scope, er
 	if opts.MaxProcesses <= 0 {
 		opts.MaxProcesses = 64
 	}
+
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.closed {
+		m.mu.Unlock()
 		return nil, ErrClosed
 	}
+	backend, err := m.backendLocked(opts)
+	if err != nil {
+		m.mu.Unlock()
+		return nil, err
+	}
 	m.next++
+	id := m.next
+	m.mu.Unlock()
+
+	// An unavailable backend is an error, never a reason to run elsewhere.
+	if err := backend.Available(ctx); err != nil {
+		return nil, fmt.Errorf("backend %q unavailable: %w", backend.Name(), err)
+	}
+
+	environment := processEnvironment(user)
 	lifetime, cancel := context.WithCancel(ctx)
-	s := &Scope{user: user, manager: m, options: opts, workspace: root, environment: processEnvironment(user), ctx: lifetime, cancel: cancel, id: m.next, processes: make(map[string]*localProcess)}
+	bound, err := backend.Open(lifetime, ScopeSpec{
+		Workspace:      root,
+		Policy:         opts.Policy,
+		Environment:    environment,
+		Timeout:        opts.Timeout,
+		MaxOutputBytes: opts.MaxOutputBytes,
+		MaxProcesses:   opts.MaxProcesses,
+		User:           user,
+	})
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+
+	s := &Scope{
+		manager:     m,
+		backend:     bound,
+		backendName: backend.Name(),
+		isolated:    backend.Isolated(),
+		options:     opts,
+		workspace:   root,
+		user:        user,
+		environment: environment,
+		ctx:         lifetime,
+		cancel:      cancel,
+		closeDone:   make(chan struct{}),
+		id:          id,
+		processes:   make(map[string]Process),
+	}
+
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		cancel()
+		_ = bound.Close(context.Background())
+		return nil, ErrClosed
+	}
 	m.scopes[s] = struct{}{}
+	m.mu.Unlock()
+
 	go func() { <-lifetime.Done(); _ = s.Close(context.Background()) }()
 	return s, nil
 }
 
 func (s *Scope) Workspace() string { return s.workspace }
+
+// Backend names the backend executing this scope's commands.
+func (s *Scope) Backend() string { return s.backendName }
+
+// Isolated reports whether this scope's commands run under OS-level
+// restrictions. A false result means policy admission only.
+func (s *Scope) Isolated() bool { return s.isolated }
 
 func (s *Scope) Check() error {
 	s.mu.Lock()
@@ -186,6 +296,47 @@ func (s *Scope) resolveDir(relative string) (string, error) {
 	return dir, nil
 }
 
+// Start admits a command and hands it to the backend. Every check that decides
+// what a command may do happens here, so no backend can widen a scope.
+func (s *Scope) Start(ctx context.Context, command Command) (Process, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.checkLocked(); err != nil {
+		return nil, err
+	}
+	if len(s.processes) >= s.options.MaxProcesses {
+		return nil, fmt.Errorf("scope process limit reached")
+	}
+	if (command.Executable == "") == (strings.TrimSpace(command.Shell) == "") {
+		return nil, fmt.Errorf("specify exactly one executable or shell command")
+	}
+	if command.Shell != "" && len(command.Args) != 0 {
+		return nil, fmt.Errorf("shell command cannot include argv")
+	}
+	if command.Stdin != nil && !s.user {
+		return nil, ErrDenied
+	}
+	dir, err := s.resolveDir(command.Dir)
+	if err != nil {
+		return nil, err
+	}
+	timeout := command.Timeout
+	if timeout <= 0 || timeout > s.options.Timeout {
+		timeout = s.options.Timeout
+	}
+	s.next++
+	id := fmt.Sprintf("scope-%d-proc-%d", s.id, s.next)
+	p, err := s.backend.Start(ctx, Launch{ID: id, Command: command, Dir: dir, Timeout: timeout})
+	if err != nil {
+		return nil, err
+	}
+	s.processes[id] = p
+	return p, nil
+}
+
 func (s *Scope) Process(id string) (Process, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -196,27 +347,47 @@ func (s *Scope) Process(id string) (Process, error) {
 	return p, nil
 }
 
+// Close stops and joins the scope's commands, then releases backend resources.
+// Concurrent callers share one shutdown rather than closing a backend twice.
 func (s *Scope) Close(ctx context.Context) error {
+	s.closeOnce.Do(func() {
+		s.closeErr = s.close(ctx)
+		close(s.closeDone)
+	})
+	<-s.closeDone
+	return s.closeErr
+}
+
+func (s *Scope) close(ctx context.Context) error {
 	s.mu.Lock()
 	s.closed = true
 	s.cancel()
-	processes := make([]*localProcess, 0, len(s.processes))
+	processes := make([]Process, 0, len(s.processes))
 	for _, p := range s.processes {
 		processes = append(processes, p)
 	}
 	s.mu.Unlock()
-	for _, p := range processes {
-		p.cancel()
+
+	errs := make([]error, len(processes))
+	var wg sync.WaitGroup
+	for i, p := range processes {
+		wg.Add(1)
+		go func(i int, p Process) {
+			defer wg.Done()
+			errs[i] = p.Stop(ctx)
+		}(i, p)
 	}
-	for _, p := range processes {
-		if _, err := p.Wait(ctx); err != nil {
-			return err
-		}
+	wg.Wait()
+
+	err := errors.Join(errs...)
+	if backendErr := s.backend.Close(ctx); err == nil {
+		err = backendErr
 	}
+
 	s.manager.mu.Lock()
 	delete(s.manager.scopes, s)
 	s.manager.mu.Unlock()
-	return nil
+	return err
 }
 
 func (m *Manager) Close(ctx context.Context) error {
@@ -293,7 +464,8 @@ func RunLocal(ctx context.Context, root string, policy Policy, cmd Command) (Res
 }
 
 // DeriveScratch is for controller-created scratch copies, not tool arguments.
-// It preserves the bound policy, environment, cancellation and manager owner.
+// It preserves the bound policy, backend, environment, cancellation, trusted-user
+// standing, and manager owner.
 func DeriveScratch(ctx context.Context, root string) (*Scope, error) {
 	parent := FromContext(ctx)
 	if parent == nil {
@@ -304,10 +476,5 @@ func DeriveScratch(ctx context.Context, root string) (*Scope, error) {
 	}
 	opts := parent.options
 	opts.Workspace = root
-	child, err := parent.manager.Open(parent.ctx, opts)
-	if err != nil {
-		return nil, err
-	}
-	child.environment = append([]string(nil), parent.environment...)
-	return child, nil
+	return parent.manager.open(parent.ctx, opts, parent.user)
 }

@@ -63,6 +63,29 @@ Scratch build directories are created by trusted code and explicitly attached as
 derived scopes with the same policy and owner. Ordinary command arguments cannot
 rebind a workspace. Disposable copies are not security isolation.
 
+## Backend selection
+
+A scope resolves exactly one backend at open time. `Backend` names a registered
+implementation and empty selects `local`; `RequireIsolation` refuses any backend
+that does not report enforcement. Registration is a controller act: model
+arguments choose only among backends already registered on the manager, and can
+neither add one nor shadow `local`.
+
+Resolution never widens a request. An unknown name, an unisolated backend under
+`RequireIsolation`, or a backend whose availability probe fails is an error, and
+no scope is returned. There is no path from a failed isolation request to local
+execution.
+
+The scope, not the backend, is the authority. It checks policy, validates the
+command shape, admits stdin, resolves the working directory inside the canonical
+workspace, clamps the timeout, and assigns the process ID before a backend ever
+sees a launch. A backend therefore cannot widen a scope; it can only fail to
+narrow one. A backend that reports isolation it does not enforce is a defect, so
+`Isolated` must track what the implementation actually establishes.
+
+Per-scope backend resources are bound to the scope lifetime and released once.
+The local backend owns nothing; an isolated backend owns its worker.
+
 ## Local backend and future isolation
 
 Local execution provides policy admission, canonical working-directory checks,
@@ -76,11 +99,21 @@ restrictions before running untrusted code, contain descendants, and preserve
 the same workspace view. The trusted controller keeps LLM credentials and model
 transport outside the worker. Model transport is a separate data policy.
 
+`Scope.Workspace` stays the canonical host path, because file tools read and
+write it directly. A backend that presents a different path to the process must
+map that exact tree, so a bind mount is the shape that keeps one workspace view;
+a copy would reintroduce path validation and host-edit conflict detection.
+
 ## Validation
 
 Regression tests cover denied launches, missing scopes, workspace escapes,
 unsupported isolation, structured argv, unified shell semantics, cancellation,
-scope/manager shutdown, background ownership, and bounded output. An architecture
-test rejects production subprocess constructors outside execution backends and
-the audited folder picker. Future isolation needs adversarial containment tests
-before it can be advertised as a security boundary.
+scope/manager shutdown, background ownership, and bounded output. Backend
+selection is covered with a recording backend: refusing unknown and unisolated
+backends, refusing an unavailable one without falling back, releasing a backend
+scope exactly once, inheriting backend and trusted-user standing through derived
+scratch scopes, and confirming the backend receives no launch that admission
+should have stopped. An architecture test rejects production subprocess
+constructors outside execution backends and the audited folder picker. Future
+isolation needs adversarial containment tests before it can be advertised as a
+security boundary.
