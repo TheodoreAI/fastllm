@@ -47,8 +47,11 @@ type Runner struct {
 	// window. Zero falls back to DefaultCompactionConfig, which keeps Runners
 	// constructed without settings (tests, embedders) working unchanged.
 	ContextBudgetChars int
-	agents             *AgentManager
-	executions         *execution.Manager
+	// contextWindow is the active model's window in tokens, reported to the
+	// model in its environment section. Zero means unknown and is omitted.
+	contextWindow int
+	agents        *AgentManager
+	executions    *execution.Manager
 }
 
 // compactionConfig returns the runner's budget, preferring a window-derived one.
@@ -73,14 +76,9 @@ func (r *Runner) SwitchModel(endpoint *config.ModelEndpoint) error {
 
 	// Set before either return below, so a provider-routed endpoint gets its
 	// budget too. The endpoint's own context_window wins over the model table.
-	window := endpoint.ContextWindow
-	if window <= 0 {
-		window = lookupKnownContextWindow(endpoint.ID)
-	}
-	if window <= 0 {
-		window = DefaultContextWindowTokens
-	}
+	window := ResolveContextWindow(&config.Settings{Models: []config.ModelEndpoint{*endpoint}}, endpoint.ID)
 	r.ContextBudgetChars = contextBudgetChars(window)
+	r.contextWindow = window
 
 	// A provider-tagged endpoint is served by one of the router's native
 	// clients, which builds its own URL and speaks its own wire format. Such an
@@ -244,18 +242,21 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 	absWorkingDir = scope.Workspace()
 	req.WorkingDir = absWorkingDir
 
-	systemPrompt := req.SystemPrompt
-	if strings.TrimSpace(systemPrompt) == "" {
-		systemPrompt = DefaultSystemPrompt
+	// The one place the system prompt is assembled; callers contribute only the
+	// base override and per-turn extras.
+	contextWindow := r.contextWindow
+	if contextWindow <= 0 {
+		contextWindow = lookupKnownContextWindow(model)
 	}
-	systemPrompt += sandboxPromptNote(scope)
-	systemPrompt += modePrompt(req)
-
-	// Auto-discover workspace rules (AGENTS.md, CLAUDE.md, etc.)
-	discoveredRules := DiscoverWorkspaceRules(absWorkingDir)
-	if len(discoveredRules) > 0 {
-		systemPrompt += FormatRulesForPrompt(discoveredRules)
-	}
+	systemPrompt := BuildSystemPrompt(PromptContext{
+		Base:        req.SystemPrompt,
+		Skills:      DiscoverWorkspaceSkills(absWorkingDir),
+		Rules:       DiscoverWorkspaceRules(absWorkingDir),
+		Environment: CollectEnvironment(absWorkingDir, model, contextWindow),
+		TurnExtra:   req.PromptExtra,
+		Sandbox:     sandboxPromptNote(scope),
+		Mode:        modePrompt(req),
+	})
 
 	// Initialize git checkpoint manager and capture initial state
 	checkpointMgr := NewCheckpointManager(absWorkingDir, scope)
@@ -290,11 +291,7 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 	messages := []llm.Message{
 		{Role: "system", Content: systemPrompt},
 	}
-	for _, m := range req.InitialMessages {
-		if m.Role != "system" && strings.TrimSpace(m.Content) != "" {
-			messages = append(messages, llm.Message{Role: m.Role, Content: m.Content})
-		}
-	}
+	messages = append(messages, replayMessages(req.InitialMessages)...)
 	messages = append(messages, llm.Message{Role: "user", Content: req.Task})
 
 	sessionMetrics := &SessionMetrics{}
@@ -345,6 +342,7 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 			result.Error = fmt.Sprintf("LLM chat error on turn %d: %v", turn, err)
 			result.Turns = turn
 			result.DurationMS = time.Since(startTime).Milliseconds()
+			result.Transcript = runTranscript(messages, "")
 			emit(Event{Type: EventTaskFinished, Result: result, Error: result.Error})
 			return result, err
 		}
@@ -450,8 +448,11 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 			result.Turns = turn
 			result.Error = "max turns limit reached before task finished"
 			// Give model one final chance to state its final summary with no tools
+			// A user-role notice, not a system one: providers with a single
+			// system slot (Anthropic, Gemini) hoist a mid-conversation system
+			// message to the top, where it would read as a standing instruction.
 			messages = append(messages, llm.Message{
-				Role:    "system",
+				Role:    "user",
 				Content: "Turn budget exhausted. Stop calling tools and provide your final response summarizing what was done and what remains.",
 			})
 			finalResult, err := chatWithRetry(ctx, r.LLM, routed, messages, nil, req.ThinkLevel, nil)
@@ -464,6 +465,7 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 
 	result.DurationMS = time.Since(startTime).Milliseconds()
 	sessionMetrics.ObservationEfficiency = observations.Stats()
+	result.Transcript = runTranscript(messages, result.FinalResponse)
 	emit(Event{Type: EventTaskFinished, Result: result, Error: result.Error})
 	return result, nil
 }

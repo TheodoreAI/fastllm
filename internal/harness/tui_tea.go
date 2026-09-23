@@ -169,7 +169,6 @@ type teaModel struct {
 	rules         []RuleFile
 	skills        []Skill
 	settings      *config.Settings
-	systemPrompt  string
 
 	// UI components
 	viewport viewport.Model
@@ -264,7 +263,6 @@ func newTeaModel(runner *Runner, req RunRequest) (*teaModel, error) {
 	}
 
 	rules := DiscoverWorkspaceRules(absWorkingDir)
-	rulesPrompt := FormatRulesForPrompt(rules)
 	skills := DiscoverWorkspaceSkills(absWorkingDir)
 
 	checkpointMgr := NewCheckpointManager(absWorkingDir)
@@ -318,7 +316,6 @@ func newTeaModel(runner *Runner, req RunRequest) (*teaModel, error) {
 		rules:          rules,
 		skills:         skills,
 		settings:       settings,
-		systemPrompt:   DefaultSystemPrompt + rulesPrompt + formatSkillCatalogPrompt(skills),
 		input:          ta,
 		spinner:        sp,
 		promptHistory:  hist,
@@ -975,10 +972,14 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					ev.Result.Turns, float64(ev.Result.DurationMS)/1000.0)))
 			}
 			response := m.lastResponse
-			if ev.Result != nil && strings.TrimSpace(ev.Result.FinalResponse) != "" {
-				response = ev.Result.FinalResponse
+			var transcript []llm.Message
+			if ev.Result != nil {
+				if strings.TrimSpace(ev.Result.FinalResponse) != "" {
+					response = ev.Result.FinalResponse
+				}
+				transcript = ev.Result.Transcript
 			}
-			m.recordCompletedPrompt(response)
+			m.recordCompletedPrompt(response, transcript)
 			if m.pendingPlan != "" {
 				m.planCursor = 0
 				m.input.Blur()
@@ -1263,7 +1264,6 @@ func (m *teaModel) changeWorkingDirectory(path string) error {
 	m.checkpointMgr = NewCheckpointManager(newDir)
 	m.rules = DiscoverWorkspaceRules(newDir)
 	m.skills = DiscoverWorkspaceSkills(newDir)
-	m.systemPrompt = DefaultSystemPrompt + FormatRulesForPrompt(m.rules) + formatSkillCatalogPrompt(m.skills)
 	m.settings, m.configPath = settings, configPath
 	m.statusNotice = "Directory changed to " + filepath.Base(newDir)
 	_ = m.saveSession()
@@ -1649,7 +1649,6 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 	// Snapshot the transcript on the UI goroutine; the worker below must not read
 	// m.sessionMessages while Update may be appending to it.
 	priorMessages := m.initialMessages()
-	systemPrompt := m.systemPrompt + skillPrompt
 
 	// Capture run settings before the worker starts; directory and runtime
 	// commands on the UI goroutine may change them while the model is running.
@@ -1657,7 +1656,7 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 		Task:               inputVal,
 		WorkingDir:         m.workingDir,
 		Model:              m.modelName,
-		SystemPrompt:       systemPrompt,
+		PromptExtra:        skillPrompt,
 		MaxTurns:           m.maxTurns,
 		CommandTimeout:     m.commandTimeout,
 		ThinkLevel:         m.thinkLevel,
@@ -1818,7 +1817,7 @@ func (m *teaModel) compactionConfig() CompactionConfig {
 
 // contextUsage reports progress toward automatic compaction. The numerator must
 // stay exactly what OnlineCompactMessages measures -- sessionMessages alone.
-// systemPrompt travels as RunRequest.SystemPrompt and is never an element of
+// The system prompt is built inside Runner.Run and is never an element of
 // sessionMessages, so counting it here (or the unsent draft) inflated the gauge
 // by the whole prompt: ~18% of budget in a repo with a large skill catalog,
 // enough to show red while compaction was still far from firing.

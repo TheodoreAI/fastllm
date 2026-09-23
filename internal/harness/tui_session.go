@@ -141,11 +141,14 @@ func (m *teaModel) startNewSession() error {
 }
 
 func (m *teaModel) initialMessages() []InitialMessage {
+	// Tool calls and results travel too; replayMessages drops system messages
+	// and any unpaired tool traffic.
 	messages := make([]InitialMessage, 0, len(m.sessionMessages))
 	for _, message := range m.sessionMessages {
-		if (message.Role == "user" || message.Role == "assistant") && strings.TrimSpace(message.Content) != "" {
-			messages = append(messages, InitialMessage{Role: message.Role, Content: message.Content})
-		}
+		messages = append(messages, InitialMessage{
+			Role: message.Role, Content: message.Content,
+			ToolCalls: message.ToolCalls, ToolCallID: message.ToolCallID,
+		})
 	}
 	return messages
 }
@@ -179,13 +182,21 @@ func (m *teaModel) compactSessionContext() string {
 	return ""
 }
 
-func (m *teaModel) recordCompletedPrompt(response string) {
+// recordCompletedPrompt stores the finished turn. A run's transcript already
+// holds the replayed history, the prompt, its tool traffic and the answer, so it
+// replaces the session messages; without one (the run failed before its loop
+// started) only the prompt and whatever answer arrived are kept.
+func (m *teaModel) recordCompletedPrompt(response string, transcript []llm.Message) {
 	if strings.TrimSpace(m.pendingPrompt) == "" {
 		return
 	}
-	m.sessionMessages = append(m.sessionMessages, llm.Message{Role: "user", Content: m.pendingPrompt})
-	if strings.TrimSpace(response) != "" {
-		m.sessionMessages = append(m.sessionMessages, llm.Message{Role: "assistant", Content: response})
+	if len(transcript) > 0 {
+		m.sessionMessages = append([]llm.Message(nil), transcript...)
+	} else {
+		m.sessionMessages = append(m.sessionMessages, llm.Message{Role: "user", Content: m.pendingPrompt})
+		if strings.TrimSpace(response) != "" {
+			m.sessionMessages = append(m.sessionMessages, llm.Message{Role: "assistant", Content: response})
+		}
 	}
 	m.pendingPrompt = ""
 	if err := m.saveSession(); err != nil {
@@ -199,6 +210,11 @@ func (m *teaModel) appendSessionTranscript() {
 	}
 	m.appendHistory(styleMuted.Render("Recovered session "+m.activeSession.ID+" · "+m.activeSession.Title) + "\n")
 	for _, message := range m.sessionMessages {
+		// Tool traffic and compaction summaries are context for the model, not
+		// part of the conversation the user remembers.
+		if strings.TrimSpace(message.Content) == "" || isConversationSummary(message) {
+			continue
+		}
 		switch message.Role {
 		case "user":
 			m.appendHistory(formatSubmittedPrompt(message.Content))

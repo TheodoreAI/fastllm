@@ -71,28 +71,43 @@ func DiscoverWorkspaceRules(workingDir string) []RuleFile {
 		current = parent
 	}
 
+	// Discovery walks upward, but the prompt lists the outermost file first so the
+	// file nearest the working directory is read last and, where two files
+	// disagree, reads as the more specific instruction.
+	for i, j := 0, len(rules)-1; i < j; i, j = i+1, j-1 {
+		rules[i], rules[j] = rules[j], rules[i]
+	}
 	return rules
 }
 
-// FormatRulesForPrompt formats discovered rules into a system prompt section.
+// maxRuleFileChars caps each rules file in the prompt. A rules file is sent with
+// every request, so an oversized one silently eats the budget compaction is
+// trying to protect.
+const maxRuleFileChars = 16000
+
+// FormatRulesForPrompt renders each rules file in its own tagged block. The tag
+// carries the source path and marks exactly where the file begins and ends, so
+// headings inside a file cannot be mistaken for the prompt's own structure.
 func FormatRulesForPrompt(rules []RuleFile) string {
 	if len(rules) == 0 {
 		return ""
 	}
 
 	var sb strings.Builder
-	sb.WriteString("\n\n# Project Rules and Guidelines\n")
-	sb.WriteString("The following project-specific rules were discovered in the workspace. Follow them strictly:\n\n")
-
+	sb.WriteString("The following instruction files were found in the workspace. Follow them unless they conflict with the operating rules above or with the current mode; where they disagree with each other, the later (more specific) file wins.")
 	for _, rule := range rules {
-		sb.WriteString(fmt.Sprintf("## Rules from %s:\n%s\n\n", rule.Filename, strings.TrimSpace(rule.Content)))
+		content := strings.TrimSpace(rule.Content)
+		if len(content) > maxRuleFileChars {
+			content = content[:maxRuleFileChars] + fmt.Sprintf("\n[... truncated: the file is %d characters; read it for the rest]", len(rule.Content))
+		}
+		fmt.Fprintf(&sb, "\n\n<project_rules source=%q>\n%s\n</project_rules>", filepath.ToSlash(rule.Filename), content)
 	}
-
 	return sb.String()
 }
 
+// isRepoRoot reports whether dir contains .git, which is a directory in a normal
+// checkout and a file in a worktree or submodule.
 func isRepoRoot(dir string) bool {
-	gitDir := filepath.Join(dir, ".git")
-	info, err := os.Stat(gitDir)
-	return err == nil && (info.IsDir() || !info.IsDir())
+	_, err := os.Stat(filepath.Join(dir, ".git"))
+	return err == nil
 }

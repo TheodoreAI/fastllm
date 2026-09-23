@@ -59,10 +59,9 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 
 	// Auto-discover workspace rules (AGENTS.md, CLAUDE.md, etc.)
 	discoveredRules := DiscoverWorkspaceRules(absWorkingDir)
-	rulesPrompt := FormatRulesForPrompt(discoveredRules)
 	discoveredSkills := DiscoverWorkspaceSkills(absWorkingDir)
 	currentSystemPrompt := func() string {
-		return systemPrompt + rulesPrompt + formatSkillCatalogPrompt(discoveredSkills)
+		return BuildSystemPrompt(PromptContext{Base: systemPrompt, Skills: discoveredSkills, Rules: discoveredRules})
 	}
 	// Recomputed rather than captured: /model and /dir both change which window
 	// applies, and a budget frozen at startup would keep compacting a 200k model
@@ -195,7 +194,6 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 		fileReader = files.New(absWorkingDir, true)
 		checkpointMgr = NewCheckpointManager(absWorkingDir)
 		discoveredRules = DiscoverWorkspaceRules(absWorkingDir)
-		rulesPrompt = FormatRulesForPrompt(discoveredRules)
 		discoveredSkills = DiscoverWorkspaceSkills(absWorkingDir)
 		settings, configPath = newSettings, newConfigPath
 		permissions.SetWorkspace(absWorkingDir)
@@ -840,9 +838,13 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 
 		// Add user turn. Skill instructions apply only to this turn and are
 		// removed before the durable session transcript is saved.
+		// The turn rebuilds the full prompt from these parts once it knows the
+		// sandbox and mode.
 		baseSystemPrompt := sessionMessages[0].Content
-		if skillPrompt != "" {
-			sessionMessages[0].Content += skillPrompt
+		turnPrompt := PromptContext{
+			Base: systemPrompt, Skills: discoveredSkills, Rules: discoveredRules,
+			Environment: CollectEnvironment(absWorkingDir, model, ResolveContextWindow(settings, model)),
+			TurnExtra:   skillPrompt,
 		}
 		sessionMessages = append(sessionMessages, llm.Message{
 			Role:    "user",
@@ -880,6 +882,7 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 			expandedTools,
 			observations,
 			observationStore,
+			turnPrompt,
 			currentCompactionConfig(),
 		)
 		sessionMessages[0].Content = baseSystemPrompt
@@ -926,6 +929,7 @@ func (r *Runner) runInteractiveTurn(
 	expandedTools bool,
 	observations *ObservationManager,
 	observationStore *ObservationStore,
+	prompt PromptContext,
 	compactionCfg CompactionConfig,
 ) (proposedPlan string) {
 	owner := r.executions
@@ -953,14 +957,12 @@ func (r *Runner) runInteractiveTurn(
 	defer scope.Close(context.Background())
 	ctx = execution.WithScope(ctx, scope)
 	absWorkingDir = scope.Workspace()
-	if note := sandboxPromptNote(scope); note != "" && len(*sessionMessages) > 0 {
-		// The caller restores the base system prompt after every turn.
-		(*sessionMessages)[0].Content += note
-	}
 	turnReq.WorkingDir = absWorkingDir
-	if note := modePrompt(turnReq); note != "" && len(*sessionMessages) > 0 {
+	if len(*sessionMessages) > 0 {
 		// The caller restores the base system prompt after every turn.
-		(*sessionMessages)[0].Content += note
+		prompt.Sandbox = sandboxPromptNote(scope)
+		prompt.Mode = modePrompt(turnReq)
+		(*sessionMessages)[0].Content = BuildSystemPrompt(prompt)
 	}
 	fileReader = files.New(absWorkingDir, policyForRequest(turnReq).write)
 	processMgr.KillAll()

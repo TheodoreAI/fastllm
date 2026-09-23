@@ -180,6 +180,11 @@ func RunCLI(args []string) int {
 		if err := runner.SwitchModel(matched); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
 		}
+	} else {
+		// An unconfigured model still gets a window-sized budget from the
+		// known-model table instead of the fixed default.
+		runner.contextWindow = ResolveContextWindow(settings, model)
+		runner.ContextBudgetChars = contextBudgetChars(runner.contextWindow)
 	}
 
 	req := RunRequest{
