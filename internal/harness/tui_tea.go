@@ -208,6 +208,7 @@ type teaModel struct {
 	pendingPermission *teaPermissionRequestMsg
 	skillsModal       bool
 	skillCursor       int
+	changes           sessionChanges
 
 	// Prompt history navigation
 	promptHistory []string
@@ -348,8 +349,23 @@ func (m *teaModel) frameWidth() int {
 	return m.width - 1
 }
 
+// showChangesColumn reports whether the terminal is wide enough to give the
+// session's file changes their own column beside the conversation.
+func (m *teaModel) showChangesColumn() bool {
+	return m.frameWidth() >= changesColumnMinFrame
+}
+
+// conversationWidth is the width of the conversation viewport: the full frame,
+// less the changes column when it is shown.
+func (m *teaModel) conversationWidth() int {
+	if m.showChangesColumn() {
+		return m.frameWidth() - changesColumnWidth
+	}
+	return m.frameWidth()
+}
+
 func (m *teaModel) contentWidth() int {
-	w := m.width - 4
+	w := m.conversationWidth() - 3
 	if w < 40 {
 		return 76
 	}
@@ -379,13 +395,13 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncInputHeight()
 
 		if !m.ready {
-			m.viewport = viewport.New(m.frameWidth(), 3)
+			m.viewport = viewport.New(m.conversationWidth(), 3)
 			m.viewport.SetContent(m.historyText.String())
 			m.ready = true
 			m.resizeViewport()
 			m.viewport.GotoBottom()
 		} else {
-			m.viewport.Width = m.frameWidth()
+			m.viewport.Width = m.conversationWidth()
 			m.resizeViewport()
 		}
 
@@ -610,6 +626,7 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.startAgentWork(ev.Turn)
 				m.activeTool = ""
 				m.activeArgs = ""
+				m.changes.Record(m.workingDir, ev.ToolCall.Name, ev.ToolCall.Arguments, ev.ToolCall.Result)
 				previewLines := 4
 				if m.expandedTools {
 					previewLines = 10000
@@ -1553,7 +1570,12 @@ func (m *teaModel) View() string {
 	sb.WriteString(styleMuted.Render(strings.Repeat("─", m.frameWidth())) + "\n")
 
 	// 2. Viewport (Conversation & Tool Call History)
-	sb.WriteString(m.viewport.View() + "\n")
+	// The changes column sits beside it on wide terminals.
+	conversation := m.viewport.View()
+	if m.showChangesColumn() {
+		conversation = lipgloss.JoinHorizontal(lipgloss.Top, conversation, m.changes.Render(changesColumnWidth, m.viewport.Height))
+	}
+	sb.WriteString(conversation + "\n")
 
 	// 3. Bottom Input Box with Rounded Border
 	var borderCol lipgloss.Color = tuiColorBorder

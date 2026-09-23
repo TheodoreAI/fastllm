@@ -82,6 +82,9 @@ func (m *teaModel) loadSession(session *InteractiveSession) error {
 	m.sandbox = session.Runtime.Sandbox
 	m.sessionMessages = append([]llm.Message(nil), session.Messages...)
 	m.sessionMetrics = session.Metrics
+	// Tool calls are not persisted with a session, so a resumed session starts
+	// with an empty changes list rather than inheriting the previous one's.
+	m.changes.Reset()
 	session.ClosedAt = nil
 	m.activeSession = session
 	m.permissionController().SetMode(m.permissionMode)
@@ -122,6 +125,7 @@ func (m *teaModel) startNewSession() error {
 	}
 	m.sessionMessages = nil
 	m.sessionMetrics = SessionMetrics{}
+	m.changes.Reset()
 	m.latestMetrics = nil
 	m.lastResponse = ""
 	m.permissionController().ClearGrants()
