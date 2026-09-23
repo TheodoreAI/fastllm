@@ -740,7 +740,13 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Update viewport & input
 	var vpCmd, inCmd tea.Cmd
-	m.viewport, vpCmd = m.viewport.Update(msg)
+	// Keystrokes belong to the input box. The viewport's default keymap binds
+	// plain letters (j/k/d/u/f/b/space) to scrolling, so forwarding typed keys
+	// here made the conversation jump up and down while typing. Scrolling by key
+	// is handled explicitly above (PgUp/PgDn) and by the mouse-wheel branch.
+	if _, isKey := msg.(tea.KeyMsg); !isKey {
+		m.viewport, vpCmd = m.viewport.Update(msg)
+	}
 	m.input, inCmd = m.input.Update(msg)
 	cmds = append(cmds, vpCmd, inCmd)
 	m.syncInputHeight()
