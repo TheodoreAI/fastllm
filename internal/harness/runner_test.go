@@ -51,7 +51,7 @@ func TestRunnerInteractiveAuthorizationCanDenyMutation(t *testing.T) {
 	runner := NewRunner(mock, tmpDir, "test-model")
 	var askedName, askedSummary string
 	result, err := runner.Run(context.Background(), RunRequest{
-		Task: "try a write", WorkingDir: tmpDir, Model: "test-model", PermissionMode: PermissionAsk,
+		Task: "try a write", WorkingDir: tmpDir, Model: "test-model", PermissionMode: PermissionAgent,
 		Authorize: func(name, summary string) bool {
 			askedName, askedSummary = name, summary
 			return false
@@ -91,7 +91,7 @@ func TestRunnerInteractiveAuthorizationDeniesFusedFollowUp(t *testing.T) {
 	runner := NewRunner(mock, tmpDir, "test-model")
 	var authorizedCalls []string
 	result, err := runner.Run(context.Background(), RunRequest{
-		Task: "try a fused write", WorkingDir: tmpDir, Model: "test-model", PermissionMode: PermissionAsk,
+		Task: "try a fused write", WorkingDir: tmpDir, Model: "test-model", PermissionMode: PermissionAgent,
 		Authorize: func(name, summary string) bool {
 			authorizedCalls = append(authorizedCalls, name+":"+summary)
 			if name == "run_command" {
@@ -127,7 +127,7 @@ func TestRunnerExplicitlyDisablesCommands(t *testing.T) {
 	runner := NewRunner(mock, t.TempDir(), "test-model")
 	runner.AllowCommands = true
 	result, err := runner.Run(context.Background(), RunRequest{
-		Task: "no commands", CommandsConfigured: true, AllowCommands: false, PermissionMode: PermissionAuto,
+		Task: "no commands", CommandsConfigured: true, AllowCommands: false, PermissionMode: PermissionFull,
 	}, nil)
 	if err != nil || result.FinalResponse != "done" {
 		t.Fatalf("explicit command disable run failed: result=%+v err=%v", result, err)
@@ -221,7 +221,7 @@ func TestRunner_AutonomousFileEditing(t *testing.T) {
 	runner := NewRunner(mock, tmpDir, "test-model")
 	events := make([]Event, 0)
 	res, err := runner.Run(context.Background(), RunRequest{
-		Task:       "Update the text file",
+		Task: "Update the text file", PermissionMode: PermissionFull,
 		WorkingDir: tmpDir,
 	}, func(ev Event) {
 		events = append(events, ev)
@@ -290,7 +290,7 @@ func TestRunner_RunCommand(t *testing.T) {
 
 	runner := NewRunner(mock, tmpDir, "test-model")
 	res, err := runner.Run(context.Background(), RunRequest{
-		Task:          "Run test command",
+		Task: "Run test command", PermissionMode: PermissionFull,
 		WorkingDir:    tmpDir,
 		AllowCommands: true,
 	}, nil)
@@ -341,6 +341,7 @@ func TestExecuteToolRejectsTypeInvalidArguments(t *testing.T) {
 	defer runner.Close()
 	result := runner.executeTool(toolExecutionContext{
 		ctx:            context.Background(),
+		request:        RunRequest{PermissionMode: PermissionFull, AllowCommands: true},
 		workingDir:     runner.DefaultWorkingDir,
 		allowCommands:  true,
 		processManager: NewProcessManager(),

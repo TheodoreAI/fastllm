@@ -24,6 +24,23 @@ Follow these operational rules:
 5. Use spawn_agent only for concrete independent subtasks. Continue useful work while it runs, then call agent_status once to retrieve its result. agent_status waits for an active child; never rapidly poll it. Do not finish while required child work is still pending.
 6. When finished, call finish_task (or state your final answer) explaining what was done and verifying the result.`
 
+// planModePrompt shapes behaviour in plan mode. It is advice, not enforcement:
+// the mode table already withholds every tool that could change anything.
+const planModePrompt = `
+
+PLAN MODE: You are planning, not implementing. Your tools are read-only and you have no network access; any attempt to modify files or run commands will be refused.
+1. Explore the codebase with read_file, list_files, search_files, and glob_files until you understand what the change involves.
+2. Do not attempt edits, commands, or delegation.
+3. Finish by calling submit_plan exactly once with a markdown plan containing: Context (what and why), Files to change (paths and what changes in each), Steps (ordered), and Verification (how to test it).
+4. If the user only asked a question, answer it with finish_task instead of submitting a plan.
+The user reviews the plan and decides whether, and with which permissions, it is carried out.`
+
+// editModePrompt, like planModePrompt, only shapes behaviour; the monitor is
+// what keeps edit mode from starting processes.
+const editModePrompt = `
+
+EDIT MODE: You can read and edit files, but you cannot run commands, build, test, or start processes, and fused then_run follow-ups are refused. Make the edits, re-read the files to check them, then call finish_task and tell the user which commands they should run to verify.`
+
 var webSearchTool = webtools.SearchTool
 var webFetchTool = webtools.FetchTool
 
@@ -316,6 +333,24 @@ var killProcessTool = llm.Tool{
 				},
 			},
 			"required": []string{"process_id"},
+		},
+	},
+}
+
+var submitPlanTool = llm.Tool{
+	Type: "function",
+	Function: llm.ToolFunction{
+		Name:        "submit_plan",
+		Description: "Plan mode only: submit the finished implementation plan for the user to review and approve. Ends the turn.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"plan": map[string]any{
+					"type":        "string",
+					"description": "The full plan in markdown: Context, Files to change, Steps, Verification.",
+				},
+			},
+			"required": []string{"plan"},
 		},
 	},
 }

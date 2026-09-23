@@ -216,12 +216,16 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 	} else if req.AllowCommands {
 		allowCmds = true
 	}
-	policy := policyForRequest(req)
-	allowCmds = allowCmds && policy.commands
+	// The mode is fixed for the whole run (I6), and an empty or unknown mode
+	// is plan (I3): a caller that says nothing gets the least authority.
+	req.PermissionMode = NormalizeMode(req.PermissionMode)
 	req.WorkingDir = absWorkingDir
 	req.Model = model
 	req.AllowCommands = allowCmds
 	req.CommandsConfigured = true
+	policy := policyForRequest(req)
+	allowCmds = policy.commands
+	req.AllowCommands = allowCmds
 	owner := r.executions
 	if owner == nil {
 		owner = execution.NewManager()
@@ -245,6 +249,7 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 		systemPrompt = DefaultSystemPrompt
 	}
 	systemPrompt += sandboxPromptNote(scope)
+	systemPrompt += modePrompt(req)
 
 	// Auto-discover workspace rules (AGENTS.md, CLAUDE.md, etc.)
 	discoveredRules := DiscoverWorkspaceRules(absWorkingDir)
@@ -276,32 +281,11 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 	// Prepare sandboxed file reader with writes enabled or attenuated
 	fileReader := files.New(absWorkingDir, policy.write)
 
-	// Available tools
-	tools := []llm.Tool{
-		readFileTool,
-		listFilesTool,
-		searchFilesTool,
-		globFilesTool,
-		updatePlanTool,
-		finishTaskTool,
-	}
-	if policy.network {
-		tools = append(tools, webSearchTool, webFetchTool)
-	}
-	if policy.write {
-		tools = append(tools, writeFileTool, editFileTool, patchFileTool)
-	}
-	if policy.delegate {
-		tools = append(tools, r.agents.Tools(req.AgentDepth)...)
-	} else {
-		tools = append(tools, agentStatusTool, sendAgentMessageTool)
-	}
-	if r.EnableObservations {
-		tools = append(tools, readObservationTool)
-	}
-	if allowCmds {
-		tools = append(tools, runCommandTool, processStatusTool, killProcessTool)
-	}
+	// Available tools: exactly what the monitor would not deny.
+	tools := toolsForRequest(req, toolAvailability{
+		observations: r.EnableObservations,
+		delegation:   len(r.agents.Tools(req.AgentDepth)) > 0,
+	})
 
 	messages := []llm.Message{
 		{Role: "system", Content: systemPrompt},
@@ -321,6 +305,8 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 		Model:      model,
 		History:    make([]TurnRecord, 0, maxTurns),
 		Metrics:    sessionMetrics,
+		// The mode the run was actually evaluated under, after fail-closed normalization.
+		PermissionMode: req.PermissionMode,
 	}
 
 	var taskFinished bool
@@ -414,23 +400,16 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 			}
 			emit(Event{Type: EventToolCall, Turn: turn, ToolCall: &tcRec})
 
-			var execution toolExecutionResult
-			if req.Authorize != nil && requiresPermission(call.Function.Name) && !req.Authorize(call.Function.Name, summarizeArgs(call.Function.Arguments)) {
-				execution.output = "Permission denied by user for " + call.Function.Name + "."
-			} else if req.Authorize != nil && followUpFromArguments(call.Function.Arguments) != nil && !req.Authorize("run_command", "command="+followUpFromArguments(call.Function.Arguments).Command) {
-				execution.output = "Permission denied by user for the fused follow-up command. The file mutation was not attempted."
-			} else {
-				execution = r.executeTool(toolExecutionContext{
-					ctx:              ctx,
-					request:          req,
-					fileReader:       fileReader,
-					workingDir:       absWorkingDir,
-					allowCommands:    allowCmds,
-					commandTimeout:   cmdTimeout,
-					processManager:   processMgr,
-					observationStore: observationStore,
-				}, call.Function.Name, call.Function.Arguments)
-			}
+			execution := r.executeTool(toolExecutionContext{
+				ctx:              ctx,
+				request:          req,
+				fileReader:       fileReader,
+				workingDir:       absWorkingDir,
+				allowCommands:    allowCmds,
+				commandTimeout:   cmdTimeout,
+				processManager:   processMgr,
+				observationStore: observationStore,
+			}, call.Function.Name, call.Function.Arguments)
 			toolResult := execution.output
 			if execution.planBoundary {
 				planBoundary = true
@@ -439,6 +418,10 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 				result.FinalResponse = execution.finalResponse
 				result.Success = true
 				taskFinished = true
+			}
+			if execution.proposedPlan != "" {
+				result.ProposedPlan = execution.proposedPlan
+				emit(Event{Type: EventPlanProposed, Turn: turn, Response: execution.proposedPlan})
 			}
 
 			outcome := observations.Process(call.Function.Name, call.Function.Arguments, toolResult, turn)

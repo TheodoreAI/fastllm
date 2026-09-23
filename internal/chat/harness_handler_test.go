@@ -30,6 +30,17 @@ func TestHarnessRun_Validation(t *testing.T) {
 		}
 	})
 
+	t.Run("unknown permission mode rejected", func(t *testing.T) {
+		body := bytes.NewBufferString(`{"task":"x","permission_mode":"yolo"}`)
+		req := httptest.NewRequest(http.MethodPost, "/api/harness/run", body)
+		w := httptest.NewRecorder()
+
+		h.HarnessRun(w, req)
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "plan, agent, edit, or full") {
+			t.Errorf("expected 400 naming the modes, got %d %q", w.Code, w.Body.String())
+		}
+	})
+
 	t.Run("invalid json rejected", func(t *testing.T) {
 		body := bytes.NewBufferString(`{not-json}`)
 		req := httptest.NewRequest(http.MethodPost, "/api/harness/run", body)

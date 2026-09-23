@@ -6,24 +6,23 @@ import (
 	"testing"
 )
 
-func TestPermissionControllerModes(t *testing.T) {
-	readOnly := NewPermissionController(PermissionReadOnly, nil)
-	if readOnly.Authorize("write_file", "path=x") {
-		t.Fatal("read-only mode allowed a write")
-	}
-	if !readOnly.Authorize("read_file", "path=x") {
-		t.Fatal("read-only mode rejected a read")
-	}
-
-	auto := NewPermissionController(PermissionAuto, nil)
-	if !auto.Authorize("run_command", "command=go test") {
-		t.Fatal("auto mode rejected a command")
+// The controller is only the prompt; outside agent mode it approves nothing,
+// because every other mode is decided by the monitor without asking.
+func TestPermissionControllerOnlyAsksInAgentMode(t *testing.T) {
+	for _, mode := range []PermissionMode{PermissionPlan, PermissionEdit, PermissionFull, "", "bogus"} {
+		controller := NewPermissionController(mode, bufio.NewScanner(strings.NewReader("y\n")))
+		if mode == "" {
+			controller.Mode = ""
+		}
+		if controller.Authorize("run_command", "command=go test") {
+			t.Fatalf("controller in mode %q approved without the monitor", mode)
+		}
 	}
 }
 
 func TestPermissionControllerAskAndSessionGrant(t *testing.T) {
 	scanner := bufio.NewScanner(strings.NewReader("a\n"))
-	controller := NewPermissionController(PermissionAsk, scanner)
+	controller := NewPermissionController(PermissionAgent, scanner)
 	if !controller.Authorize("write_file", "path=x") {
 		t.Fatal("session grant was rejected")
 	}
@@ -36,27 +35,62 @@ func TestPermissionControllerAskAndSessionGrant(t *testing.T) {
 }
 
 func TestParsePermissionMode(t *testing.T) {
-	for _, value := range []string{"ask", "read-only", "auto"} {
-		if _, err := ParsePermissionMode(value); err != nil {
-			t.Fatalf("ParsePermissionMode(%q): %v", value, err)
+	cases := map[string]PermissionMode{
+		"plan": PermissionPlan, "read-only": PermissionPlan, "readonly": PermissionPlan,
+		"agent": PermissionAgent, "ask": PermissionAgent, " Agent ": PermissionAgent,
+		"edit": PermissionEdit, "edit-only": PermissionEdit,
+		"full": PermissionFull, "full-access": PermissionFull, "auto": PermissionFull,
+	}
+	for value, want := range cases {
+		got, err := ParsePermissionMode(value)
+		if err != nil || got != want {
+			t.Fatalf("ParsePermissionMode(%q) = %q, %v; want %q", value, got, err, want)
 		}
 	}
-	if _, err := ParsePermissionMode("unsafe"); err == nil {
-		t.Fatal("expected invalid mode to fail")
+	for _, value := range []string{"", "unsafe", "yolo", "root"} {
+		if _, err := ParsePermissionMode(value); err == nil {
+			t.Fatalf("ParsePermissionMode(%q) accepted an invalid mode", value)
+		}
 	}
 }
 
-func TestInteractiveToolsReadOnly(t *testing.T) {
-	tools := interactiveTools(true, PermissionReadOnly, false)
-	for _, tool := range tools {
-		if requiresPermission(tool.Function.Name) {
-			t.Fatalf("read-only tools include mutating tool %q", tool.Function.Name)
+func TestNormalizeModeFailsClosed(t *testing.T) {
+	for _, value := range []PermissionMode{"", "unsafe", "FULL ACCESS", "auto-approve"} {
+		if got := NormalizeMode(value); got != PermissionPlan {
+			t.Fatalf("NormalizeMode(%q) = %q, want plan", value, got)
+		}
+	}
+	if NormalizeMode("auto") != PermissionFull || NormalizeMode("ask") != PermissionAgent {
+		t.Fatal("legacy names did not map to their new modes")
+	}
+}
+
+func TestPermissionModeCycle(t *testing.T) {
+	want := []PermissionMode{PermissionAgent, PermissionEdit, PermissionFull, PermissionPlan}
+	mode := PermissionPlan
+	for _, next := range want {
+		mode = mode.Next()
+		if mode != next {
+			t.Fatalf("Next() = %q, want %q", mode, next)
+		}
+	}
+	if PermissionMode("garbage").Next() != PermissionAgent {
+		t.Fatal("an unknown mode should cycle as plan")
+	}
+}
+
+func TestInteractiveToolsPlanOffersNothingMutating(t *testing.T) {
+	for _, tool := range interactiveTools(true, PermissionPlan, true) {
+		switch toolClasses[tool.Function.Name] {
+		case classRead, classInspect, classPlan:
+		default:
+			t.Fatalf("plan tools include %q", tool.Function.Name)
 		}
 	}
 }
 
 func TestFusedMutationRequiresIndependentCommandApproval(t *testing.T) {
-	controller := NewPermissionController(PermissionAsk, bufio.NewScanner(strings.NewReader("y\nn\n")))
+	controller := NewPermissionController(PermissionAgent, bufio.NewScanner(strings.NewReader("y\nn\n")))
 	if !controller.Authorize("edit_file", "path=main.go") {
 		t.Fatal("mutation approval was rejected")
 	}
@@ -67,7 +101,7 @@ func TestFusedMutationRequiresIndependentCommandApproval(t *testing.T) {
 
 func TestPermissionControllerClearGrants(t *testing.T) {
 	scanner := bufio.NewScanner(strings.NewReader("a\n"))
-	controller := NewPermissionController(PermissionAsk, scanner)
+	controller := NewPermissionController(PermissionAgent, scanner)
 	if !controller.Authorize("write_file", "path=x") {
 		t.Fatal("session grant was rejected")
 	}
@@ -81,7 +115,7 @@ func TestPermissionControllerClearGrants(t *testing.T) {
 }
 
 func TestCapabilityGrantLifecycle(t *testing.T) {
-	controller := NewPermissionController(PermissionAsk, nil)
+	controller := NewPermissionController(PermissionAgent, nil)
 	controller.SetWorkspace("/repo/a")
 
 	grant1 := controller.Grant("write_file")
@@ -128,7 +162,7 @@ func TestCapabilityGrantLifecycle(t *testing.T) {
 }
 
 func TestPermissionControllerWorkspaceSeparation(t *testing.T) {
-	controller := NewPermissionController(PermissionAsk, nil)
+	controller := NewPermissionController(PermissionAgent, nil)
 	controller.SetWorkspace("/repo/alpha")
 	controller.Grant("write_file")
 
@@ -148,7 +182,7 @@ func TestPermissionControllerWorkspaceSeparation(t *testing.T) {
 
 func TestPermissionControllerRevocationPromptsAgain(t *testing.T) {
 	scanner := bufio.NewScanner(strings.NewReader("a\ny\n"))
-	controller := NewPermissionController(PermissionAsk, scanner)
+	controller := NewPermissionController(PermissionAgent, scanner)
 	if !controller.Authorize("write_file", "path=a.txt") {
 		t.Fatal("initial grant failed")
 	}

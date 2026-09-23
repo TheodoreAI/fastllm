@@ -39,7 +39,7 @@ func runReadingSecret(t *testing.T, sandbox bool, secret string) string {
 	defer runner.Close()
 	if _, err := runner.Run(context.Background(), RunRequest{
 		Task: "read it", WorkingDir: workspace, Model: "test-model",
-		AllowCommands: true, CommandsConfigured: true, PermissionMode: PermissionAuto, Sandbox: sandbox,
+		AllowCommands: true, CommandsConfigured: true, PermissionMode: PermissionFull, Sandbox: sandbox,
 	}, nil); err != nil {
 		t.Fatalf("Run (sandbox=%v): %v", sandbox, err)
 	}

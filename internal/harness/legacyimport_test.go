@@ -29,7 +29,7 @@ func (f *fakeLegacySource) LoadMessages(id int64) ([]llm.Message, error) {
 }
 
 func testRuntime() InteractiveRuntime {
-	return InteractiveRuntime{MaxTurns: 20, CommandTimeout: time.Minute, AllowCommands: true, PermissionMode: PermissionAsk}
+	return InteractiveRuntime{MaxTurns: 20, CommandTimeout: time.Minute, AllowCommands: true, PermissionMode: PermissionAgent}
 }
 
 func newFakeSource() *fakeLegacySource {

@@ -23,7 +23,7 @@ func stripANSI(s string) string {
 func TestStatusLineShowsTheSessionAtAGlance(t *testing.T) {
 	got := stripANSI(FormatStatusLine(StatusLine{
 		Model:          "glm-5.3",
-		PermissionMode: PermissionAsk,
+		PermissionMode: PermissionAgent,
 		ContextChars:   24_000,
 		ContextBudget:  60_000,
 		Turns:          5,
@@ -32,7 +32,7 @@ func TestStatusLineShowsTheSessionAtAGlance(t *testing.T) {
 		WorkingDir:     "/projects/fastllm",
 		Branch:         "main",
 	}))
-	for _, want := range []string{"glm-5.3", "ask", "ctx 24k/60k (40%)", "5 turns", "12k tok", "$0.42", "/projects/fastllm", "main"} {
+	for _, want := range []string{"glm-5.3", "agent", "ctx 24k/60k (40%)", "5 turns", "12k tok", "$0.42", "/projects/fastllm", "main"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("status line missing %q:\n%s", want, got)
 		}
@@ -42,7 +42,7 @@ func TestStatusLineShowsTheSessionAtAGlance(t *testing.T) {
 func TestStatusLineOmitsEmptyFields(t *testing.T) {
 	// A fresh session has no turns, tokens or cost yet; showing "0 turns · 0 tok
 	// · $0.00" is noise, not information.
-	got := stripANSI(FormatStatusLine(StatusLine{Model: "llama3.1", PermissionMode: PermissionAsk}))
+	got := stripANSI(FormatStatusLine(StatusLine{Model: "llama3.1", PermissionMode: PermissionAgent}))
 	for _, unwanted := range []string{"turns", "tok", "$"} {
 		if strings.Contains(got, unwanted) {
 			t.Errorf("empty field %q rendered: %s", unwanted, got)

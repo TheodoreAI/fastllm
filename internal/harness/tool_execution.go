@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"fastllm/internal/files"
@@ -26,6 +27,7 @@ type toolExecutionResult struct {
 	planBoundary  bool
 	taskFinished  bool
 	finalResponse string
+	proposedPlan  string
 }
 
 func decodeArguments[T any](raw string) (T, error) {
@@ -41,16 +43,13 @@ func argumentFailure(err error) toolExecutionResult {
 }
 
 func (r *Runner) executeTool(execCtx toolExecutionContext, name, rawArgs string) toolExecutionResult {
+	// Every call passes the monitor first, whether or not the tool was offered:
+	// a model can name any tool it likes.
+	if ok, refusal := admit(execCtx.request, name, rawArgs); !ok {
+		return toolExecutionResult{output: refusal}
+	}
 	policy := policyForRequest(execCtx.request)
 	execCtx.allowCommands = execCtx.allowCommands && policy.commands
-	if name == "write_file" || name == "edit_file" || name == "patch_file" {
-		if !policy.write {
-			return toolExecutionResult{output: "Error: file writes are disabled by capability policy."}
-		}
-		if followUpFromArguments(rawArgs) != nil && !execCtx.allowCommands {
-			return toolExecutionResult{output: "Error: fused follow-up commands are disabled by policy. The file mutation was not attempted."}
-		}
-	}
 	switch name {
 	case "read_file":
 		args, err := decodeArguments[struct {
@@ -267,6 +266,19 @@ func (r *Runner) executeTool(execCtx toolExecutionContext, name, rawArgs string)
 			return toolExecutionResult{output: fmt.Sprintf("Error killing process %s: %v", args.ProcessID, err)}
 		}
 		return toolExecutionResult{output: fmt.Sprintf("Process %s terminated.", args.ProcessID)}
+
+	case "submit_plan":
+		args, err := decodeArguments[struct {
+			Plan string `json:"plan"`
+		}](rawArgs)
+		if err != nil {
+			return argumentFailure(err)
+		}
+		plan := strings.TrimSpace(args.Plan)
+		if plan == "" {
+			return toolExecutionResult{output: "Error: plan is empty. Call submit_plan with the full markdown plan."}
+		}
+		return toolExecutionResult{output: "Plan submitted for the user's review.", taskFinished: true, finalResponse: plan, proposedPlan: plan}
 
 	case "finish_task":
 		args, err := decodeArguments[struct {

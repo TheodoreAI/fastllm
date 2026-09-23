@@ -7,24 +7,76 @@ import (
 	"time"
 )
 
+// PermissionMode is the user's standing authorization for model-initiated
+// effects. It is chosen only by user input (Shift+Tab, /set, plan approval,
+// -mode); no tool call can change it. The table it selects lives in monitor.go.
 type PermissionMode string
 
 const (
-	PermissionAsk      PermissionMode = "ask"
-	PermissionReadOnly PermissionMode = "read-only"
-	PermissionAuto     PermissionMode = "auto"
+	// PermissionPlan is read-only with no network: the model explores and
+	// proposes a plan with submit_plan.
+	PermissionPlan PermissionMode = "plan"
+	// PermissionAgent asks the user before every mutating call.
+	PermissionAgent PermissionMode = "agent"
+	// PermissionEdit permits workspace file edits without asking, but never a
+	// subprocess or a child agent.
+	PermissionEdit PermissionMode = "edit"
+	// PermissionFull permits everything the run's capabilities allow, unasked.
+	PermissionFull PermissionMode = "full"
 )
 
+// permissionCycle is the Shift+Tab order.
+var permissionCycle = []PermissionMode{PermissionPlan, PermissionAgent, PermissionEdit, PermissionFull}
+
+// ParsePermissionMode accepts the four mode names and the legacy names that
+// older sessions and API callers still send.
 func ParsePermissionMode(value string) (PermissionMode, error) {
-	switch PermissionMode(strings.ToLower(strings.TrimSpace(value))) {
-	case PermissionAsk:
-		return PermissionAsk, nil
-	case PermissionReadOnly:
-		return PermissionReadOnly, nil
-	case PermissionAuto:
-		return PermissionAuto, nil
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "plan", "read-only", "readonly":
+		return PermissionPlan, nil
+	case "agent", "ask":
+		return PermissionAgent, nil
+	case "edit", "edit-only":
+		return PermissionEdit, nil
+	case "full", "full-access", "auto":
+		return PermissionFull, nil
 	default:
-		return "", fmt.Errorf("permissions must be ask, read-only, or auto")
+		return "", fmt.Errorf("permissions must be plan, agent, edit, or full")
+	}
+}
+
+// NormalizeMode fails closed: an empty, unknown, or legacy-misspelled mode is
+// treated as plan, the least-privileged mode.
+func NormalizeMode(mode PermissionMode) PermissionMode {
+	parsed, err := ParsePermissionMode(string(mode))
+	if err != nil {
+		return PermissionPlan
+	}
+	return parsed
+}
+
+// Next is the mode Shift+Tab switches to.
+func (m PermissionMode) Next() PermissionMode {
+	current := NormalizeMode(m)
+	for i, mode := range permissionCycle {
+		if mode == current {
+			return permissionCycle[(i+1)%len(permissionCycle)]
+		}
+	}
+	return PermissionPlan
+}
+
+// Label is the display name.
+func (m PermissionMode) Label() string {
+	switch NormalizeMode(m) {
+	case PermissionAgent:
+		return "Agent"
+	case PermissionEdit:
+		return "Edit"
+	case PermissionFull:
+		return "Full-Access"
+	default:
+		return "Plan"
 	}
 }
 
@@ -47,7 +99,7 @@ type PermissionController struct {
 
 func NewPermissionController(mode PermissionMode, source any) *PermissionController {
 	if mode == "" {
-		mode = PermissionAsk
+		mode = PermissionAgent
 	}
 	var input interactiveInput
 	switch value := source.(type) {
@@ -174,21 +226,15 @@ func (p *PermissionController) syncSessionGrants() {
 	p.SessionGrants = activeTools
 }
 
+// Authorize is the interactive half of an Ask decision from the monitor: it
+// consults session grants, then prompts. It decides nothing about which tools
+// need asking; the monitor calls it only for calls the mode table marks Ask.
 func (p *PermissionController) Authorize(toolName, summary string) bool {
-	if !requiresPermission(toolName) {
-		return true
+	if p == nil || NormalizeMode(p.Mode) != PermissionAgent {
+		return false
 	}
-	switch p.Mode {
-	case PermissionAuto:
+	if p.HasGrant(toolName) {
 		return true
-	case PermissionReadOnly:
-		return false
-	case PermissionAsk:
-		if p.HasGrant(toolName) {
-			return true
-		}
-	default:
-		return false
 	}
 
 	fmt.Println(FormatPermissionPrompt(toolName, summary))
@@ -233,14 +279,5 @@ func (p *PermissionController) Authorize(toolName, summary string) bool {
 		default:
 			fmt.Println(ColorGray("  Enter y, a, or n."))
 		}
-	}
-}
-
-func requiresPermission(toolName string) bool {
-	switch toolName {
-	case "write_file", "edit_file", "patch_file", "run_command", "kill_process", "spawn_agent", "cancel_agent":
-		return true
-	default:
-		return false
 	}
 }

@@ -11,7 +11,7 @@ import (
 func permissionTestModel(t *testing.T) *teaModel {
 	t.Helper()
 	return &teaModel{
-		workingDir: t.TempDir(), permissionMode: PermissionAsk,
+		workingDir: t.TempDir(), permissionMode: PermissionAgent,
 		input: textarea.New(), viewport: viewport.New(80, 6),
 		ready: true, width: 80,
 	}
@@ -97,7 +97,7 @@ func TestTeaSessionTransitionsRevokeGrants(t *testing.T) {
 			case "new":
 				err = m.startNewSession()
 			case "resume":
-				err = m.loadSession(&InteractiveSession{WorkingDir: m.workingDir, Runtime: InteractiveRuntime{PermissionMode: PermissionAsk}})
+				err = m.loadSession(&InteractiveSession{WorkingDir: m.workingDir, Runtime: InteractiveRuntime{PermissionMode: PermissionAgent}})
 			case "mode":
 				err = m.setRuntimeValue("permissions", "auto")
 			}
