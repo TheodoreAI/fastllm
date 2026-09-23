@@ -324,7 +324,10 @@ type grantEntry struct {
 // A tree grant is a bare path; a directory-only grant is prefixed "self\t".
 type grantRecord struct{ path string }
 
-const selfPrefix = "self\t"
+const (
+	selfPrefix = "self\t"
+	treePrefix = "tree\t"
+)
 
 func (r grantRecord) entries() ([]grantEntry, error) {
 	data, err := os.ReadFile(r.path)
@@ -337,8 +340,12 @@ func (r grantRecord) entries() ([]grantEntry, error) {
 	var entries []grantEntry
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimRight(line, "\r")
+		// Earlier records also wrote tree grants with a "tree\t" prefix; a
+		// path never starts with either prefix, so all three forms are read.
 		if path, ok := strings.CutPrefix(line, selfPrefix); ok {
 			entries = append(entries, grantEntry{selfGrant, strings.TrimSpace(path)})
+		} else if path, ok := strings.CutPrefix(line, treePrefix); ok {
+			entries = append(entries, grantEntry{treeGrant, strings.TrimSpace(path)})
 		} else if path := strings.TrimSpace(line); path != "" {
 			entries = append(entries, grantEntry{treeGrant, path})
 		}

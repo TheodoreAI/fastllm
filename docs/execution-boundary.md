@@ -163,7 +163,8 @@ policy.
 write it directly. A backend that presents a different path to the process must
 map that exact tree; a copy would reintroduce path validation and host-edit
 conflict detection. The AppContainer backend grants access to the tree in place
-rather than copying it.
+and maps a drive letter onto it, so commands and file tools see the same files;
+`Scope.CommandWorkspace` names the path commands see.
 
 ## Validation
 
@@ -180,10 +181,16 @@ The AppContainer backend has adversarial containment tests: reading a secret
 and writing outside the workspace, connecting to a loopback listener, and a
 descendant outliving its command. Each pairs the sandboxed run with the same
 command on the local backend, which must succeed, and all three fail when the
-container attribute is removed. Further tests cover exit codes, stream
-separation, timeout and stop, subdirectory and absolute-path shell use, a Go
-build on the auto-selected toolchain, and grant revocation.
+container attribute is removed. PowerShell and git (init, commit, and the
+`stash create` checkpoints use) run in a workspace under the user profile, and
+fail when launched at the host path instead of the drive. Further tests cover
+the drive's lifetime across scopes, exit codes, stream separation, timeout and
+stop, a Go build on the auto-selected toolchain, grant revocation, and a full
+sandboxed run in which the model cannot read a secret it can read unsandboxed.
 
 An architecture test rejects every production process constructor, from
 `exec.Command` to `windows.CreateProcess`, outside the execution backends and
-the audited folder picker.
+the audited folder picker. One further exception is documented rather than
+detected: `internal/elevate` relaunches fastllm itself through a direct
+`ShellExecuteEx` call, only on a user's `-revoke-sandbox`, to remove an
+administrator grant.

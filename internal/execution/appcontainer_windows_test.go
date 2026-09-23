@@ -395,8 +395,8 @@ func TestSetupRejectsANonContainerIdentity(t *testing.T) {
 
 func TestGrantRecordKeepsKindsAndDeduplicates(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "grants.txt")
-	// A record written before directory grants existed holds bare tree paths.
-	if err := os.WriteFile(path, []byte("C:\\legacy\n"), 0o600); err != nil {
+	// Earlier versions wrote bare tree paths, and "tree\t"-prefixed ones.
+	if err := os.WriteFile(path, []byte("C:\\legacy\ntree\tC:\\prefixed\r\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	record := grantRecord{path: path}
@@ -409,7 +409,7 @@ func TestGrantRecordKeepsKindsAndDeduplicates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("entries: %v", err)
 	}
-	want := []grantEntry{{treeGrant, `C:\legacy`}, {treeGrant, `C:\ws`}, {selfGrant, `C:\ws`}, {selfGrant, `C:\Users\me`}}
+	want := []grantEntry{{treeGrant, `C:\legacy`}, {treeGrant, `C:\prefixed`}, {treeGrant, `C:\ws`}, {selfGrant, `C:\ws`}, {selfGrant, `C:\Users\me`}}
 	if len(entries) != len(want) {
 		t.Fatalf("entries = %v, want %v", entries, want)
 	}
