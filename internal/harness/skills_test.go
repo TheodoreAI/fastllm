@@ -81,7 +81,7 @@ func TestSkillInvocationAndPrompt(t *testing.T) {
 	}
 	skill := Skill{Name: "clean-code", Path: filepath.Join("project", ".agents", "skills", "clean-code", "SKILL.md"), Content: "Keep functions small."}
 	prompt := formatSkillPrompt(skill, "project")
-	if !strings.Contains(prompt, "Active Skill: clean-code") || !strings.Contains(prompt, "Keep functions small.") {
+	if !strings.Contains(prompt, `<active_skill name="clean-code"`) || !strings.Contains(prompt, "Keep functions small.") {
 		t.Fatalf("prompt = %q", prompt)
 	}
 	catalog := formatSkillCatalogPrompt([]Skill{{Name: "clean-code", Description: "Keep code maintainable"}})
@@ -126,7 +126,7 @@ func TestTeaSkillInvocationAppliesInstructionsForTurn(t *testing.T) {
 	collectFinishEvents(t, m)
 
 	messages := <-client.messages
-	if !strings.Contains(messages[0].Content, "Active Skill: review") || !strings.Contains(messages[0].Content, "Check every returned error.") {
+	if !strings.Contains(messages[0].Content, `<active_skill name="review"`) || !strings.Contains(messages[0].Content, "Check every returned error.") {
 		t.Fatalf("system prompt does not contain skill instructions: %q", messages[0].Content)
 	}
 	if got := messages[len(messages)-1].Content; got != "inspect the parser" {

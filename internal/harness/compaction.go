@@ -28,41 +28,106 @@ func OnlineCompactMessages(messages []llm.Message, cfg CompactionConfig) ([]llm.
 	if cfg.MaxTotalChars <= 0 {
 		cfg = DefaultCompactionConfig()
 	}
-	if messageCharacterCount(messages) <= cfg.MaxTotalChars || len(messages) <= cfg.KeepRecentMessages+2 {
+	head := compactionHead(messages)
+	if messageCharacterCount(messages) <= cfg.MaxTotalChars || len(messages) <= cfg.KeepRecentMessages+head {
 		return messages, false
 	}
 	tailStart := len(messages) - cfg.KeepRecentMessages
-	for tailStart > 2 {
+	for tailStart > head {
 		message := messages[tailStart]
 		if message.Role == "user" || (message.Role == "assistant" && len(message.ToolCalls) == 0) {
 			break
 		}
 		tailStart--
 	}
-	if tailStart <= 2 {
+	if tailStart <= head {
 		return CompactMessages(messages, cfg)
 	}
-	checkpoint := buildStateCheckpoint(messages[2:tailStart])
+	checkpoint := buildStateCheckpoint(messages[head:tailStart])
 	if checkpoint == "" {
 		return CompactMessages(messages, cfg)
 	}
-	result := make([]llm.Message, 0, 3+len(messages)-tailStart)
-	result = append(result, messages[:2]...)
-	result = append(result, llm.Message{Role: "system", Content: checkpoint})
-	result = append(result, messages[tailStart:]...)
+	summary := conversationSummaryOpen + "\n" + checkpoint + "\n" + conversationSummaryClose
+	result := make([]llm.Message, 0, head+1+len(messages)-tailStart)
+	result = append(result, messages[:head]...)
+	tail := append([]llm.Message(nil), messages[tailStart:]...)
+	// The summary is a user message, not a system one: Anthropic and Gemini have
+	// a single system slot and hoist any later system message to the top, out of
+	// order. Folding it into a following user message also avoids two user
+	// messages in a row, which strict-alternation chat templates reject.
+	if tail[0].Role == "user" {
+		tail[0].Content = summary + "\n\n" + tail[0].Content
+	} else {
+		result = append(result, llm.Message{Role: "user", Content: summary})
+	}
+	result = append(result, tail...)
 	if messageCharacterCount(result) >= messageCharacterCount(messages) {
 		return CompactMessages(messages, cfg)
 	}
 	return result, true
 }
 
+const (
+	conversationSummaryOpen  = "<conversation_summary>"
+	conversationSummaryClose = "</conversation_summary>"
+)
+
+// isConversationSummary reports whether message begins with a compaction summary.
+func isConversationSummary(message llm.Message) bool {
+	return message.Role == "user" && strings.HasPrefix(message.Content, conversationSummaryOpen)
+}
+
+// splitConversationSummary separates a summary-bearing user message into the
+// summary body and the user's own text that followed it.
+func splitConversationSummary(content string) (summary, rest string) {
+	if !strings.HasPrefix(content, conversationSummaryOpen) {
+		return "", content
+	}
+	body := content[len(conversationSummaryOpen):]
+	end := strings.Index(body, conversationSummaryClose)
+	if end < 0 {
+		return strings.TrimSpace(body), ""
+	}
+	return strings.TrimSpace(body[:end]), strings.TrimSpace(body[end+len(conversationSummaryClose):])
+}
+
+// compactionHead is how many leading messages compaction never touches: the
+// system prompt, if present, and the first user message after it -- the task in
+// a single run, the session's opening request in a replayed transcript.
+func compactionHead(messages []llm.Message) int {
+	head := 0
+	for head < len(messages) && messages[head].Role == "system" {
+		head++
+	}
+	if head < len(messages) && messages[head].Role == "user" {
+		head++
+	}
+	return head
+}
+
+const checkpointHeader = "[State Checkpoint]\nThis deterministic checkpoint replaces completed older trajectory messages; the messages after it are verbatim.\n"
+
+// maxCarriedSummaryChars bounds how much of an earlier summary a new one carries,
+// so repeated compaction cannot grow the summary without limit.
+const maxCarriedSummaryChars = 3000
+
+// maxLatestRequestChars bounds the verbatim copy of the newest request.
+const maxLatestRequestChars = 4000
+
 func buildStateCheckpoint(messages []llm.Message) string {
 	var actions, evidence, requests []string
+	var earlier, latest string
 	for _, message := range messages {
 		switch message.Role {
 		case "user":
-			if text := compactLine(message.Content, 180); text != "" {
+			content := message.Content
+			if summary, rest := splitConversationSummary(content); summary != "" {
+				earlier = summary
+				content = rest
+			}
+			if text := compactLine(content, 180); text != "" {
 				requests = appendUnique(requests, text, 5)
+				latest = strings.TrimSpace(content)
 			}
 		case "assistant":
 			for _, call := range message.ToolCalls {
@@ -75,12 +140,27 @@ func buildStateCheckpoint(messages []llm.Message) string {
 			}
 		}
 	}
-	if len(actions) == 0 && len(evidence) == 0 && len(requests) == 0 {
+	if len(actions) == 0 && len(evidence) == 0 && len(requests) == 0 && earlier == "" {
 		return ""
 	}
 	var builder strings.Builder
-	builder.WriteString("[State Checkpoint]\nThis deterministic checkpoint replaces completed older trajectory messages.\n")
+	builder.WriteString(checkpointHeader)
+	if earlier != "" {
+		earlier = strings.TrimPrefix(earlier, strings.TrimSpace(checkpointHeader))
+		if len(earlier) > maxCarriedSummaryChars {
+			earlier = earlier[:maxCarriedSummaryChars] + "\n..."
+		}
+		builder.WriteString("\nEarlier checkpoint:\n" + strings.TrimSpace(earlier) + "\n")
+	}
 	writeCheckpointSection(&builder, "Requests", requests)
+	// Request summaries are cut to 180 characters and capped at the first five,
+	// which can lose the one that matters most: the newest.
+	if latest != "" {
+		if len(latest) > maxLatestRequestChars {
+			latest = latest[:maxLatestRequestChars] + "..."
+		}
+		builder.WriteString("\nLatest request (verbatim):\n" + latest + "\n")
+	}
 	writeCheckpointSection(&builder, "Actions", actions)
 	writeCheckpointSection(&builder, "Evidence and receipts", evidence)
 	return strings.TrimSpace(builder.String())
@@ -131,6 +211,11 @@ func messageCharacterCount(messages []llm.Message) int {
 	total := 0
 	for _, message := range messages {
 		total += len(message.Content)
+		// Tool-call arguments are sent to the model too; a write_file call
+		// carries a whole file in them. countApproxTokens counts them the same way.
+		for _, call := range message.ToolCalls {
+			total += len(call.Function.Name) + len(call.Function.Arguments)
+		}
 	}
 	return total
 }
@@ -199,12 +284,8 @@ func CompactMessages(messages []llm.Message, cfg CompactionConfig) ([]llm.Messag
 		cfg.MaxToolOutputChars = 800
 	}
 
-	totalChars := 0
-	for _, m := range messages {
-		totalChars += len(m.Content)
-	}
-
-	if totalChars <= cfg.MaxTotalChars || len(messages) <= cfg.KeepRecentMessages+2 {
+	head := compactionHead(messages)
+	if messageCharacterCount(messages) <= cfg.MaxTotalChars || len(messages) <= cfg.KeepRecentMessages+head {
 		return messages, false
 	}
 
@@ -214,8 +295,8 @@ func CompactMessages(messages []llm.Message, cfg CompactionConfig) ([]llm.Messag
 	cutoff := len(messages) - cfg.KeepRecentMessages
 	prunedAny := false
 
-	// Iterate older messages, skipping index 0 (system) and 1 (user task)
-	for i := 2; i < cutoff; i++ {
+	// Iterate older messages, skipping the preserved head
+	for i := head; i < cutoff; i++ {
 		m := &result[i]
 		if m.Role == "tool" && len(m.Content) > cfg.MaxToolOutputChars {
 			headLen := cfg.MaxToolOutputChars / 2

@@ -88,7 +88,9 @@ func TestOnlineCompactionCreatesStructuredCheckpoint(t *testing.T) {
 	if !ok || len(compacted) >= len(messages) {
 		t.Fatalf("compaction did not collapse trajectory: %d -> %d", len(messages), len(compacted))
 	}
-	if compacted[2].Role != "system" || !strings.Contains(compacted[2].Content, "State Checkpoint") || !strings.Contains(compacted[2].Content, "run_command") {
+	// The summary is folded into the next user message rather than sent as a
+	// mid-conversation system message.
+	if !isConversationSummary(compacted[2]) || !strings.Contains(compacted[2].Content, "run_command") || !strings.HasSuffix(compacted[2].Content, "continue") {
 		t.Fatalf("bad checkpoint: %+v", compacted[2])
 	}
 }

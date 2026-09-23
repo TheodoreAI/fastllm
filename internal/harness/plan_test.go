@@ -90,7 +90,7 @@ func TestPlanBoundaryTriggersCompactionThatWouldOtherwiseWait(t *testing.T) {
 	if !compacted {
 		t.Fatal("a completed plan step should let compaction run early")
 	}
-	if result[2].Role != "system" || !strings.Contains(result[2].Content, "State Checkpoint") {
+	if !isConversationSummary(result[2]) || !strings.Contains(result[2].Content, "State Checkpoint") {
 		t.Fatalf("expected a checkpoint at the boundary, got %+v", result[2])
 	}
 }

@@ -2,6 +2,8 @@ package harness
 
 import (
 	"time"
+
+	"fastllm/internal/llm"
 )
 
 // RunRequest configures a single autonomous task run in the harness.
@@ -20,6 +22,10 @@ type RunRequest struct {
 	// SystemPrompt is an optional system prompt override. If empty,
 	// DefaultSystemPrompt is used.
 	SystemPrompt string `json:"system_prompt,omitempty"`
+
+	// PromptExtra adds instructions for this run only, such as an invoked skill.
+	// It is placed near the end of the system prompt, after the stable sections.
+	PromptExtra string `json:"-"`
 
 	// MaxTurns is the maximum number of tool execution rounds allowed.
 	// Defaults to 20 if <= 0.
@@ -85,6 +91,10 @@ type RunRequest struct {
 type InitialMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+	// ToolCalls and ToolCallID carry prior tool use, so a replayed turn still
+	// shows the model which files it read and which commands it ran.
+	ToolCalls  []llm.ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string         `json:"tool_call_id,omitempty"`
 }
 
 // ToolCallRecord records a single tool invocation and its returned output.
@@ -120,6 +130,10 @@ type RunResult struct {
 	ProposedPlan string `json:"proposed_plan,omitempty"`
 	// PermissionMode is the mode the run was actually evaluated under.
 	PermissionMode PermissionMode `json:"permission_mode,omitempty"`
+	// Transcript is the conversation after the run, without the system prompt:
+	// replayed history, the task, tool calls and results (as compacted during
+	// the run), and the final answer. A multi-turn caller replays it next turn.
+	Transcript []llm.Message `json:"-"`
 }
 
 // EventType distinguishes streamable harness progress events.

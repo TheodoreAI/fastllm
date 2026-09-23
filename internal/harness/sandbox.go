@@ -55,11 +55,11 @@ func sandboxPromptNote(scope *execution.Scope) string {
 	if !scope.Isolated() {
 		return ""
 	}
-	note := "\n\nCommands run in an isolated sandbox with no network access and no access to files outside the workspace."
+	note := "<sandbox>\nCommands run in an isolated sandbox with no network access and no access to files outside the workspace."
 	if view := scope.CommandWorkspace(); !strings.EqualFold(filepath.Clean(view), filepath.Clean(scope.Workspace())) {
 		note += fmt.Sprintf(" Inside commands the workspace is %s, not %s; use paths relative to the workspace in commands.", view, scope.Workspace())
 	}
-	return note
+	return note + "\n</sandbox>"
 }
 
 func sandboxLabel(sandbox bool) string {

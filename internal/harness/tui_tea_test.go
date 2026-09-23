@@ -360,9 +360,43 @@ func TestTeaInitialMessagesCarryConversationContext(t *testing.T) {
 		{Role: "assistant", Content: "first answer"},
 		{Role: "tool", Content: "old tool output"},
 	}}
-	got := m.initialMessages()
+	// The tool result answers no call in the transcript, so replay drops it;
+	// an endpoint would reject it as an orphan.
+	got := replayMessages(m.initialMessages())
 	if len(got) != 2 || got[0].Role != "user" || got[0].Content != "first question" || got[1].Role != "assistant" {
-		t.Fatalf("initial messages = %#v", got)
+		t.Fatalf("replayed messages = %#v", got)
+	}
+}
+
+// Replayed history keeps paired tool traffic, so the model still knows which
+// files it read and which commands it ran on earlier turns.
+func TestTeaInitialMessagesReplayPairedToolCalls(t *testing.T) {
+	var call llm.ToolCall
+	call.ID = "call-1"
+	call.Function.Name = "read_file"
+	call.Function.Arguments = `{"path":"main.go"}`
+	var dangling llm.ToolCall
+	dangling.ID = "call-2"
+	dangling.Function.Name = "run_command"
+	m := &teaModel{sessionMessages: []llm.Message{
+		{Role: "system", Content: "stale prompt"},
+		{Role: "user", Content: "read main.go"},
+		{Role: "assistant", ToolCalls: []llm.ToolCall{call, dangling}},
+		{Role: "tool", Content: "package main", ToolCallID: "call-1"},
+		{Role: "assistant", Content: "It is the entry point."},
+	}}
+	got := replayMessages(m.initialMessages())
+	if len(got) != 4 {
+		t.Fatalf("replayed messages = %#v", got)
+	}
+	if got[0].Role != "user" {
+		t.Fatalf("system message was replayed: %#v", got[0])
+	}
+	if len(got[1].ToolCalls) != 1 || got[1].ToolCalls[0].ID != "call-1" {
+		t.Fatalf("assistant tool calls = %#v, want only the answered call", got[1].ToolCalls)
+	}
+	if got[2].Role != "tool" || got[2].ToolCallID != "call-1" || got[2].Content != "package main" {
+		t.Fatalf("tool result = %#v", got[2])
 	}
 }
 
@@ -866,8 +900,7 @@ func TestContextUsageTracksCompactionInput(t *testing.T) {
 	ta := textarea.New()
 	ta.SetValue("an unsent draft that must not count toward the gauge")
 	m := &teaModel{
-		input:        ta,
-		systemPrompt: strings.Repeat("s", 9000),
+		input: ta,
 		sessionMessages: []llm.Message{
 			{Role: "user", Content: strings.Repeat("u", 1200)},
 			{Role: "assistant", Content: strings.Repeat("a", 800)},

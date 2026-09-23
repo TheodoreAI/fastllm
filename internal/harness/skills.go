@@ -199,13 +199,14 @@ func formatSkillCatalogPrompt(skills []Skill) string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("\n\n# Available Skills\n")
-	b.WriteString("The following skill metadata is available in this session. Full instructions are not loaded unless the user invokes `/skills NAME TASK`. If asked what skills are available, answer from this list.\n")
+	b.WriteString("<skills>\n")
+	b.WriteString("Skills available in this session. Full instructions are not loaded unless the user invokes `/skills NAME TASK`. If asked what skills are available, answer from this list.\n")
 	for _, skill := range skills {
 		description := skillSummary(skill.Description, 160)
 		fmt.Fprintf(&b, "- %s: %s\n", skill.Name, description)
 	}
-	return strings.TrimRight(b.String(), "\n")
+	b.WriteString("</skills>")
+	return b.String()
 }
 
 func skillSummary(description string, limit int) string {
@@ -237,5 +238,5 @@ func formatSkillPrompt(skill Skill, workingDir string) string {
 	if err != nil {
 		path = skill.Path
 	}
-	return fmt.Sprintf("\n\n# Active Skill: %s\nFollow these instructions for this task only. The skill source is %s.\n\n%s", skill.Name, path, strings.TrimSpace(skill.Content))
+	return fmt.Sprintf("<active_skill name=%q source=%q>\nFollow these instructions for this task only.\n\n%s\n</active_skill>", skill.Name, filepath.ToSlash(path), strings.TrimSpace(skill.Content))
 }
