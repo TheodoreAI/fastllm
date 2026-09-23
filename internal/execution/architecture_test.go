@@ -11,14 +11,15 @@ import (
 )
 
 // Production code must reach subprocesses through this package. The local
-// backend owns the constructors; the folder picker is an audited host UI
-// exception documented in docs/execution-boundary.md.
+// backend owns the constructors; the folder picker and interactive host
+// editors (nano/vim/notepad for TUI ExecProcess) are audited host UI exceptions.
 var subprocessConstructorAllowlist = map[string]bool{
 	filepath.Join("internal", "execution", "local.go"):                   true,
 	filepath.Join("internal", "execution", "appcontainer_windows.go"):    true,
 	filepath.Join("internal", "folderpicker", "folderpicker_darwin.go"):  true,
 	filepath.Join("internal", "folderpicker", "folderpicker_windows.go"): true,
 	filepath.Join("internal", "folderpicker", "folderpicker_other.go"):   true,
+	filepath.Join("internal", "harness", "shell_editor.go"):              true,
 }
 
 // Every way production Go can create a process, not only os/exec: an isolated
