@@ -146,6 +146,7 @@ type teaShellDoneMsg struct {
 	ShellCommand bool
 	Canceled     bool
 	Duration     time.Duration
+	ClearScreen  bool
 }
 type teaGitWatchMsg struct{}
 type teaGitRefreshMsg struct {
@@ -1041,6 +1042,9 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 			m.appendHistory(terminalBox + "\n\n")
 			cmds = append(cmds, m.refreshGitStatusCmd())
+			if msg.ClearScreen {
+				cmds = append(cmds, tea.ClearScreen)
+			}
 		} else {
 			if msg.Output != "" {
 				m.appendHistory(msg.Output + "\n")
@@ -1227,6 +1231,59 @@ func (m *teaModel) handleShellSubmit(cmdStr string) tea.Cmd {
 		return nil
 	}
 
+	// Check for interactive terminal editor (nano, vim, less) or desktop GUI editor (notepad, code)
+	spec := ClassifyShellCommand(cmdStr, m.workingDir)
+	if spec.Kind == CmdKindTUIEditor && spec.Cmd != nil {
+		started := time.Now()
+		return tea.ExecProcess(spec.Cmd, func(err error) tea.Msg {
+			output := fmt.Sprintf("Session finished for %s", spec.BinaryName)
+			if spec.TargetFile != "" {
+				output = fmt.Sprintf("Finished editing %s (%s)", filepath.Base(spec.TargetFile), spec.BinaryName)
+			}
+			return teaShellDoneMsg{
+				Command:      cmdStr,
+				Output:       output,
+				Err:          err,
+				ShellCommand: true,
+				Duration:     time.Since(started),
+				ClearScreen:  true,
+			}
+		})
+	}
+
+	if spec.Kind == CmdKindGUIEditor && spec.Cmd != nil {
+		started := time.Now()
+		err := LaunchGUIEditor(spec.Cmd)
+		if err != nil {
+			return func() tea.Msg {
+				return teaShellDoneMsg{
+					Command:      cmdStr,
+					Output:       fmt.Sprintf("Failed to launch %s: %v", spec.BinaryName, err),
+					Err:          err,
+					ShellCommand: true,
+					Duration:     time.Since(started),
+				}
+			}
+		}
+		notice := spec.Notice
+		if notice == "" {
+			notice = fmt.Sprintf("Launched %s", spec.BinaryName)
+		}
+		m.statusNotice = notice
+		return tea.Batch(
+			func() tea.Msg {
+				return teaShellDoneMsg{
+					Command:      cmdStr,
+					Output:       notice,
+					ShellCommand: true,
+					Duration:     time.Since(started),
+				}
+			},
+			m.clearStatusAfter(3*time.Second),
+			m.refreshGitStatusCmd(),
+		)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelShell = cancel
 	m.shellExecuting = true
@@ -1334,6 +1391,15 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 			}
 			m.openDiffModal(targetIdx)
 			return nil
+
+		case "/edit", "/nano", "/vim":
+			if len(parts) < 2 {
+				m.statusNotice = fmt.Sprintf("Usage: %s <filepath>", cmd)
+				return m.clearStatusAfter(3 * time.Second)
+			}
+			cmdName := cmd[1:]
+			cmdStr := cmdName + " " + strings.TrimSpace(inputVal[len(parts[0]):])
+			return m.handleShellSubmit(cmdStr)
 
 		case "/discard", "/revert":
 			m.appendHistory(styleUserPrompt.Render("❯ "+inputVal) + "\n")

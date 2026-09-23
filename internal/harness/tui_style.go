@@ -702,6 +702,7 @@ func FormatHelp() string {
 	renderSection("Shell & Execution", []cmdEntry{
 		{"/shell, /sh", "Toggle interactive Shell Mode (run host terminal commands)"},
 		{"/sh <cmd>", "Execute a shell command in working dir (e.g. /sh ls -la)"},
+		{"/edit <file>", "Open file in editor ($EDITOR, or nano/notepad)"},
 		{"!<cmd>, $ <cmd>", "Execute command immediately (e.g. !git status, !go test)"},
 	})
 

@@ -88,3 +88,11 @@ func (l *localScope) Start(ctx context.Context, launch Launch) (Process, error) 
 	}()
 	return p, nil
 }
+
+// NewHostCommand constructs an *exec.Cmd for trusted host UI operations
+// (such as interactive TUI editors or desktop GUI launchers) initiated directly by the user.
+func NewHostCommand(executable string, args []string, dir string) *exec.Cmd {
+	cmd := exec.Command(executable, args...)
+	cmd.Dir = dir
+	return cmd
+}
