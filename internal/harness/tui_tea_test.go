@@ -33,15 +33,27 @@ func TestTeaShellDirectoryChangePersists(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := &teaModel{workingDir: root}
-	if cmd := m.handleShellSubmit("cd child"); cmd != nil {
-		t.Fatal("directory changes should complete synchronously")
+	ta := textarea.New()
+	m := &teaModel{
+		workingDir: root,
+		mode:       modeShell,
+		input:      ta,
+		width:      160,
+	}
+	m.updatePromptAndPlaceholder()
+
+	cmd := m.handleShellSubmit("cd child")
+	if cmd == nil {
+		t.Fatal("expected background git refresh cmd to be returned")
 	}
 	if m.workingDir != child {
 		t.Fatalf("working directory = %q; want %q", m.workingDir, child)
 	}
-	if !strings.Contains(m.historyText.String(), child) {
+	if !strings.Contains(m.historyText.String(), "Working directory changed to") {
 		t.Fatalf("history does not report changed directory: %q", m.historyText.String())
+	}
+	if !strings.Contains(m.input.Prompt, "child") {
+		t.Fatalf("shell prompt = %q; expected it to contain 'child'", m.input.Prompt)
 	}
 }
 
@@ -947,3 +959,124 @@ func TestContextUsageTracksCompactionInput(t *testing.T) {
 		t.Fatalf("gauge budget did not follow the model switch: small=%d big=%d", smallBudget, bigBudget)
 	}
 }
+
+func TestBackgroundProcessesInTUI(t *testing.T) {
+	ta := textarea.New()
+	pm := NewProcessManager()
+	defer pm.KillAll()
+
+	m := &teaModel{
+		workingDir: t.TempDir(),
+		input:      ta,
+		viewport:   viewport.New(120, 10),
+		ready:      true,
+		width:      120,
+		processMgr: pm,
+		mode:       modeShell,
+	}
+
+	cmdSleep := "sleep 10"
+	if runtime.GOOS == "windows" {
+		cmdSleep = "ping -n 11 127.0.0.1 >nul"
+	}
+
+	// 1. Test trailing '&' in Shell Mode
+	_ = m.handleShellSubmit(cmdSleep + " &")
+	if m.shellExecuting {
+		t.Fatal("trailing '&' should not leave shellExecuting true")
+	}
+	if pm.ActiveCount() != 1 {
+		t.Fatalf("expected 1 active background process, got %d", pm.ActiveCount())
+	}
+	if !strings.Contains(m.historyText.String(), "proc-1") {
+		t.Fatalf("history missing proc-1 confirmation: %s", m.historyText.String())
+	}
+
+	// 2. Test /bg slash command in Agent Mode
+	m.mode = modeAgent
+	_ = m.handleAgentSubmit("/bg " + cmdSleep)
+	if pm.ActiveCount() != 2 {
+		t.Fatalf("expected 2 active background processes after /bg, got %d", pm.ActiveCount())
+	}
+	if !strings.Contains(m.historyText.String(), "proc-2") {
+		t.Fatalf("history missing proc-2 confirmation: %s", m.historyText.String())
+	}
+
+	// 3. Test logs command
+	_ = m.handleShellSubmit("logs 1")
+	if !strings.Contains(m.historyText.String(), "logs proc-1") {
+		t.Fatalf("history missing logs output for proc-1: %s", m.historyText.String())
+	}
+
+	// 4. Test Header badge in View()
+	view := m.View()
+	if !strings.Contains(view, "2 servers") {
+		t.Fatalf("header missing '2 servers' badge: %s", view)
+	}
+
+	// 5. Test kill all
+	_ = m.handleShellSubmit("kill all")
+	time.Sleep(100 * time.Millisecond)
+	if pm.ActiveCount() != 0 {
+		t.Fatalf("expected 0 active processes after kill all, got %d", pm.ActiveCount())
+	}
+}
+
+func TestCtrlBBackgroundsRunningShellCommand(t *testing.T) {
+	ta := textarea.New()
+	pm := NewProcessManager()
+	defer pm.KillAll()
+
+	m := &teaModel{
+		workingDir: t.TempDir(),
+		input:      ta,
+		viewport:   viewport.New(120, 10),
+		ready:      true,
+		width:      120,
+		processMgr: pm,
+		mode:       modeShell,
+	}
+
+	marker := filepath.Join(m.workingDir, "ctrlb-marker")
+	cmd := fmt.Sprintf("touch %q; sleep 30", marker)
+	if runtime.GOOS == "windows" {
+		cmd = fmt.Sprintf("Set-Content -LiteralPath '%s' -Value started; Start-Sleep -Seconds 30", strings.ReplaceAll(marker, "'", "''"))
+	}
+
+	run := m.handleShellSubmit(cmd)
+	result := make(chan tea.Msg, 1)
+	go func() { result <- run() }()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(marker); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("shell command did not start")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if !m.shellExecuting {
+		t.Fatal("expected shellExecuting to be true while command is running")
+	}
+
+	// Press Ctrl+B to background
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlB})
+	m = updated.(*teaModel)
+
+	if m.shellExecuting {
+		t.Fatal("Ctrl+B did not set shellExecuting to false")
+	}
+	if !m.shellBackgrounded {
+		t.Fatal("Ctrl+B did not set shellBackgrounded to true")
+	}
+	if pm.ActiveCount() != 1 {
+		t.Fatalf("expected 1 active background process in manager, got %d", pm.ActiveCount())
+	}
+	if !strings.Contains(m.historyText.String(), "background") {
+		t.Fatalf("history does not confirm backgrounding: %s", m.historyText.String())
+	}
+}
+

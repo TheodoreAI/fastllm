@@ -721,9 +721,13 @@ func FormatHelp() string {
 		{"/skills [list|name] [task]", "List, inspect, or run an installed skill"},
 	})
 
-	renderSection("Background Processes", []cmdEntry{
-		{"/ps", "List active background processes"},
-		{"/kill <id>", "Terminate a background process (e.g. /kill proc-1)"},
+	renderSection("Background Processes & Servers", []cmdEntry{
+		{"<cmd> &", "Launch dev server in background in Shell Mode (e.g. npm run dev &)"},
+		{"/bg <cmd>", "Launch command in background (or 'bg <cmd>' in Shell Mode)"},
+		{"/logs <id> [lines]", "View recent logs of a background process (or 'logs <id>')"},
+		{"/ps", "List running background processes & uptime (or 'ps')"},
+		{"/kill <id|all>", "Terminate background process or all processes (e.g. /kill all)"},
+		{"Ctrl+B", "Background an already-running shell command without killing it"},
 	})
 
 	renderSection("Web Tools", []cmdEntry{
@@ -823,12 +827,7 @@ func FormatStatusCard(dir, model string, rulesCount int, sm SessionMetrics, pm *
 
 	procsCount := 0
 	if pm != nil {
-		procs := pm.List()
-		for _, p := range procs {
-			if !p.Exited {
-				procsCount++
-			}
-		}
+		procsCount = pm.ActiveCount()
 	}
 
 	tokenSummary := fmt.Sprintf("%d total (%d prompt %s %d completion)",
