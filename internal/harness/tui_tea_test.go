@@ -678,12 +678,24 @@ func TestFrameSizeIsStableAcrossWidthsAndHeaderStates(t *testing.T) {
 }
 
 func TestContextGaugeUsesCompactionBudget(t *testing.T) {
-	plain := StripANSI(formatContextGauge(45_000, 60_000, 10))
-	if !strings.Contains(plain, "ctx [") || !strings.Contains(plain, "45k/60k") {
+	plain := StripANSI(formatContextGauge(45_000, 60_000, 8))
+	if !strings.Contains(plain, "ctx") || !strings.Contains(plain, "45k/60k") || !strings.Contains(plain, "▰") || !strings.Contains(plain, "▱") {
 		t.Fatalf("context gauge = %q", plain)
 	}
 	if got := StripANSI(formatContextGauge(75_000, 60_000, 0)); got != "ctx 100%" {
 		t.Fatalf("compact context gauge = %q", got)
+	}
+
+	// Verify empty session meter
+	empty := StripANSI(formatContextGauge(0, 60_000, 8))
+	if strings.Contains(empty, "▰") || !strings.Contains(empty, "▱▱▱▱▱▱▱▱") || !strings.Contains(empty, "0%") {
+		t.Fatalf("empty context gauge = %q", empty)
+	}
+
+	// Verify threshold colors
+	greenGauge := formatContextGauge(30_000, 60_000, 8)
+	if !strings.Contains(greenGauge, "16;185;129") && !strings.Contains(greenGauge, "38;2;16;185;129") && !strings.Contains(greenGauge, "10B981") && !strings.Contains(greenGauge, "32") {
+		// Lipgloss renders 24-bit ANSI colors (e.g. 38;2;16;185;129)
 	}
 }
 

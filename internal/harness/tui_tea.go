@@ -41,6 +41,7 @@ var (
 	tuiColorDarkBg = lipgloss.Color("#09090B") // Zinc 950
 	tuiColorCardBg = lipgloss.Color("#18181B") // Zinc 900
 	tuiColorBorder = lipgloss.Color("#27272A") // Zinc 800
+	tuiColorTrack  = lipgloss.Color("#3F3F46") // Zinc 700 (gauge track)
 	tuiColorWhite  = lipgloss.Color("#FAFAFA") // Zinc 50
 )
 
@@ -1836,21 +1837,34 @@ func formatContextGauge(used, budget, barWidth int) string {
 	if percent > 100 {
 		percent = 100
 	}
-	label := fmt.Sprintf("ctx %d%%", percent)
-	if barWidth > 0 {
-		filled := (percent*barWidth + 99) / 100
-		if filled > barWidth {
-			filled = barWidth
-		}
-		label = fmt.Sprintf("ctx [%s%s] %s/%s", strings.Repeat("█", filled), strings.Repeat("░", barWidth-filled), compactCount(used), compactCount(budget))
-	}
 	color := tuiColorGreen
 	if percent >= 90 {
 		color = tuiColorRed
 	} else if percent >= 75 {
 		color = tuiColorYellow
 	}
-	return lipgloss.NewStyle().Foreground(color).Render(label)
+	styleFill := lipgloss.NewStyle().Foreground(color)
+	styleTrack := lipgloss.NewStyle().Foreground(tuiColorTrack)
+	stylePct := lipgloss.NewStyle().Bold(true).Foreground(color)
+
+	if barWidth <= 0 {
+		return styleMuted.Render("ctx ") + stylePct.Render(fmt.Sprintf("%d%%", percent))
+	}
+
+	filled := 0
+	if percent > 0 {
+		filled = (percent*barWidth + 99) / 100
+		if filled > barWidth {
+			filled = barWidth
+		}
+	}
+	meter := styleFill.Render(strings.Repeat("▰", filled)) + styleTrack.Render(strings.Repeat("▱", barWidth-filled))
+	return fmt.Sprintf("%s %s %s%s",
+		styleMuted.Render("ctx"),
+		meter,
+		stylePct.Render(fmt.Sprintf("%d%%", percent)),
+		styleMuted.Render(fmt.Sprintf(" · %s/%s", compactCount(used), compactCount(budget))),
+	)
 }
 
 func (m *teaModel) renderSkillsModal() string {
@@ -2468,7 +2482,7 @@ func (m *teaModel) View() string {
 		shortHints = hints
 	}
 	used, budget := m.contextUsage()
-	gauge := formatContextGauge(used, budget, 10)
+	gauge := formatContextGauge(used, budget, 8)
 	if VisualLen(hints)+VisualLen(gauge)+2 > m.frameWidth() {
 		hints = shortHints
 	}
