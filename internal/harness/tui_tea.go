@@ -220,14 +220,15 @@ type teaModel struct {
 	gitWatchStop      func()
 
 	// Diff modal viewer state
-	diffModal       bool
-	diffCursor      int
-	diffViewport    viewport.Model
-	diffPath        string
-	diffStaged      bool
-	diffHasStaged   bool
-	diffHasUnstaged bool
-	diffReady       bool
+	diffModal          bool
+	diffConfirmDiscard bool
+	diffCursor         int
+	diffViewport       viewport.Model
+	diffPath           string
+	diffStaged         bool
+	diffHasStaged      bool
+	diffHasUnstaged    bool
+	diffReady          bool
 
 	// Prompt history navigation
 	promptHistory []string
@@ -538,6 +539,31 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.diffModal {
+			if m.diffConfirmDiscard {
+				switch msg.Type {
+				case tea.KeyEsc, tea.KeyCtrlC:
+					m.diffConfirmDiscard = false
+					return m, nil
+				case tea.KeyEnter:
+					m.diffConfirmDiscard = false
+					m.discardCurrentFile()
+					return m, nil
+				case tea.KeyRunes:
+					if len(msg.Runes) > 0 {
+						switch msg.Runes[0] {
+						case 'y', 'Y':
+							m.diffConfirmDiscard = false
+							m.discardCurrentFile()
+							return m, nil
+						default:
+							m.diffConfirmDiscard = false
+							return m, nil
+						}
+					}
+				}
+				return m, nil
+			}
+
 			switch msg.Type {
 			case tea.KeyEsc, tea.KeyCtrlC:
 				m.closeDiffModal()
@@ -565,6 +591,9 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return m, nil
 					case 'd', 'D':
 						m.toggleDiffStaged()
+						return m, nil
+					case 'x', 'X':
+						m.diffConfirmDiscard = true
 						return m, nil
 					}
 				}
@@ -1228,6 +1257,46 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 			m.openDiffModal(targetIdx)
 			return nil
 
+		case "/discard", "/revert":
+			m.appendHistory(styleUserPrompt.Render("❯ "+inputVal) + "\n")
+			if !m.checkpointMgr.IsGitRepo() {
+				m.appendHistory(styleMuted.Render("Not a git repository.\n\n"))
+				return nil
+			}
+			if len(parts) < 2 {
+				m.appendHistory(styleMuted.Render("Usage: /discard <file|all> (or press 'x' in the diff modal to discard individual files)\n\n"))
+				return nil
+			}
+			arg := strings.TrimSpace(inputVal[len(parts[0]):])
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if arg == "all" || arg == "." {
+				if err := gitrepo.DiscardAll(ctx, m.workingDir); err != nil {
+					m.appendHistory(styleDiffDel.Render(fmt.Sprintf("Discard error: %v\n\n", err)))
+				} else {
+					m.statusNotice = "✓ Discarded all uncommitted changes."
+					m.appendHistory(styleStatusNotice.Render("✓ Discarded all uncommitted changes across working tree.\n\n"))
+				}
+				return m.refreshGitStatusCmd()
+			}
+
+			matchedPath := arg
+			isUntracked := false
+			for _, f := range m.changes.files {
+				if f.Path == arg || strings.HasSuffix(f.Path, arg) {
+					matchedPath = f.Path
+					isUntracked = f.Status == "?"
+					break
+				}
+			}
+			if err := gitrepo.RemoveFileChanges(ctx, m.workingDir, matchedPath, isUntracked); err != nil {
+				m.appendHistory(styleDiffDel.Render(fmt.Sprintf("Discard error: %v\n\n", err)))
+			} else {
+				m.statusNotice = fmt.Sprintf("✓ Discarded %s.", filepath.Base(matchedPath))
+				m.appendHistory(styleStatusNotice.Render(fmt.Sprintf("✓ Discarded changes in %s.\n\n", matchedPath)))
+			}
+			return m.refreshGitStatusCmd()
+
 		case "/diff":
 			if len(parts) > 1 {
 				arg := strings.TrimSpace(inputVal[len(parts[0]):])
@@ -1746,6 +1815,7 @@ func (m *teaModel) openDiffModal(fileIdx int) {
 	}
 
 	m.diffModal = true
+	m.diffConfirmDiscard = false
 	m.diffCursor = fileIdx
 	m.changes.SetCursor(fileIdx)
 	f := m.changes.files[fileIdx]
@@ -1806,7 +1876,7 @@ func (m *teaModel) openDiffModal(fileIdx int) {
 		modalHeight = 10
 	}
 	vpWidth := modalWidth - 4
-	vpHeight := modalHeight - 6
+	vpHeight := modalHeight - 7
 	if vpHeight < 3 {
 		vpHeight = 3
 	}
@@ -1821,6 +1891,7 @@ func (m *teaModel) openDiffModal(fileIdx int) {
 func (m *teaModel) closeDiffModal() {
 	m.diffModal = false
 	m.diffReady = false
+	m.diffConfirmDiscard = false
 	m.changes.SetCursor(-1)
 	m.input.Focus()
 }
@@ -1897,6 +1968,45 @@ func (m *teaModel) toggleDiffStaged() {
 	}
 }
 
+func (m *teaModel) discardCurrentFile() {
+	if m.diffCursor < 0 || m.diffCursor >= len(m.changes.files) {
+		return
+	}
+	f := m.changes.files[m.diffCursor]
+	fileName := filepath.Base(f.Path)
+
+	if m.checkpointMgr.IsGitRepo() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		isUntracked := f.Status == "?"
+		if err := gitrepo.RemoveFileChanges(ctx, m.workingDir, f.Path, isUntracked); err != nil {
+			m.statusNotice = fmt.Sprintf("Discard failed: %v", err)
+			return
+		}
+		if status, err := gitrepo.GetRepoStatus(ctx, m.workingDir); err == nil {
+			m.changes.UpdateFromGit(status)
+		} else {
+			m.changes.RemoveFile(f.Path)
+		}
+	} else {
+		fullPath := filepath.Join(m.workingDir, filepath.FromSlash(f.Path))
+		_ = os.Remove(fullPath)
+		m.changes.RemoveFile(f.Path)
+	}
+
+	if len(m.changes.files) == 0 {
+		m.closeDiffModal()
+		m.statusNotice = fmt.Sprintf("✓ Discarded %s. Working tree clean.", fileName)
+		return
+	}
+
+	if m.diffCursor >= len(m.changes.files) {
+		m.diffCursor = len(m.changes.files) - 1
+	}
+	m.openDiffModal(m.diffCursor)
+	m.statusNotice = fmt.Sprintf("✓ Discarded %s.", fileName)
+}
+
 func (m *teaModel) renderDiffModal() string {
 	width, height := m.width, m.height
 	if width < 1 {
@@ -1919,7 +2029,7 @@ func (m *teaModel) renderDiffModal() string {
 	}
 
 	vpWidth := modalWidth - 4
-	vpHeight := modalHeight - 6
+	vpHeight := modalHeight - 7
 	if vpHeight < 3 {
 		vpHeight = 3
 	}
@@ -1947,11 +2057,38 @@ func (m *teaModel) renderDiffModal() string {
 
 	pathHeader := ColorBrightWhite(StyleBold(m.diffPath))
 	titleRow := fmt.Sprintf("%s  %s%s", badge, pathHeader, styleMuted.Render(counter))
-	legend := "n/p: Next/Prev  •  s: Stage/Unstage  •  d: Toggle Staged  •  ↑/↓: Scroll  •  Esc/q: Close"
+
+	var queueItems []string
+	for i, cf := range m.changes.files {
+		marker := "M"
+		if cf.Staged {
+			marker = "S"
+		} else if cf.Status == "?" {
+			marker = "?"
+		} else if cf.Status == "D" {
+			marker = "D"
+		}
+		item := fmt.Sprintf("[%s] %s", marker, filepath.Base(cf.Path))
+		if i == m.diffCursor {
+			queueItems = append(queueItems, ColorCyan(StyleBold("› "+item)))
+		} else {
+			queueItems = append(queueItems, ColorGray(item))
+		}
+	}
+	queueRow := styleMuted.Render("Queue: ") + strings.Join(queueItems, "  ")
+	queueRow = clampToWidth(queueRow, vpWidth)
+
+	legend := "n/p: Next/Prev  •  s: Stage/Unstage  •  d: Toggle Staged  •  x: Discard  •  Esc/q: Close"
+	if m.diffConfirmDiscard {
+		legend = ColorRed(StyleBold("⚠️  Discard all changes in " + filepath.Base(m.diffPath) + "?  [y] Confirm   [n/Esc] Cancel"))
+	} else {
+		legend = styleMuted.Render(legend)
+	}
 
 	lines := []string{
 		titleRow,
-		styleMuted.Render(legend),
+		queueRow,
+		legend,
 		styleMuted.Render(strings.Repeat("─", vpWidth)),
 		m.diffViewport.View(),
 	}

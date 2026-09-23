@@ -715,6 +715,7 @@ func FormatHelp() string {
 	renderSection("Git & Checkpoints", []cmdEntry{
 		{"/changes [file]", "Inspect changed files list & per-file diff modal (Alt+C / Ctrl+O)"},
 		{"/diff [file]", "Syntax-highlighted diff of uncommitted changes (or inspect file)"},
+		{"/discard [file|all]", "Discard uncommitted edits for a file or all files ('x' in diff modal)"},
 		{"/undo", "Rollback working directory to pre-turn git checkpoint"},
 		{"/rules", "Inspect discovered workspace instruction files"},
 		{"/skills [list|name] [task]", "List, inspect, or run an installed skill"},

@@ -3,6 +3,7 @@ package harness
 import (
 	"fastllm/internal/gitrepo"
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -349,5 +350,154 @@ func TestMouseClickChangesColumnOpensModal(t *testing.T) {
 		t.Fatalf("expected diffPath='main.go', got %q", m.diffPath)
 	}
 }
+
+func TestSessionChangesRemoveFile(t *testing.T) {
+	var c sessionChanges
+	c.files = []fileChange{
+		{Path: "a.go"},
+		{Path: "b.go"},
+		{Path: "c.go"},
+	}
+	c.cursor = 2
+	c.RemoveFile("b.go")
+	if len(c.files) != 2 {
+		t.Fatalf("expected 2 files, got %d", len(c.files))
+	}
+	if c.files[0].Path != "a.go" || c.files[1].Path != "c.go" {
+		t.Fatalf("unexpected files: %+v", c.files)
+	}
+	if c.cursor != 1 {
+		t.Fatalf("expected cursor adjusted to 1, got %d", c.cursor)
+	}
+}
+
+func TestDiffModalDiscardWorkflow(t *testing.T) {
+	tmp := t.TempDir()
+	ta := textarea.New()
+	ta.ShowLineNumbers = false
+	m := &teaModel{
+		runner:        NewRunner(&mockLLM{}, tmp, "test-model"),
+		workingDir:    tmp,
+		checkpointMgr: NewCheckpointManager(tmp),
+		modelName:     "test-model",
+		input:         ta,
+		viewport:      viewport.New(120, 20),
+		width:         120,
+		height:        30,
+	}
+
+	m.changes.files = []fileChange{
+		{Path: "file1.txt", Added: 2, Removed: 0, Status: "M"},
+		{Path: "file2.txt", Added: 5, Removed: 1, Status: "M"},
+	}
+
+	// 1. Open diff modal on file 0
+	m.openDiffModal(0)
+	if !m.diffModal || m.diffCursor != 0 {
+		t.Fatalf("expected modal open at cursor 0")
+	}
+
+	// 2. Press 'x' to trigger discard confirmation
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	m = updated.(*teaModel)
+	if !m.diffConfirmDiscard {
+		t.Fatal("expected diffConfirmDiscard to be true after pressing 'x'")
+	}
+
+	// 3. Press 'n' to cancel confirmation
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m = updated.(*teaModel)
+	if m.diffConfirmDiscard {
+		t.Fatal("expected diffConfirmDiscard to be false after pressing 'n'")
+	}
+	if len(m.changes.files) != 2 {
+		t.Fatalf("expected file count to remain 2, got %d", len(m.changes.files))
+	}
+
+	// 4. Press 'x', then 'y' to confirm discard
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	m = updated.(*teaModel)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m = updated.(*teaModel)
+
+	if m.diffConfirmDiscard {
+		t.Fatal("expected diffConfirmDiscard to be reset")
+	}
+	if len(m.changes.files) != 1 {
+		t.Fatalf("expected 1 file remaining, got %d", len(m.changes.files))
+	}
+	if m.changes.files[0].Path != "file2.txt" {
+		t.Fatalf("expected remaining file to be file2.txt, got %s", m.changes.files[0].Path)
+	}
+	if m.diffPath != "file2.txt" {
+		t.Fatalf("expected modal to show file2.txt, got %s", m.diffPath)
+	}
+
+	// 5. Discard last remaining file: modal should close
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	m = updated.(*teaModel)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m = updated.(*teaModel)
+
+	if m.diffModal {
+		t.Fatal("expected diffModal to close after discarding last file")
+	}
+	if len(m.changes.files) != 0 {
+		t.Fatalf("expected 0 files, got %d", len(m.changes.files))
+	}
+	if !strings.Contains(m.statusNotice, "Working tree clean") {
+		t.Fatalf("expected status notice 'Working tree clean', got %q", m.statusNotice)
+	}
+}
+
+func TestDiscardSlashCommand(t *testing.T) {
+	tmp := t.TempDir()
+	cmdInit := exec.Command("git", "init", "-q")
+	cmdInit.Dir = tmp
+	_ = cmdInit.Run()
+
+	ta := textarea.New()
+	ta.ShowLineNumbers = false
+	m := &teaModel{
+		runner:        NewRunner(&mockLLM{}, tmp, "test-model"),
+		workingDir:    tmp,
+		checkpointMgr: NewCheckpointManager(tmp),
+		modelName:     "test-model",
+		input:         ta,
+		viewport:      viewport.New(120, 20),
+		width:         120,
+		height:        30,
+	}
+
+	// 1. /discard with no args prints usage
+	cmd := m.handleAgentSubmit("/discard")
+	if cmd != nil {
+		t.Fatal("expected nil cmd for usage message")
+	}
+	history := m.historyText.String()
+	if !strings.Contains(history, "Usage: /discard") {
+		t.Fatalf("expected usage message in history, got %q", history)
+	}
+
+	// 2. /discard on non-repo reports not a git repository
+	nonRepoDir := t.TempDir()
+	ta2 := textarea.New()
+	mNonRepo := &teaModel{
+		runner:        NewRunner(&mockLLM{}, nonRepoDir, "test-model"),
+		workingDir:    nonRepoDir,
+		checkpointMgr: NewCheckpointManager(nonRepoDir),
+		modelName:     "test-model",
+		input:         ta2,
+		viewport:      viewport.New(120, 20),
+		width:         120,
+		height:        30,
+	}
+	mNonRepo.handleAgentSubmit("/discard somefile.go")
+	if !strings.Contains(mNonRepo.historyText.String(), "Not a git repository") {
+		t.Fatalf("expected 'Not a git repository' message")
+	}
+}
+
+
 
 

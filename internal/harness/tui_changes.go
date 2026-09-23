@@ -65,6 +65,20 @@ func (c *sessionChanges) SetCursor(idx int) {
 	c.cursor = idx
 }
 
+// RemoveFile removes a file entry from session-tracked files.
+func (c *sessionChanges) RemoveFile(path string) {
+	clean := filepath.ToSlash(filepath.Clean(path))
+	for i, f := range c.files {
+		if f.Path == path || f.Path == clean {
+			c.files = append(c.files[:i], c.files[i+1:]...)
+			if c.cursor >= len(c.files) {
+				c.cursor = len(c.files) - 1
+			}
+			return
+		}
+	}
+}
+
 // HeaderRows returns the number of visual rows used by the header, subheader, and divider.
 func (c *sessionChanges) HeaderRows() int {
 	headerRows := 2 // Title + divider

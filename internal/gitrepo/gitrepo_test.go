@@ -503,3 +503,84 @@ func TestNonRepoOperationsReturnErrNotARepo(t *testing.T) {
 		t.Errorf("CreateBranch: expected ErrNotARepo, got %v", err)
 	}
 }
+
+func TestRemoveFileChanges(t *testing.T) {
+	ctx := context.Background()
+	dir := newTestRepo(t)
+
+	// 1. Tracked unstaged modification
+	committedPath := filepath.Join(dir, "committed.txt")
+	mustWrite(t, committedPath, "modified unstaged\n")
+	if err := RemoveFileChanges(ctx, dir, "committed.txt", false); err != nil {
+		t.Fatalf("RemoveFileChanges unstaged failed: %v", err)
+	}
+	content, _ := os.ReadFile(committedPath)
+	if string(content) != "hello\n" {
+		t.Fatalf("expected 'hello\\n', got %q", string(content))
+	}
+
+	// 2. Tracked staged modification
+	mustWrite(t, committedPath, "modified staged\n")
+	if err := Stage(ctx, dir, []string{"committed.txt"}); err != nil {
+		t.Fatalf("Stage failed: %v", err)
+	}
+	if err := RemoveFileChanges(ctx, dir, "committed.txt", false); err != nil {
+		t.Fatalf("RemoveFileChanges staged failed: %v", err)
+	}
+	content, _ = os.ReadFile(committedPath)
+	if string(content) != "hello\n" {
+		t.Fatalf("expected 'hello\\n', got %q", string(content))
+	}
+
+	// 3. Untracked file
+	untrackedPath := filepath.Join(dir, "extra.txt")
+	mustWrite(t, untrackedPath, "untracked\n")
+	if err := RemoveFileChanges(ctx, dir, "extra.txt", true); err != nil {
+		t.Fatalf("RemoveFileChanges untracked failed: %v", err)
+	}
+	if _, err := os.Stat(untrackedPath); !os.IsNotExist(err) {
+		t.Fatal("expected extra.txt to be removed")
+	}
+
+	// 4. Deleted file
+	if err := os.Remove(committedPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveFileChanges(ctx, dir, "committed.txt", false); err != nil {
+		t.Fatalf("RemoveFileChanges deleted failed: %v", err)
+	}
+	content, err := os.ReadFile(committedPath)
+	if err != nil || string(content) != "hello\n" {
+		t.Fatalf("expected restored committed.txt, got err=%v content=%q", err, string(content))
+	}
+}
+
+func TestDiscardAll(t *testing.T) {
+	ctx := context.Background()
+	dir := newTestRepo(t)
+
+	committedPath := filepath.Join(dir, "committed.txt")
+	mustWrite(t, committedPath, "modified\n")
+	_ = Stage(ctx, dir, []string{"committed.txt"})
+
+	secondPath := filepath.Join(dir, "second.txt")
+	mustWrite(t, secondPath, "second\n")
+	_ = Stage(ctx, dir, []string{"second.txt"})
+
+	if err := DiscardAll(ctx, dir); err != nil {
+		t.Fatalf("DiscardAll failed: %v", err)
+	}
+
+	content, _ := os.ReadFile(committedPath)
+	if string(content) != "hello\n" {
+		t.Fatalf("expected committed.txt restored to 'hello\\n', got %q", string(content))
+	}
+	status, err := GetRepoStatus(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(status.Files) != 0 {
+		t.Fatalf("expected clean working tree, got files: %+v", status.Files)
+	}
+}
+

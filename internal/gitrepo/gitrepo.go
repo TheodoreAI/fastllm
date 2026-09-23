@@ -343,6 +343,51 @@ func Discard(ctx context.Context, root string, paths []string) error {
 	return err
 }
 
+// RemoveFileChanges completely discards all uncommitted changes (both staged and unstaged)
+// for a file, or deletes the file from disk if it is untracked.
+func RemoveFileChanges(ctx context.Context, root, path string, isUntracked bool) error {
+	if isUntracked {
+		fullPath := filepath.Join(root, filepath.FromSlash(path))
+		return os.Remove(fullPath)
+	}
+	if !IsRepo(ctx, root) {
+		return ErrNotARepo
+	}
+	if strings.TrimSpace(path) == "" {
+		return nil
+	}
+	// Restore both index and worktree from HEAD
+	_, err := run(ctx, root, "restore", "--source=HEAD", "--staged", "--worktree", "--", path)
+	if err != nil {
+		// Fallback for older git versions
+		_ = Unstage(ctx, root, []string{path})
+		_, err = run(ctx, root, "checkout", "HEAD", "--", path)
+		if err != nil {
+			// If checkout HEAD failed because the file was newly created in this session,
+			// deleting the working tree file completes the discard.
+			fullPath := filepath.Join(root, filepath.FromSlash(path))
+			if _, statErr := os.Stat(fullPath); statErr == nil {
+				return os.Remove(fullPath)
+			}
+		}
+	}
+	return err
+}
+
+// DiscardAll reverts all uncommitted changes across the entire working tree and index.
+func DiscardAll(ctx context.Context, root string) error {
+	if !IsRepo(ctx, root) {
+		return ErrNotARepo
+	}
+	_, err := run(ctx, root, "restore", "--source=HEAD", "--staged", "--worktree", ".")
+	if err != nil {
+		// Fallback
+		_, _ = run(ctx, root, "reset", "HEAD")
+		_, err = run(ctx, root, "checkout", "HEAD", "--", ".")
+	}
+	return err
+}
+
 // Commit creates a commit from whatever is currently staged. Never
 // stages anything itself (no `-a`) — the caller (the editor's git
 // panel) is expected to have already staged what it wants committed, so
