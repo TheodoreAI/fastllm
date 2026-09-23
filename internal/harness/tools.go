@@ -228,11 +228,11 @@ var spawnAgentTool = llm.Tool{Type: "function", Function: llm.ToolFunction{
 		"capabilities": map[string]any{
 			"type":        "array",
 			"items":       map[string]any{"type": "string"},
-			"description": "Optional explicit capabilities conferred to the child agent: 'read', 'write', 'network', 'commands', 'delegate'.",
+			"description": "Optional capabilities: 'read', 'write', 'network', 'commands', 'delegate'. Omitted/null inherits the parent; [] grants no optional tools. Requests are intersected with the parent's capabilities. Workspace reads always remain available. Commands require write and network access because shells are not sandboxed.",
 		},
 		"network_policy": map[string]any{
 			"type":        "string",
-			"description": "Optional network confinement policy: 'none' (blocks all outbound web requests) or 'public'.",
+			"description": "Optional network policy: 'none' disables web tools and shell commands; 'public' enables the public-web tools subject to capabilities. Omitted inherits the parent, and a parent's 'none' cannot be relaxed. This governs model tools, not the LLM endpoint connection.",
 		},
 	}, "required": []string{"task"}},
 }}

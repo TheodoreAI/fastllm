@@ -176,6 +176,12 @@ func (m *AgentManager) Spawn(parent RunRequest, task, requestedDir, model string
 	if len(opts) > 0 {
 		opt = opts[0]
 	}
+	opt.Capabilities = attenuateCapabilities(parent.Capabilities, opt.Capabilities)
+	networkPolicy, err := attenuateNetworkPolicy(parent.NetworkPolicy, opt.NetworkPolicy)
+	if err != nil {
+		return "", err
+	}
+	opt.NetworkPolicy = networkPolicy
 
 	workingDir, err := childWorkingDirectory(parent.WorkingDir, requestedDir)
 	if err != nil {

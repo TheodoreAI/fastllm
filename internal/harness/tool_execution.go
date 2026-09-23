@@ -3,7 +3,6 @@ package harness
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"fastllm/internal/files"
@@ -42,6 +41,16 @@ func argumentFailure(err error) toolExecutionResult {
 }
 
 func (r *Runner) executeTool(execCtx toolExecutionContext, name, rawArgs string) toolExecutionResult {
+	policy := policyForRequest(execCtx.request)
+	execCtx.allowCommands = execCtx.allowCommands && policy.commands
+	if name == "write_file" || name == "edit_file" || name == "patch_file" {
+		if !policy.write {
+			return toolExecutionResult{output: "Error: file writes are disabled by capability policy."}
+		}
+		if followUpFromArguments(rawArgs) != nil && !execCtx.allowCommands {
+			return toolExecutionResult{output: "Error: fused follow-up commands are disabled by policy. The file mutation was not attempted."}
+		}
+	}
 	switch name {
 	case "read_file":
 		args, err := decodeArguments[struct {
@@ -122,7 +131,7 @@ func (r *Runner) executeTool(execCtx toolExecutionContext, name, rawArgs string)
 		return toolExecutionResult{output: r.executeGlobFiles(execCtx.ctx, execCtx.workingDir, args.Pattern, args.Path)}
 
 	case "spawn_agent":
-		if len(execCtx.request.Capabilities) > 0 && !hasCapability(execCtx.request.Capabilities, "delegate", "spawn_agent") {
+		if !policy.delegate {
 			return toolExecutionResult{output: "Agent delegation is disabled by capability policy."}
 		}
 		return toolExecutionResult{output: r.executeAgentTool(execCtx.ctx, execCtx.request, name, rawArgs)}
@@ -131,7 +140,7 @@ func (r *Runner) executeTool(execCtx toolExecutionContext, name, rawArgs string)
 		return toolExecutionResult{output: r.executeAgentTool(execCtx.ctx, execCtx.request, name, rawArgs)}
 
 	case "web_search":
-		if strings.EqualFold(execCtx.request.NetworkPolicy, "none") || (len(execCtx.request.Capabilities) > 0 && !hasCapability(execCtx.request.Capabilities, "network", "network_fetch", "web")) {
+		if !policy.network {
 			return toolExecutionResult{output: "Network access is denied by policy for this agent."}
 		}
 		args, err := decodeArguments[struct {
@@ -144,7 +153,7 @@ func (r *Runner) executeTool(execCtx toolExecutionContext, name, rawArgs string)
 		return toolExecutionResult{output: webtools.SearchFormatted(execCtx.ctx, args.Query, args.MaxResults)}
 
 	case "web_fetch":
-		if strings.EqualFold(execCtx.request.NetworkPolicy, "none") || (len(execCtx.request.Capabilities) > 0 && !hasCapability(execCtx.request.Capabilities, "network", "network_fetch", "web")) {
+		if !policy.network {
 			return toolExecutionResult{output: "Network access is denied by policy for this agent."}
 		}
 		args, err := decodeArguments[struct {

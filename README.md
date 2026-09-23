@@ -124,30 +124,36 @@ or name contains `image`. The endpoint must implement OpenAI's
 and validates the response, then writes the image under `generated-images/` in
 the active workspace; base64 is never added to session history.
 
-## Capability-Based Security Architecture
+## Agent permissions
 
-The FastLLM harness implements the core principles of Object-Capability (OCap) security formulated in the classic paper [*Capability Myths Demolished*](https://papers.agoric.com/assets/pdf/papers/capability-myths-demolished.pdf) by Mark S. Miller, Ka-Ping Yee, and Jonathan Shapiro. Rather than relying on traditional Access Control Lists (ACLs) keyed to tool names, FastLLM treats authority as unforgeable, revocable, and strictly attenuated object handles:
+`spawn_agent` accepts `capabilities` containing `read`, `write`, `network`,
+`commands`, and `delegate`. Omitted or null lists inherit the parent's list;
+explicit lists are intersected with it. An empty list (`[]`) grants no optional
+tools. Workspace reads remain available in all cases. At the root, an omitted
+list preserves the normal tools allowed by the permission mode and command setting.
+Aliases such as `filesystem_write`, `web`, `shell`, and `spawn_agent` are supported.
 
-### 1. Bundled Designation & Confused Deputy Prevention (Myth 1 Demolished)
-In an ACL model, authority is attached to subject identities and verb names (`write_file`), separating designation from permission and inviting Confused Deputy attacks. FastLLM prevents this across the execution pipeline:
-- **Hoisted Verification Gates**: When a tool fuses an edit with a verification command (`then_run`), the harness independently authorizes the file mutation and the shell command prior to execution. If command authorization is denied, the file mutation is aborted before any disk modification occurs.
-- **Spatially Scoped Tokens**: Permissions are bound to designated workspace paths rather than bare verb names. Switching directories (`/dir` or `cd`) resets session grants so authority granted in a scratchpad cannot be exercised in a production repository.
-- **Unforgeable Filesystem Handles**: All file operations are executed through an attenuated `files.Reader` capability that validates snapshot-consistent paths and blocks directory traversal or symlink escapes.
+`network_policy: "none"` disables model web tools and shell execution. Children
+inherit this restriction and cannot relax it to `"public"`. Public-web tools
+continue to reject private/local destinations. These policies govern model tools;
+they do not block requests to the configured LLM endpoint.
 
-### 2. Subagent Attenuation & Confinement (Myth 2 Demolished)
-The "Confinement Myth" claimed capability systems cannot confine what they spawn. In reality, a newly spawned subject has no ambient authority and holds only the communication channels explicitly handed to it during construction.
-- **Attenuated Child Manifests**: `spawn_agent` accepts an explicit capability list (`capabilities: ["read", "write", "network", "commands", "delegate"]`) and network confinement policy (`network_policy: "none"`).
-- **Physical Tool Stripping**: Subagents without explicit network capabilities have `web_search` and `web_fetch` removed from their tool catalogs, closing covert data exfiltration channels. Child runners without write capabilities instantiate a read-only filesystem capability where write operations are disabled at the engine level.
-- **Dispatcher Enforcement**: Even if a child model attempts to craft a raw tool invocation for an ungranted tool, the dispatch gateway enforces rejection.
+Model shells are **not OS-sandboxed**: they can write files and make network
+requests. Consequently, `commands` also requires both `write` and `network`;
+with either denied, foreground commands, background commands, and fused
+`then_run` commands are blocked. A blocked fused command also prevents its file
+mutation. When shells are enabled, environment filtering removes variables whose
+names look sensitive, but does not isolate the process or protect credentials
+stored on disk. Direct user shell commands (`!cmd`, `$ cmd`, `/shell`) retain
+the user's authority.
 
-### 3. Revocable Capability Forwarders (Myth 3 Demolished)
-The "Irrevocability Myth" claimed capabilities cannot be cancelled once granted. FastLLM implements the *Revocable Forwarder* pattern:
-- **First-Class Grant Handles**: Approving a tool for the session issues a tracked `CapabilityGrant` token with a distinct ID, workspace scope, and timestamp.
-- **Interactive Governance**: Users can inspect and revoke active capability handles at runtime via `/permissions [list]`, `/permissions revoke <grant-id|tool>`, and `/permissions clear`. Revoking a token severs the forwarder handle, immediately causing subsequent model calls to prompt for authorization again.
-
-### 4. Taming Ambient Authority in Host Execution
-- **User vs. Model Segregation**: Direct terminal inputs (`!cmd`, `$cmd`, `/shell`) exercise direct user authority, while model-issued commands (`run_command`) run with attenuated authority.
-- **Environment Scrubbing**: Model subshells run in a `SanitizedEnvironment()` that strips ambient host secrets (API keys, cloud tokens, database credentials, authentication cookies) while preserving essential compilers, runtimes, and build tools.
+Both terminal UIs support `/permissions [list]`,
+`/permissions revoke <grant-id|tool>`, and `/permissions clear`. In `ask` mode,
+session approvals are tracked with IDs and workspace scope. Revocation makes
+subsequent calls prompt again; it does not undo work or stop already running
+commands. Directory, session, and permission-mode changes clear grants. Grants
+are never persisted. Tool catalogs and dispatch checks enforce capability
+restrictions independently of interactive approvals.
 
 ## Production build (single binary)
 

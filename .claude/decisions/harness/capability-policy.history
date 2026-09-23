@@ -1,0 +1,4 @@
+- decided_at: 2026-09-23T00:27:53+00:00
+  event: initial
+  value: Nil manifests inherit/default; explicit empty manifests grant no optional tools; child manifests intersect the parent using canonical aliases; network none is inherited. Shell execution requires write and network access because subprocesses are not OS-sandboxed. Both terminal UIs share PermissionController grants and revocation.
+  reason: Intersection preserves compatible child requests without allowing escalation; rejected requests would be less usable. Disabling shells under restrictions is portable and enforceable now, unlike command-string filtering, and avoids introducing platform-specific sandbox backends. A shared UI controller prevents grant behavior drifting between the default UI and fallback REPL.

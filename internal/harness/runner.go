@@ -165,6 +165,11 @@ func localClient(client LLMClient) (*llm.Client, bool) {
 // Run executes an autonomous task to completion or until max turns are reached.
 func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (*RunResult, error) {
 	startTime := time.Now()
+	networkPolicy, err := normalizeNetworkPolicy(req.NetworkPolicy)
+	if err != nil {
+		return nil, err
+	}
+	req.NetworkPolicy = networkPolicy
 
 	workingDir := req.WorkingDir
 	if workingDir == "" {
@@ -209,13 +214,12 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 	} else if req.AllowCommands {
 		allowCmds = true
 	}
-	readOnly := req.PermissionMode == PermissionReadOnly || (req.AgentDepth > 0 && req.PermissionMode == PermissionAsk)
-	if readOnly {
-		allowCmds = false
-	}
+	policy := policyForRequest(req)
+	allowCmds = allowCmds && policy.commands
 	req.WorkingDir = absWorkingDir
 	req.Model = model
 	req.AllowCommands = allowCmds
+	req.CommandsConfigured = true
 
 	systemPrompt := req.SystemPrompt
 	if strings.TrimSpace(systemPrompt) == "" {
@@ -249,22 +253,8 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 		}
 	}
 
-	// Capability attenuation and policy enforcement
-	allowWrites := !readOnly
-	allowNetwork := true
-	allowDelegate := !readOnly
-	if len(req.Capabilities) > 0 {
-		allowWrites = allowWrites && hasCapability(req.Capabilities, "write", "filesystem_write")
-		allowNetwork = hasCapability(req.Capabilities, "network", "network_fetch", "web")
-		allowCmds = allowCmds && hasCapability(req.Capabilities, "commands", "run_command", "shell")
-		allowDelegate = allowDelegate && hasCapability(req.Capabilities, "delegate", "spawn_agent")
-	}
-	if strings.EqualFold(req.NetworkPolicy, "none") {
-		allowNetwork = false
-	}
-
 	// Prepare sandboxed file reader with writes enabled or attenuated
-	fileReader := files.New(absWorkingDir, allowWrites)
+	fileReader := files.New(absWorkingDir, policy.write)
 
 	// Available tools
 	tools := []llm.Tool{
@@ -275,13 +265,13 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 		updatePlanTool,
 		finishTaskTool,
 	}
-	if allowNetwork {
+	if policy.network {
 		tools = append(tools, webSearchTool, webFetchTool)
 	}
-	if allowWrites {
+	if policy.write {
 		tools = append(tools, writeFileTool, editFileTool, patchFileTool)
 	}
-	if allowDelegate {
+	if policy.delegate {
 		tools = append(tools, r.agents.Tools(req.AgentDepth)...)
 	} else {
 		tools = append(tools, agentStatusTool, sendAgentMessageTool)
@@ -926,16 +916,3 @@ func walkFiles(root string) ([]string, error) {
 	})
 	return filesList, err
 }
-
-func hasCapability(caps []string, names ...string) bool {
-	for _, c := range caps {
-		cNorm := strings.ToLower(strings.TrimSpace(c))
-		for _, n := range names {
-			if cNorm == n {
-				return true
-			}
-		}
-	}
-	return false
-}
-

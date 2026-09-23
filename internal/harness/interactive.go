@@ -604,51 +604,7 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 					fmt.Println(FormatRuntimeCard(maxTurns, cmdTimeout, thinkLevel, allowCmds, permissionMode, activeSessionID(activeSession)))
 				}
 			case "/permissions", "/permission":
-				if len(parts) >= 2 && (parts[1] == "clear" || parts[1] == "reset") {
-					permissions.ClearGrants()
-					fmt.Println(ColorGreen(fmt.Sprintf("  %s Cleared all session capability grants.", SymCheck)))
-					continue
-				}
-				if len(parts) >= 3 && parts[1] == "revoke" {
-					target := parts[2]
-					n := permissions.RevokeGrant(target)
-					if n > 0 {
-						fmt.Println(ColorGreen(fmt.Sprintf("  %s Revoked %d capability grant(s) for %q.", SymCheck, n, target)))
-					} else {
-						fmt.Println(ColorYellow(fmt.Sprintf("  %s No active capability grant found matching %q.", SymCross, target)))
-					}
-					continue
-				}
-				if len(parts) >= 2 && parts[1] == "revoke" {
-					fmt.Println(ColorYellow("  Usage: /permissions revoke <grant-id|tool-name>"))
-					continue
-				}
-				active := permissions.ActiveGrants()
-				fmt.Println(ColorCyan(StyleBold("\nSession Capabilities & Permissions:")))
-				fmt.Println(FormatKV("mode", string(permissions.Mode), 12))
-				if permissions.Workspace != "" {
-					fmt.Println(FormatKV("workspace", permissions.Workspace, 12))
-				}
-				if len(active) == 0 {
-					fmt.Println(ColorGray("\n  No active capability grants for this session."))
-				} else {
-					fmt.Println("\n" + ColorCyan("  Active Grants:"))
-					for _, g := range active {
-						ws := g.Workspace
-						if ws == "" {
-							ws = "(any)"
-						}
-						age := time.Since(g.GrantedAt).Truncate(time.Second).String() + " ago"
-						fmt.Printf("    %s %-12s %-16s %s (%s)\n",
-							ColorGreen(SymCheck),
-							ColorBrightWhite(g.ID),
-							ColorCyan(g.Tool),
-							ColorGray(ws),
-							ColorGray(age),
-						)
-					}
-					fmt.Println(ColorGray("\n  Use /permissions revoke <id|tool> to revoke a grant, or /permissions clear to reset all."))
-				}
+				fmt.Println(permissions.HandleCommand(parts[1:]))
 				continue
 
 			case "/compact":

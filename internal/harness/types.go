@@ -65,10 +65,14 @@ type RunRequest struct {
 	StreamTokens bool `json:"-"`
 
 	// Capabilities defines an explicit capability list for the run (attenuation).
-	// E.g. "read", "write", "network", "commands", "delegate".
-	Capabilities []string `json:"capabilities,omitempty"`
+	// Nil preserves defaults (or inherits the parent's list when spawning).
+	// An empty list grants no optional tools; workspace reads remain available.
+	// Shell commands also require write and network capabilities.
+	Capabilities []string `json:"capabilities"`
 
-	// NetworkPolicy specifies network confinement: "none" or "public".
+	// NetworkPolicy controls model tools: "none" disables web tools and shells;
+	// "public" permits public-web tools, subject to Capabilities. LLM transport
+	// is unaffected. Omitted child policies inherit the parent's restriction.
 	NetworkPolicy string `json:"network_policy,omitempty"`
 }
 
