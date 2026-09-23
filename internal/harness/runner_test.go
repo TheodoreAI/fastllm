@@ -71,6 +71,55 @@ func TestRunnerInteractiveAuthorizationCanDenyMutation(t *testing.T) {
 	}
 }
 
+func TestRunnerInteractiveAuthorizationDeniesFusedFollowUp(t *testing.T) {
+	tmpDir := t.TempDir()
+	mock := &mockLLM{turns: []func([]llm.Message) (llm.Message, error){
+		func([]llm.Message) (llm.Message, error) {
+			call := llm.ToolCall{ID: "write-1", Type: "function"}
+			call.Function.Name = "write_file"
+			call.Function.Arguments = `{"path":"denied_fused.txt","content":"must not exist","then_run":{"command":"echo dangerous"}}`
+			return llm.Message{Role: "assistant", ToolCalls: []llm.ToolCall{call}}, nil
+		},
+		func(messages []llm.Message) (llm.Message, error) {
+			got := messages[len(messages)-1].Content
+			if !strings.Contains(got, "Permission denied") || !strings.Contains(got, "fused follow-up command") {
+				t.Fatalf("model did not receive fused denial result: %q", got)
+			}
+			return llm.Message{Role: "assistant", Content: "fused denial handled"}, nil
+		},
+	}}
+	runner := NewRunner(mock, tmpDir, "test-model")
+	var authorizedCalls []string
+	result, err := runner.Run(context.Background(), RunRequest{
+		Task: "try a fused write", WorkingDir: tmpDir, Model: "test-model", PermissionMode: PermissionAsk,
+		Authorize: func(name, summary string) bool {
+			authorizedCalls = append(authorizedCalls, name+":"+summary)
+			if name == "run_command" {
+				return false
+			}
+			return true
+		},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(authorizedCalls) != 2 {
+		t.Fatalf("expected 2 authorization checks, got: %v", authorizedCalls)
+	}
+	if !strings.Contains(authorizedCalls[0], "write_file") || !strings.Contains(authorizedCalls[0], "denied_fused.txt") {
+		t.Fatalf("unexpected first authorization call: %v", authorizedCalls[0])
+	}
+	if authorizedCalls[1] != "run_command:command=echo dangerous" {
+		t.Fatalf("unexpected second authorization call: %v", authorizedCalls[1])
+	}
+	if _, err := os.Stat(filepath.Join(tmpDir, "denied_fused.txt")); !os.IsNotExist(err) {
+		t.Fatalf("denied fused follow-up should not have created file: %v", err)
+	}
+	if result.FinalResponse != "fused denial handled" {
+		t.Fatalf("final response = %q", result.FinalResponse)
+	}
+}
+
 func TestRunnerExplicitlyDisablesCommands(t *testing.T) {
 	mock := &mockLLM{turns: []func([]llm.Message) (llm.Message, error){
 		func([]llm.Message) (llm.Message, error) { return llm.Message{Role: "assistant", Content: "done"}, nil },

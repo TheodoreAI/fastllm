@@ -341,7 +341,8 @@ func TestTeaInitialMessagesCarryConversationContext(t *testing.T) {
 }
 
 func TestTeaRuntimeSettingsValidateAndPersistValues(t *testing.T) {
-	m := &teaModel{sessionGrants: map[string]bool{"write_file": true}}
+	m := &teaModel{}
+	m.permissionController().Grant("write_file")
 	for _, tc := range []struct{ name, value string }{
 		{"turns", "42"}, {"timeout", "90"}, {"think", "high"},
 		{"commands", "off"}, {"permissions", "read-only"}, {"output", "expanded"},
@@ -353,7 +354,7 @@ func TestTeaRuntimeSettingsValidateAndPersistValues(t *testing.T) {
 	if m.maxTurns != 42 || m.commandTimeout != 90*time.Second || m.thinkLevel != "high" || m.allowCommands || m.permissionMode != PermissionReadOnly || !m.expandedTools {
 		t.Fatalf("unexpected runtime state: %+v", m.runtimeSettings())
 	}
-	if len(m.sessionGrants) != 0 {
+	if len(m.permissionController().ActiveGrants()) != 0 {
 		t.Fatal("changing permission mode must clear session grants")
 	}
 	if err := m.setRuntimeValue("turns", "101"); err == nil {
@@ -366,7 +367,7 @@ func TestTeaSessionRoundTripIncludesMetricsAndMessages(t *testing.T) {
 	m := &teaModel{
 		workingDir: t.TempDir(), modelName: "test-model", sessionStore: store,
 		maxTurns: 20, commandTimeout: time.Minute, allowCommands: true,
-		permissionMode: PermissionAsk, sessionGrants: make(map[string]bool),
+		permissionMode:  PermissionAsk,
 		sessionMessages: []llm.Message{{Role: "user", Content: "remember this"}, {Role: "assistant", Content: "remembered"}},
 		sessionMetrics:  SessionMetrics{TotalTurns: 2, TotalTokens: 123},
 	}
@@ -389,7 +390,7 @@ func TestTeaCompactSessionContextTrimsUnboundedTranscript(t *testing.T) {
 	m := &teaModel{
 		workingDir: t.TempDir(), modelName: "test-model", sessionStore: store,
 		maxTurns: 20, commandTimeout: time.Minute, allowCommands: true,
-		permissionMode: PermissionAsk, sessionGrants: make(map[string]bool),
+		permissionMode: PermissionAsk,
 	}
 	// Well past the budget, and long enough that KeepRecentMessages cannot hold it all.
 	turn := strings.Repeat("x", 4000)
@@ -441,7 +442,7 @@ func TestPermissionPromptShowsKeyLegend(t *testing.T) {
 	m := &teaModel{
 		runner: NewRunner(&mockLLM{}, tmp, "test-model"), workingDir: tmp,
 		input: ta, viewport: viewport.New(80, 6), ready: true, width: 80,
-		sessionGrants: map[string]bool{}, permissionChan: make(chan teaPermissionRequestMsg),
+		permissionChan: make(chan teaPermissionRequestMsg),
 	}
 	m.pendingPermission = &teaPermissionRequestMsg{ToolName: "write_file", Summary: "path=hello.txt"}
 
@@ -458,7 +459,7 @@ func TestPermissionPromptEnterAndEscDeny(t *testing.T) {
 		ta := textarea.New()
 		m := &teaModel{
 			input: ta, viewport: viewport.New(80, 6), ready: true, width: 80,
-			sessionGrants: map[string]bool{}, permissionChan: make(chan teaPermissionRequestMsg),
+			permissionChan: make(chan teaPermissionRequestMsg),
 		}
 		reply := make(chan permissionDecision, 1)
 		m.pendingPermission = &teaPermissionRequestMsg{ToolName: "write_file", Reply: reply}
@@ -517,7 +518,7 @@ func TestFailedTurnIsReportedExactlyOnce(t *testing.T) {
 		workingDir: tmp, modelName: "test-model",
 		input: ta, viewport: viewport.New(80, 10), ready: true, width: 80,
 		maxTurns: 3, commandTimeout: time.Minute,
-		permissionMode: PermissionAuto, sessionGrants: make(map[string]bool),
+		permissionMode: PermissionAuto,
 		permissionChan: make(chan teaPermissionRequestMsg),
 	}
 
@@ -546,7 +547,7 @@ func TestPreflightFailureStillReportsOnce(t *testing.T) {
 		workingDir: string([]byte{0}), modelName: "test-model",
 		input: ta, viewport: viewport.New(80, 10), ready: true, width: 80,
 		maxTurns: 3, commandTimeout: time.Minute,
-		permissionMode: PermissionAuto, sessionGrants: make(map[string]bool),
+		permissionMode: PermissionAuto,
 		permissionChan: make(chan teaPermissionRequestMsg),
 	}
 
@@ -718,7 +719,7 @@ func newBusyModel(t *testing.T, client LLMClient) *teaModel {
 		runner: NewRunner(client, tmp, "test-model"), workingDir: tmp, modelName: "test-model",
 		input: ta, viewport: viewport.New(80, 10), ready: true, width: 80,
 		maxTurns: 2, commandTimeout: time.Minute,
-		permissionMode: PermissionAuto, sessionGrants: make(map[string]bool),
+		permissionMode: PermissionAuto,
 		permissionChan: make(chan teaPermissionRequestMsg),
 	}
 }

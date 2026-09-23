@@ -165,6 +165,11 @@ func localClient(client LLMClient) (*llm.Client, bool) {
 // Run executes an autonomous task to completion or until max turns are reached.
 func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (*RunResult, error) {
 	startTime := time.Now()
+	networkPolicy, err := normalizeNetworkPolicy(req.NetworkPolicy)
+	if err != nil {
+		return nil, err
+	}
+	req.NetworkPolicy = networkPolicy
 
 	workingDir := req.WorkingDir
 	if workingDir == "" {
@@ -209,13 +214,12 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 	} else if req.AllowCommands {
 		allowCmds = true
 	}
-	readOnly := req.PermissionMode == PermissionReadOnly || (req.AgentDepth > 0 && req.PermissionMode == PermissionAsk)
-	if readOnly {
-		allowCmds = false
-	}
+	policy := policyForRequest(req)
+	allowCmds = allowCmds && policy.commands
 	req.WorkingDir = absWorkingDir
 	req.Model = model
 	req.AllowCommands = allowCmds
+	req.CommandsConfigured = true
 
 	systemPrompt := req.SystemPrompt
 	if strings.TrimSpace(systemPrompt) == "" {
@@ -249,8 +253,8 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 		}
 	}
 
-	// Prepare sandboxed file reader with writes enabled
-	fileReader := files.New(absWorkingDir, true)
+	// Prepare sandboxed file reader with writes enabled or attenuated
+	fileReader := files.New(absWorkingDir, policy.write)
 
 	// Available tools
 	tools := []llm.Tool{
@@ -258,18 +262,19 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 		listFilesTool,
 		searchFilesTool,
 		globFilesTool,
-		webSearchTool,
-		webFetchTool,
 		updatePlanTool,
 		finishTaskTool,
 	}
-	if !readOnly {
+	if policy.network {
+		tools = append(tools, webSearchTool, webFetchTool)
+	}
+	if policy.write {
 		tools = append(tools, writeFileTool, editFileTool, patchFileTool)
 	}
-	if readOnly {
-		tools = append(tools, agentStatusTool, sendAgentMessageTool)
-	} else {
+	if policy.delegate {
 		tools = append(tools, r.agents.Tools(req.AgentDepth)...)
+	} else {
+		tools = append(tools, agentStatusTool, sendAgentMessageTool)
 	}
 	if r.EnableObservations {
 		tools = append(tools, readObservationTool)
@@ -392,6 +397,8 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 			var execution toolExecutionResult
 			if req.Authorize != nil && requiresPermission(call.Function.Name) && !req.Authorize(call.Function.Name, summarizeArgs(call.Function.Arguments)) {
 				execution.output = "Permission denied by user for " + call.Function.Name + "."
+			} else if req.Authorize != nil && followUpFromArguments(call.Function.Arguments) != nil && !req.Authorize("run_command", "command="+followUpFromArguments(call.Function.Arguments).Command) {
+				execution.output = "Permission denied by user for the fused follow-up command. The file mutation was not attempted."
 			} else {
 				execution = r.executeTool(toolExecutionContext{
 					ctx:              ctx,
@@ -770,6 +777,7 @@ func (r *Runner) executeRunCommand(ctx context.Context, root, command string, ti
 		cmd = exec.CommandContext(ctxTimeout, "sh", "-c", command)
 	}
 	cmd.Dir = root
+	cmd.Env = SanitizedEnvironment()
 
 	var outBuf bytes.Buffer
 	cmd.Stdout = &outBuf
@@ -813,6 +821,7 @@ func (r *Runner) executeRunCommandLive(ctx context.Context, root, command string
 		cmd = exec.CommandContext(ctxTimeout, "sh", "-c", command)
 	}
 	cmd.Dir = root
+	cmd.Env = SanitizedEnvironment()
 	var buffer bytes.Buffer
 	writer := io.MultiWriter(os.Stdout, &buffer)
 	cmd.Stdout, cmd.Stderr = writer, writer

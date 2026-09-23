@@ -128,9 +128,10 @@ func tuiToolBadge(name string) string {
 type teaAgentEventMsg Event
 type teaStatusClearMsg struct{}
 type teaPermissionRequestMsg struct {
-	ToolName string
-	Summary  string
-	Reply    chan permissionDecision
+	ToolName  string
+	Summary   string
+	Workspace string
+	Reply     chan permissionDecision
 }
 type permissionDecision struct {
 	Allow        bool
@@ -202,7 +203,7 @@ type teaModel struct {
 	allowCommands     bool
 	permissionMode    PermissionMode
 	expandedTools     bool
-	sessionGrants     map[string]bool
+	permissions       *PermissionController
 	pendingPermission *teaPermissionRequestMsg
 	skillsModal       bool
 	skillCursor       int
@@ -298,7 +299,6 @@ func newTeaModel(runner *Runner, req RunRequest) (*teaModel, error) {
 		thinkLevel:     req.ThinkLevel,
 		allowCommands:  req.AllowCommands,
 		permissionMode: permissionMode,
-		sessionGrants:  make(map[string]bool),
 		permissionChan: make(chan teaPermissionRequestMsg),
 	}
 	if err := m.initializeSession(req.ResumeSession); err != nil {
@@ -691,7 +691,10 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case teaPermissionRequestMsg:
-		if m.sessionGrants[msg.ToolName] {
+		if msg.Workspace != "" && msg.Workspace != m.workingDir {
+			msg.Reply <- permissionDecision{Allow: false}
+			cmds = append(cmds, m.waitForNextEvent())
+		} else if m.permissionController().HasGrant(msg.ToolName) {
 			msg.Reply <- permissionDecision{Allow: true}
 			cmds = append(cmds, m.waitForNextEvent())
 		} else {
@@ -831,7 +834,7 @@ func (m *teaModel) resolvePermission(allow, grant bool) {
 		return
 	}
 	if allow && grant {
-		m.sessionGrants[request.ToolName] = true
+		m.permissionController().Grant(request.ToolName)
 	}
 	request.Reply <- permissionDecision{Allow: allow, GrantSession: grant}
 	m.pendingPermission = nil
@@ -911,6 +914,7 @@ func (m *teaModel) changeWorkingDirectory(path string) error {
 		return err
 	}
 	m.workingDir = newDir
+	m.permissionController().SetWorkspace(newDir)
 	m.checkpointMgr = NewCheckpointManager(newDir)
 	m.rules = DiscoverWorkspaceRules(newDir)
 	m.skills = DiscoverWorkspaceSkills(newDir)
@@ -1237,29 +1241,32 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 	priorMessages := m.initialMessages()
 	systemPrompt := m.systemPrompt + skillPrompt
 
+	// Capture run settings before the worker starts; directory and runtime
+	// commands on the UI goroutine may change them while the model is running.
+	req := RunRequest{
+		Task:               inputVal,
+		WorkingDir:         m.workingDir,
+		Model:              m.modelName,
+		SystemPrompt:       systemPrompt,
+		MaxTurns:           m.maxTurns,
+		CommandTimeout:     m.commandTimeout,
+		ThinkLevel:         m.thinkLevel,
+		AllowCommands:      m.allowCommands,
+		CommandsConfigured: true,
+		PermissionMode:     m.permissionMode,
+		InitialMessages:    priorMessages,
+		StreamTokens:       true,
+	}
+	permissionChan := m.permissionChan
 	// Launch background task
 	go func() {
 		defer close(events)
-		req := RunRequest{
-			Task:               inputVal,
-			WorkingDir:         m.workingDir,
-			Model:              m.modelName,
-			SystemPrompt:       systemPrompt,
-			MaxTurns:           m.maxTurns,
-			CommandTimeout:     m.commandTimeout,
-			ThinkLevel:         m.thinkLevel,
-			AllowCommands:      m.allowCommands,
-			CommandsConfigured: true,
-			PermissionMode:     m.permissionMode,
-			InitialMessages:    priorMessages,
-			StreamTokens:       true,
-		}
-		if m.permissionMode == PermissionAsk {
+		if req.PermissionMode == PermissionAsk {
 			req.Authorize = func(toolName, summary string) bool {
 				reply := make(chan permissionDecision, 1)
-				request := teaPermissionRequestMsg{ToolName: toolName, Summary: summary, Reply: reply}
+				request := teaPermissionRequestMsg{ToolName: toolName, Summary: summary, Workspace: req.WorkingDir, Reply: reply}
 				select {
-				case m.permissionChan <- request:
+				case permissionChan <- request:
 				case <-ctx.Done():
 					return false
 				}

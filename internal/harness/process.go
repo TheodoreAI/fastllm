@@ -3,12 +3,63 @@ package harness
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
 )
+
+// SanitizedEnvironment returns an attenuated process environment for model-spawned commands.
+// It preserves standard system variables (PATH, HOME, USER, TMPDIR, compiler paths, etc.)
+// while scrubbing API keys, tokens, secrets, and private credentials.
+func SanitizedEnvironment() []string {
+	sensitiveKeywords := []string{
+		"KEY", "SECRET", "TOKEN", "PASSWORD", "PASSWD", "AUTH", "CREDENTIAL",
+		"PRIVATE", "CERT", "SIGNING",
+	}
+
+	var sanitized []string
+	for _, env := range os.Environ() {
+		parts := strings.SplitN(env, "=", 2)
+		if len(parts) == 0 {
+			continue
+		}
+		key := strings.ToUpper(parts[0])
+
+		if isEssentialEnv(key) {
+			sanitized = append(sanitized, env)
+			continue
+		}
+
+		sensitive := false
+		for _, kw := range sensitiveKeywords {
+			if strings.Contains(key, kw) {
+				sensitive = true
+				break
+			}
+		}
+		if !sensitive {
+			sanitized = append(sanitized, env)
+		}
+	}
+	return sanitized
+}
+
+func isEssentialEnv(key string) bool {
+	switch key {
+	case "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TEMP", "TMP",
+		"LANG", "LC_ALL", "LC_CTYPE", "TERM", "COLORTERM",
+		"GOROOT", "GOPATH", "GOBIN", "GOPROXY", "GONOSUMDB", "GONOPROXY", "GOPRIVATE",
+		"CARGO_HOME", "RUSTUP_HOME", "JAVA_HOME", "NODE_PATH", "NVM_DIR",
+		"SYSTEMROOT", "WINDIR", "PROGRAMFILES", "PROGRAMFILES(X86)", "APPDATA", "LOCALAPPDATA", "COMSPEC", "PATHEXT":
+		return true
+	default:
+		return false
+	}
+}
 
 // syncBuffer is a thread-safe ring-like buffer for capturing process output.
 type syncBuffer struct {
@@ -78,7 +129,12 @@ func (pm *ProcessManager) Start(command string, dir string) (*BackgroundProcess,
 	} else {
 		cmd = exec.Command("sh", "-c", command)
 	}
-	cmd.Dir = dir
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, fmt.Errorf("invalid working directory: %w", err)
+	}
+	cmd.Dir = absDir
+	cmd.Env = SanitizedEnvironment()
 
 	buf := &syncBuffer{}
 	cmd.Stdout = buf

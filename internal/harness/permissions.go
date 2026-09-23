@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"strings"
+	"time"
 )
 
 type PermissionMode string
@@ -27,10 +28,21 @@ func ParsePermissionMode(value string) (PermissionMode, error) {
 	}
 }
 
+type CapabilityGrant struct {
+	ID        string    `json:"id"`
+	Tool      string    `json:"tool"`
+	Workspace string    `json:"workspace,omitempty"`
+	GrantedAt time.Time `json:"granted_at"`
+	Revoked   bool      `json:"revoked"`
+}
+
 type PermissionController struct {
 	Mode          PermissionMode
 	SessionGrants map[string]bool
+	Grants        []*CapabilityGrant
 	Input         interactiveInput
+	Workspace     string
+	nextGrantID   int
 }
 
 func NewPermissionController(mode PermissionMode, source any) *PermissionController {
@@ -44,12 +56,122 @@ func NewPermissionController(mode PermissionMode, source any) *PermissionControl
 	case *bufio.Scanner:
 		input = &scannerInput{scanner: value}
 	}
-	return &PermissionController{Mode: mode, SessionGrants: make(map[string]bool), Input: input}
+	return &PermissionController{
+		Mode:          mode,
+		SessionGrants: make(map[string]bool),
+		Grants:        make([]*CapabilityGrant, 0),
+		Input:         input,
+	}
+}
+
+func (p *PermissionController) SetWorkspace(workspace string) {
+	p.Workspace = workspace
+	p.ClearGrants()
 }
 
 func (p *PermissionController) SetMode(mode PermissionMode) {
 	p.Mode = mode
+	p.ClearGrants()
+}
+
+func (p *PermissionController) ClearGrants() {
+	if p == nil {
+		return
+	}
+	for _, g := range p.Grants {
+		g.Revoked = true
+	}
 	p.SessionGrants = make(map[string]bool)
+}
+
+func (p *PermissionController) Grant(toolName string) *CapabilityGrant {
+	if p == nil {
+		return nil
+	}
+	p.nextGrantID++
+	grant := &CapabilityGrant{
+		ID:        fmt.Sprintf("grant-%d", p.nextGrantID),
+		Tool:      toolName,
+		Workspace: p.Workspace,
+		GrantedAt: time.Now(),
+		Revoked:   false,
+	}
+	p.Grants = append(p.Grants, grant)
+	if p.SessionGrants == nil {
+		p.SessionGrants = make(map[string]bool)
+	}
+	p.SessionGrants[toolName] = true
+	return grant
+}
+
+func (p *PermissionController) HasGrant(toolName string) bool {
+	if p == nil {
+		return false
+	}
+	if p.SessionGrants != nil && p.SessionGrants[toolName] {
+		if len(p.Grants) > 0 {
+			for _, g := range p.Grants {
+				if !g.Revoked && g.Tool == toolName {
+					if g.Workspace == "" || p.Workspace == "" || g.Workspace == p.Workspace {
+						return true
+					}
+				}
+			}
+			delete(p.SessionGrants, toolName)
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+func (p *PermissionController) RevokeGrant(target string) int {
+	if p == nil {
+		return 0
+	}
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return 0
+	}
+	count := 0
+	for _, g := range p.Grants {
+		if !g.Revoked && (strings.EqualFold(g.ID, target) || strings.EqualFold(g.Tool, target)) {
+			g.Revoked = true
+			count++
+		}
+	}
+	p.syncSessionGrants()
+	return count
+}
+
+func (p *PermissionController) ActiveGrants() []*CapabilityGrant {
+	if p == nil {
+		return nil
+	}
+	var active []*CapabilityGrant
+	for _, g := range p.Grants {
+		if !g.Revoked {
+			if g.Workspace == "" || p.Workspace == "" || g.Workspace == p.Workspace {
+				active = append(active, g)
+			}
+		}
+	}
+	return active
+}
+
+func (p *PermissionController) syncSessionGrants() {
+	if p == nil {
+		return
+	}
+	activeTools := make(map[string]bool)
+	for _, g := range p.Grants {
+		if !g.Revoked {
+			if g.Workspace == "" || p.Workspace == "" || g.Workspace == p.Workspace {
+				activeTools[g.Tool] = true
+			}
+		}
+	}
+	p.SessionGrants = activeTools
 }
 
 func (p *PermissionController) Authorize(toolName, summary string) bool {
@@ -62,7 +184,7 @@ func (p *PermissionController) Authorize(toolName, summary string) bool {
 	case PermissionReadOnly:
 		return false
 	case PermissionAsk:
-		if p.SessionGrants[toolName] {
+		if p.HasGrant(toolName) {
 			return true
 		}
 	default:
@@ -83,7 +205,7 @@ func (p *PermissionController) Authorize(toolName, summary string) bool {
 		case "y":
 			return true
 		case "a":
-			p.SessionGrants[toolName] = true
+			p.Grant(toolName)
 			return true
 		}
 		return false
@@ -104,7 +226,7 @@ func (p *PermissionController) Authorize(toolName, summary string) bool {
 		case "y", "yes":
 			return true
 		case "a", "always", "session":
-			p.SessionGrants[toolName] = true
+			p.Grant(toolName)
 			return true
 		case "n", "no", "deny", "":
 			return false

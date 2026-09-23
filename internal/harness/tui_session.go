@@ -82,7 +82,7 @@ func (m *teaModel) loadSession(session *InteractiveSession) error {
 	m.sessionMetrics = session.Metrics
 	session.ClosedAt = nil
 	m.activeSession = session
-	m.sessionGrants = make(map[string]bool)
+	m.permissionController().SetMode(m.permissionMode)
 	return m.saveSession()
 }
 
@@ -122,7 +122,7 @@ func (m *teaModel) startNewSession() error {
 	m.sessionMetrics = SessionMetrics{}
 	m.latestMetrics = nil
 	m.lastResponse = ""
-	m.sessionGrants = make(map[string]bool)
+	m.permissionController().ClearGrants()
 	if m.sessionStore != nil {
 		m.activeSession = m.sessionStore.New(m.workingDir, m.modelName, m.runtimeSettings())
 		return m.saveSession()
@@ -278,6 +278,10 @@ func (s singleConversationSource) LoadMessages(id int64) ([]llm.Message, error) 
 
 func (m *teaModel) handleSessionSlash(input string, parts []string, command string) (bool, tea.Cmd) {
 	switch command {
+	case "/permissions", "/permission":
+		m.appendHistory(styleUserPrompt.Render("❯ "+input) + "\n")
+		m.appendHistory(m.permissionController().HandleCommand(parts[1:]) + "\n\n")
+		return true, nil
 	case "/conversations":
 		m.appendHistory(styleUserPrompt.Render("❯ /conversations") + "\n")
 		m.withLegacySource(func(src LegacyConversationSource) error {
@@ -474,7 +478,7 @@ func (m *teaModel) setRuntimeValue(name, value string) error {
 			return err
 		}
 		m.permissionMode = mode
-		m.sessionGrants = make(map[string]bool)
+		m.permissionController().SetMode(mode)
 	case "output":
 		if value == "expanded" {
 			m.expandedTools = true
