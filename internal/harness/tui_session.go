@@ -18,6 +18,7 @@ func (m *teaModel) runtimeSettings() InteractiveRuntime {
 		AllowCommands:  m.allowCommands,
 		PermissionMode: m.permissionMode,
 		ExpandedTools:  m.expandedTools,
+		Sandbox:        m.sandbox,
 	}
 }
 
@@ -78,8 +79,12 @@ func (m *teaModel) loadSession(session *InteractiveSession) error {
 		m.permissionMode = session.Runtime.PermissionMode
 	}
 	m.expandedTools = session.Runtime.ExpandedTools
+	m.sandbox = session.Runtime.Sandbox
 	m.sessionMessages = append([]llm.Message(nil), session.Messages...)
 	m.sessionMetrics = session.Metrics
+	// Tool calls are not persisted with a session, so a resumed session starts
+	// with an empty changes list rather than inheriting the previous one's.
+	m.changes.Reset()
 	session.ClosedAt = nil
 	m.activeSession = session
 	m.permissionController().SetMode(m.permissionMode)
@@ -120,6 +125,7 @@ func (m *teaModel) startNewSession() error {
 	}
 	m.sessionMessages = nil
 	m.sessionMetrics = SessionMetrics{}
+	m.changes.Reset()
 	m.latestMetrics = nil
 	m.lastResponse = ""
 	m.permissionController().ClearGrants()
@@ -423,18 +429,18 @@ func (m *teaModel) handleSessionSlash(input string, parts []string, command stri
 
 	case "/set":
 		if len(parts) == 1 {
-			m.appendHistory(FormatRuntimeCard(m.maxTurns, m.commandTimeout, m.thinkLevel, m.allowCommands, m.permissionMode, m.activeSessionID()) + "\n\n")
+			m.appendHistory(FormatRuntimeCard(m.runtimeSettings(), m.activeSessionID()) + "\n\n")
 			return true, nil
 		}
 		if len(parts) < 3 {
-			m.appendHistory(styleMuted.Render("Usage: /set <turns|timeout|think|commands|permissions|output> <value>\n\n"))
+			m.appendHistory(styleMuted.Render("Usage: /set <turns|timeout|think|commands|sandbox|permissions|output> <value>\n\n"))
 			return true, nil
 		}
 		if err := m.setRuntimeValue(parts[1], parts[2]); err != nil {
 			m.appendHistory(styleDiffDel.Render(err.Error() + "\n\n"))
 		} else {
 			_ = m.saveSession()
-			m.appendHistory(FormatRuntimeCard(m.maxTurns, m.commandTimeout, m.thinkLevel, m.allowCommands, m.permissionMode, m.activeSessionID()) + "\n\n")
+			m.appendHistory(FormatRuntimeCard(m.runtimeSettings(), m.activeSessionID()) + "\n\n")
 		}
 		return true, nil
 	}
@@ -471,6 +477,18 @@ func (m *teaModel) setRuntimeValue(name, value string) error {
 			m.allowCommands = false
 		} else {
 			return fmt.Errorf("commands must be on or off")
+		}
+	case "sandbox":
+		if value == "on" {
+			if err := sandboxReady(); err != nil {
+				return err
+			}
+			m.sandbox = true
+			m.appendHistory(styleMuted.Render(sandboxFirstUseNotice + "\n\n"))
+		} else if value == "off" {
+			m.sandbox = false
+		} else {
+			return fmt.Errorf("sandbox must be on or off")
 		}
 	case "permissions", "permission":
 		mode, err := ParsePermissionMode(value)

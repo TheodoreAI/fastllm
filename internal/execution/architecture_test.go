@@ -15,9 +15,25 @@ import (
 // exception documented in docs/execution-boundary.md.
 var subprocessConstructorAllowlist = map[string]bool{
 	filepath.Join("internal", "execution", "local.go"):                   true,
+	filepath.Join("internal", "execution", "appcontainer_windows.go"):    true,
 	filepath.Join("internal", "folderpicker", "folderpicker_darwin.go"):  true,
 	filepath.Join("internal", "folderpicker", "folderpicker_windows.go"): true,
 	filepath.Join("internal", "folderpicker", "folderpicker_other.go"):   true,
+}
+
+// Every way production Go can create a process, not only os/exec: an isolated
+// backend calls the OS directly, and so could code that escapes the boundary.
+var processConstructors = map[string]bool{
+	"exec.Command":                true,
+	"exec.CommandContext":         true,
+	"os.StartProcess":             true,
+	"syscall.StartProcess":        true,
+	"syscall.ForkExec":            true,
+	"syscall.CreateProcess":       true,
+	"syscall.CreateProcessAsUser": true,
+	"windows.CreateProcess":       true,
+	"windows.CreateProcessAsUser": true,
+	"unix.ForkExec":               true,
 }
 
 func TestSubprocessConstructorsStayInsideTheBoundary(t *testing.T) {
@@ -63,14 +79,11 @@ func TestSubprocessConstructorsStayInsideTheBoundary(t *testing.T) {
 				return true
 			}
 			pkg, ok := selector.X.(*ast.Ident)
-			if !ok || pkg.Name != "exec" {
+			if !ok || !processConstructors[pkg.Name+"."+selector.Sel.Name] {
 				return true
 			}
-			if selector.Sel.Name != "Command" && selector.Sel.Name != "CommandContext" {
-				return true
-			}
-			t.Errorf("%s:%d: exec.%s outside the execution boundary; route it through internal/execution",
-				relative, fileSet.Position(call.Pos()).Line, selector.Sel.Name)
+			t.Errorf("%s:%d: %s.%s outside the execution boundary; route it through internal/execution",
+				relative, fileSet.Position(call.Pos()).Line, pkg.Name, selector.Sel.Name)
 			return true
 		})
 		return nil

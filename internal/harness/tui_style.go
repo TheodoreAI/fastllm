@@ -558,6 +558,7 @@ func FormatHelp() string {
 		{"/set timeout <sec>", "Set command timeout (1-3600 seconds)"},
 		{"/set think <level>", "Set off, low, medium, or high reasoning"},
 		{"/set commands <on|off>", "Enable or disable command/process tools"},
+		{"/set sandbox <on|off>", "Run commands isolated from this machine, with no network"},
 		{"/set permissions <mode>", "Set ask, read-only, or auto tool permissions"},
 		{"/set output <mode>", "Set compact or expanded tool results"},
 		{"/permissions [list]", "List active session capability grants"},
@@ -601,23 +602,24 @@ func FormatHelp() string {
 	return b.String()
 }
 
-func FormatRuntimeCard(maxTurns int, timeout time.Duration, thinkLevel string, allowCommands bool, permissionMode PermissionMode, sessionID string) string {
-	think := thinkLevel
+func FormatRuntimeCard(settings InteractiveRuntime, sessionID string) string {
+	think := settings.ThinkLevel
 	if think == "" {
 		think = "off"
 	}
 	commands := "off"
-	if allowCommands {
+	if settings.AllowCommands {
 		commands = "on"
 	}
 	lines := []string{
 		"",
 		FormatKV("session", sessionID, 12),
-		FormatKV("max turns", fmt.Sprintf("%d", maxTurns), 12),
-		FormatKV("timeout", timeout.String(), 12),
+		FormatKV("max turns", fmt.Sprintf("%d", settings.MaxTurns), 12),
+		FormatKV("timeout", settings.CommandTimeout.String(), 12),
 		FormatKV("thinking", think, 12),
 		FormatKV("commands", commands, 12),
-		FormatKV("permissions", string(permissionMode), 12),
+		FormatKV("sandbox", sandboxLabel(settings.Sandbox), 12),
+		FormatKV("permissions", string(settings.PermissionMode), 12),
 		"",
 	}
 	return FormatCard("Runtime Settings", lines, 74)

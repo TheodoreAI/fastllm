@@ -89,6 +89,13 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 	thinkLevel := initialReq.ThinkLevel
 	permissionMode := PermissionAsk
 	expandedTools := false
+	sandbox := initialReq.Sandbox
+	runtimeSettings := func() InteractiveRuntime {
+		return InteractiveRuntime{
+			MaxTurns: maxTurns, CommandTimeout: cmdTimeout, ThinkLevel: thinkLevel, AllowCommands: allowCmds,
+			PermissionMode: permissionMode, ExpandedTools: expandedTools, Sandbox: sandbox,
+		}
+	}
 
 	// Initialize Git checkpoint manager and background process manager
 	checkpointMgr := NewCheckpointManager(absWorkingDir)
@@ -138,9 +145,7 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 	tools := interactiveTools(allowCmds, permissionMode, r.EnableObservations)
 	var activeSession *InteractiveSession
 	if sessionStoreErr == nil {
-		activeSession = sessionStore.New(absWorkingDir, model, InteractiveRuntime{
-			MaxTurns: maxTurns, CommandTimeout: cmdTimeout, ThinkLevel: thinkLevel, AllowCommands: allowCmds, PermissionMode: permissionMode,
-		})
+		activeSession = sessionStore.New(absWorkingDir, model, runtimeSettings())
 	}
 	observationSessionID := "interactive"
 	if activeSession != nil {
@@ -158,9 +163,7 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 		}
 		activeSession.WorkingDir = absWorkingDir
 		activeSession.Model = model
-		activeSession.Runtime = InteractiveRuntime{
-			MaxTurns: maxTurns, CommandTimeout: cmdTimeout, ThinkLevel: thinkLevel, AllowCommands: allowCmds, PermissionMode: permissionMode, ExpandedTools: expandedTools,
-		}
+		activeSession.Runtime = runtimeSettings()
 		activeSession.Messages = append([]llm.Message(nil), sessionMessages[1:]...)
 		if !activeSession.CustomTitle {
 			activeSession.Title = sessionTitle(activeSession.Messages)
@@ -219,6 +222,7 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 			permissionMode = PermissionAsk
 		}
 		expandedTools = loaded.Runtime.ExpandedTools
+		sandbox = loaded.Runtime.Sandbox
 		permissions.SetMode(permissionMode)
 		tools = interactiveTools(allowCmds, permissionMode, r.EnableObservations)
 		if err := switchWorkspace(resolvedDir); err != nil {
@@ -425,7 +429,7 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 			case "/status":
 				sessionMetrics.ObservationEfficiency = observations.Stats()
 				fmt.Println(FormatStatusCard(absWorkingDir, model, len(discoveredRules), sessionMetrics, processMgr))
-				fmt.Println(FormatRuntimeCard(maxTurns, cmdTimeout, thinkLevel, allowCmds, permissionMode, activeSessionID(activeSession)))
+				fmt.Println(FormatRuntimeCard(runtimeSettings(), activeSessionID(activeSession)))
 				if summary := r.agents.Summary(); summary.Total > 0 {
 					fmt.Println(FormatCard("Child Agents", strings.Split(r.agents.Status(""), "\n"), 74))
 				}
@@ -519,9 +523,7 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 				sessionMessages = []llm.Message{{Role: "system", Content: currentSystemPrompt()}}
 				sessionMetrics = SessionMetrics{}
 				if sessionStore != nil {
-					activeSession = sessionStore.New(absWorkingDir, model, InteractiveRuntime{
-						MaxTurns: maxTurns, CommandTimeout: cmdTimeout, ThinkLevel: thinkLevel, AllowCommands: allowCmds, PermissionMode: permissionMode, ExpandedTools: expandedTools,
-					})
+					activeSession = sessionStore.New(absWorkingDir, model, runtimeSettings())
 					if observationStore != nil {
 						observationStore.SetSession(activeSession.ID)
 					}
@@ -532,11 +534,11 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 
 			case "/set":
 				if len(parts) == 1 {
-					fmt.Println(FormatRuntimeCard(maxTurns, cmdTimeout, thinkLevel, allowCmds, permissionMode, activeSessionID(activeSession)))
+					fmt.Println(FormatRuntimeCard(runtimeSettings(), activeSessionID(activeSession)))
 					continue
 				}
 				if len(parts) < 3 {
-					fmt.Println(ColorYellow("  Usage: /set <turns|timeout|think|commands|permissions|output> <value>"))
+					fmt.Println(ColorYellow("  Usage: /set <turns|timeout|think|commands|sandbox|permissions|output> <value>"))
 					continue
 				}
 				value := strings.ToLower(parts[2])
@@ -577,6 +579,19 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 						setErr = fmt.Errorf("commands must be on or off")
 					}
 					tools = interactiveTools(allowCmds, permissionMode, r.EnableObservations)
+				case "sandbox":
+					if value == "on" {
+						if err := sandboxReady(); err != nil {
+							setErr = err
+						} else {
+							sandbox = true
+							fmt.Println(ColorYellow("  " + sandboxFirstUseNotice))
+						}
+					} else if value == "off" {
+						sandbox = false
+					} else {
+						setErr = fmt.Errorf("sandbox must be on or off")
+					}
 				case "permissions", "permission":
 					var parsed PermissionMode
 					parsed, setErr = ParsePermissionMode(value)
@@ -600,7 +615,7 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 					fmt.Println(ColorRed(fmt.Sprintf("  %s %v", SymCross, setErr)))
 				} else {
 					saveSession()
-					fmt.Println(FormatRuntimeCard(maxTurns, cmdTimeout, thinkLevel, allowCmds, permissionMode, activeSessionID(activeSession)))
+					fmt.Println(FormatRuntimeCard(runtimeSettings(), activeSessionID(activeSession)))
 				}
 			case "/permissions", "/permission":
 				fmt.Println(permissions.HandleCommand(parts[1:]))
@@ -843,6 +858,7 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 			fileReader,
 			absWorkingDir,
 			allowCmds,
+			sandbox,
 			cmdTimeout,
 			thinkLevel,
 			maxTurns,
@@ -877,6 +893,7 @@ func (r *Runner) runInteractiveTurn(
 	fileReader *files.Reader,
 	absWorkingDir string,
 	allowCmds bool,
+	sandbox bool,
 	cmdTimeout time.Duration,
 	thinkLevel string,
 	maxTurns int,
@@ -895,7 +912,12 @@ func (r *Runner) runInteractiveTurn(
 		owner = execution.NewManager()
 		defer owner.Close(context.Background())
 	}
-	scope, err := owner.Open(ctx, execution.Options{Workspace: absWorkingDir, Policy: executionPolicy(RunRequest{PermissionMode: permissions.Mode}, allowCmds), Timeout: cmdTimeout, MaxOutputBytes: 64 * 1024})
+	opts, err := sandboxOptions(owner, execution.Options{Workspace: absWorkingDir, Policy: executionPolicy(RunRequest{PermissionMode: permissions.Mode}, allowCmds), Timeout: cmdTimeout, MaxOutputBytes: 64 * 1024}, sandbox)
+	if err != nil {
+		fmt.Println("Execution setup failed:", err)
+		return
+	}
+	scope, err := owner.Open(ctx, opts)
 	if err != nil {
 		fmt.Println("Execution setup failed:", err)
 		return
@@ -903,6 +925,10 @@ func (r *Runner) runInteractiveTurn(
 	defer scope.Close(context.Background())
 	ctx = execution.WithScope(ctx, scope)
 	absWorkingDir = scope.Workspace()
+	if note := sandboxPromptNote(scope); note != "" && len(*sessionMessages) > 0 {
+		// The caller restores the base system prompt after every turn.
+		(*sessionMessages)[0].Content += note
+	}
 	fileReader = files.New(absWorkingDir, permissions.Mode != PermissionReadOnly)
 	processMgr.KillAll()
 	processMgr.mu.Lock()
@@ -1027,7 +1053,7 @@ func (r *Runner) runInteractiveTurn(
 			toolStart := time.Now()
 			parent := RunRequest{
 				WorkingDir: absWorkingDir, Model: model, MaxTurns: maxTurns,
-				AllowCommands: allowCmds, CommandTimeout: cmdTimeout,
+				AllowCommands: allowCmds, Sandbox: sandbox, CommandTimeout: cmdTimeout,
 				ThinkLevel: thinkLevel, PermissionMode: permissions.Mode,
 			}
 			execution := r.executeTool(toolExecutionContext{

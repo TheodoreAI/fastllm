@@ -192,6 +192,34 @@ func TestMouseWheelScrollsViewportWithoutChangingPromptHistory(t *testing.T) {
 	}
 }
 
+func TestTypingDoesNotScrollViewport(t *testing.T) {
+	ta := textarea.New()
+	ta.Focus()
+	vp := viewport.New(80, 3)
+	vp.SetContent("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten")
+	vp.GotoBottom()
+
+	m := &teaModel{
+		input:      ta,
+		viewport:   vp,
+		historyIdx: -1,
+		ready:      true,
+	}
+	initialOffset := m.viewport.YOffset
+
+	// Every one of these is a viewport scroll binding in bubbles' default keymap.
+	for _, r := range "kjudbf hl" {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = updated.(*teaModel)
+		if m.viewport.YOffset != initialOffset {
+			t.Fatalf("typing %q scrolled the viewport: before=%d after=%d", r, initialOffset, m.viewport.YOffset)
+		}
+	}
+	if got := m.input.Value(); got != "kjudbf hl" {
+		t.Fatalf("typed text did not reach the input: %q", got)
+	}
+}
+
 func TestPromptHistoryNavigation(t *testing.T) {
 	ta := textarea.New()
 	ta.Focus()
