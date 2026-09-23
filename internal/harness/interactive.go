@@ -135,6 +135,7 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 	})
 	defer input.Close()
 	permissions := NewPermissionController(permissionMode, input)
+	permissions.SetWorkspace(absWorkingDir)
 	tools := interactiveTools(allowCmds, permissionMode, r.EnableObservations)
 	var activeSession *InteractiveSession
 	if sessionStoreErr == nil {
@@ -191,6 +192,7 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 		rulesPrompt = FormatRulesForPrompt(discoveredRules)
 		discoveredSkills = DiscoverWorkspaceSkills(absWorkingDir)
 		settings, configPath = newSettings, newConfigPath
+		permissions.SetWorkspace(absWorkingDir)
 		sessionMessages = []llm.Message{
 			{Role: "system", Content: currentSystemPrompt()},
 		}
@@ -601,6 +603,8 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 					saveSession()
 					fmt.Println(FormatRuntimeCard(maxTurns, cmdTimeout, thinkLevel, allowCmds, permissionMode, activeSessionID(activeSession)))
 				}
+			case "/permissions", "/permission":
+				fmt.Println(permissions.HandleCommand(parts[1:]))
 				continue
 
 			case "/compact":

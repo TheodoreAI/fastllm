@@ -560,6 +560,9 @@ func FormatHelp() string {
 		{"/set commands <on|off>", "Enable or disable command/process tools"},
 		{"/set permissions <mode>", "Set ask, read-only, or auto tool permissions"},
 		{"/set output <mode>", "Set compact or expanded tool results"},
+		{"/permissions [list]", "List active session capability grants"},
+		{"/permissions revoke <id>", "Revoke a capability grant by ID or tool name"},
+		{"/permissions clear", "Revoke all active session capability grants"},
 	})
 
 	renderSection("Shell & Execution", []cmdEntry{

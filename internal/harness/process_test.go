@@ -74,3 +74,31 @@ func TestProcessManagerReturnsImmutableSnapshotsDuringExit(t *testing.T) {
 		t.Fatalf("final status = %+v, err=%v", finished, err)
 	}
 }
+
+func TestSanitizedEnvironmentScrubsSecrets(t *testing.T) {
+	t.Setenv("TEST_FASTLLM_API_KEY", "super-secret-key-123")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "aws-secret-xyz")
+	t.Setenv("GITHUB_TOKEN", "ghp_secrettoken")
+	t.Setenv("DB_PASSWORD", "dbpass")
+	t.Setenv("SAFE_COMPILER_FLAG", "-O3")
+
+	env := SanitizedEnvironment()
+	envMap := make(map[string]string)
+	for _, entry := range env {
+		parts := strings.SplitN(entry, "=", 2)
+		if len(parts) == 2 {
+			envMap[parts[0]] = parts[1]
+		}
+	}
+
+	for _, secretKey := range []string{"TEST_FASTLLM_API_KEY", "AWS_SECRET_ACCESS_KEY", "GITHUB_TOKEN", "DB_PASSWORD"} {
+		if _, found := envMap[secretKey]; found {
+			t.Fatalf("sanitized environment leaked secret variable %q", secretKey)
+		}
+	}
+
+	if val, found := envMap["SAFE_COMPILER_FLAG"]; !found || val != "-O3" {
+		t.Fatalf("sanitized environment dropped harmless variable SAFE_COMPILER_FLAG: %v", val)
+	}
+}
+

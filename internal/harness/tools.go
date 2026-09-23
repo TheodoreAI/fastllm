@@ -225,6 +225,15 @@ var spawnAgentTool = llm.Tool{Type: "function", Function: llm.ToolFunction{
 		"working_dir": map[string]any{"type": "string", "description": "Optional directory within the current workspace."},
 		"model":       map[string]any{"type": "string", "description": "Optional model override when the client routes models to endpoints; direct clients must use the parent's active model."},
 		"max_turns":   map[string]any{"type": "integer", "description": "Maximum child turns, from 1 to 50."},
+		"capabilities": map[string]any{
+			"type":        "array",
+			"items":       map[string]any{"type": "string"},
+			"description": "Optional capabilities: 'read', 'write', 'network', 'commands', 'delegate'. Omitted/null inherits the parent; [] grants no optional tools. Requests are intersected with the parent's capabilities. Workspace reads always remain available. Commands require write and network access because shells are not sandboxed.",
+		},
+		"network_policy": map[string]any{
+			"type":        "string",
+			"description": "Optional network policy: 'none' disables web tools and shell commands; 'public' enables the public-web tools subject to capabilities. Omitted inherits the parent, and a parent's 'none' cannot be relaxed. This governs model tools, not the LLM endpoint connection.",
+		},
 	}, "required": []string{"task"}},
 }}
 

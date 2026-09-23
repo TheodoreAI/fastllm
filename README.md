@@ -124,6 +124,37 @@ or name contains `image`. The endpoint must implement OpenAI's
 and validates the response, then writes the image under `generated-images/` in
 the active workspace; base64 is never added to session history.
 
+## Agent permissions
+
+`spawn_agent` accepts `capabilities` containing `read`, `write`, `network`,
+`commands`, and `delegate`. Omitted or null lists inherit the parent's list;
+explicit lists are intersected with it. An empty list (`[]`) grants no optional
+tools. Workspace reads remain available in all cases. At the root, an omitted
+list preserves the normal tools allowed by the permission mode and command setting.
+Aliases such as `filesystem_write`, `web`, `shell`, and `spawn_agent` are supported.
+
+`network_policy: "none"` disables model web tools and shell execution. Children
+inherit this restriction and cannot relax it to `"public"`. Public-web tools
+continue to reject private/local destinations. These policies govern model tools;
+they do not block requests to the configured LLM endpoint.
+
+Model shells are **not OS-sandboxed**: they can write files and make network
+requests. Consequently, `commands` also requires both `write` and `network`;
+with either denied, foreground commands, background commands, and fused
+`then_run` commands are blocked. A blocked fused command also prevents its file
+mutation. When shells are enabled, environment filtering removes variables whose
+names look sensitive, but does not isolate the process or protect credentials
+stored on disk. Direct user shell commands (`!cmd`, `$ cmd`, `/shell`) retain
+the user's authority.
+
+Both terminal UIs support `/permissions [list]`,
+`/permissions revoke <grant-id|tool>`, and `/permissions clear`. In `ask` mode,
+session approvals are tracked with IDs and workspace scope. Revocation makes
+subsequent calls prompt again; it does not undo work or stop already running
+commands. Directory, session, and permission-mode changes clear grants. Grants
+are never persisted. Tool catalogs and dispatch checks enforce capability
+restrictions independently of interactive approvals.
+
 ## Production build (single binary)
 
 ```

@@ -63,6 +63,17 @@ type RunRequest struct {
 	// stream is useful to a live UI and pure overhead to a batch caller, and it
 	// has no effect when the configured client cannot stream.
 	StreamTokens bool `json:"-"`
+
+	// Capabilities defines an explicit capability list for the run (attenuation).
+	// Nil preserves defaults (or inherits the parent's list when spawning).
+	// An empty list grants no optional tools; workspace reads remain available.
+	// Shell commands also require write and network capabilities.
+	Capabilities []string `json:"capabilities"`
+
+	// NetworkPolicy controls model tools: "none" disables web tools and shells;
+	// "public" permits public-web tools, subject to Capabilities. LLM transport
+	// is unaffected. Omitted child policies inherit the parent's restriction.
+	NetworkPolicy string `json:"network_policy,omitempty"`
 }
 
 // InitialMessage represents a prior conversation turn.

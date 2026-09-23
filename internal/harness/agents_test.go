@@ -330,3 +330,110 @@ func TestGlobFilesRejectsInvalidPatternAndSupportsClasses(t *testing.T) {
 		t.Fatalf("invalid glob = %q", got)
 	}
 }
+
+func TestSpawnAgent_AttenuatedCapabilities(t *testing.T) {
+	tmpDir := t.TempDir()
+	var toolsOffered []llm.Tool
+	mock := &mockLLM{turns: []func([]llm.Message) (llm.Message, error){
+		func(messages []llm.Message) (llm.Message, error) {
+			return llm.Message{Role: "assistant", Content: "inspected tools"}, nil
+		},
+	}}
+	runner := NewRunner(mock, tmpDir, "test-model")
+	runner.AllowCommands = true
+
+	// Spawn child with only "read" capability
+	id, err := runner.agents.Spawn(RunRequest{
+		WorkingDir: tmpDir, Model: "test-model",
+	}, "confined read-only task", "", "", 1, SpawnOptions{
+		Capabilities:  []string{"read"},
+		NetworkPolicy: "none",
+	})
+	if err != nil {
+		t.Fatalf("spawn failed: %v", err)
+	}
+
+	// Wait for child to complete
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && runner.agents.Summary().Completed == 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	record := runner.agents.agents[id]
+	if record == nil || record.State != AgentCompleted {
+		t.Fatalf("expected completed agent, got %+v", record)
+	}
+
+	if len(mock.toolsSeen) == 0 {
+		t.Fatal("mock LLM was not called")
+	}
+	toolsOffered = mock.toolsSeen[0]
+
+	for _, tool := range toolsOffered {
+		name := tool.Function.Name
+		if name == "write_file" || name == "edit_file" || name == "patch_file" {
+			t.Fatalf("confined read agent was offered mutating tool %q", name)
+		}
+		if name == "web_search" || name == "web_fetch" {
+			t.Fatalf("confined read agent was offered network tool %q", name)
+		}
+		if name == "run_command" || name == "process_status" || name == "kill_process" {
+			t.Fatalf("confined read agent was offered command tool %q", name)
+		}
+		if name == "spawn_agent" {
+			t.Fatalf("confined read agent was offered delegation tool %q", name)
+		}
+	}
+}
+
+func TestSpawnAgent_NetworkPolicy_Confinement(t *testing.T) {
+	runner := NewRunner(nil, t.TempDir(), "test-model")
+	req := RunRequest{
+		WorkingDir:    t.TempDir(),
+		NetworkPolicy: "none",
+		Capabilities:  []string{"read", "write"},
+	}
+
+	resSearch := runner.executeTool(toolExecutionContext{
+		ctx:     context.Background(),
+		request: req,
+	}, "web_search", `{"query":"secret"}`)
+	if !strings.Contains(resSearch.output, "Network access is denied") {
+		t.Fatalf("expected network denial for web_search, got: %q", resSearch.output)
+	}
+
+	resFetch := runner.executeTool(toolExecutionContext{
+		ctx:     context.Background(),
+		request: req,
+	}, "web_fetch", `{"url":"https://example.com"}`)
+	if !strings.Contains(resFetch.output, "Network access is denied") {
+		t.Fatalf("expected network denial for web_fetch, got: %q", resFetch.output)
+	}
+}
+
+func TestExecuteAgentTool_SpawnWithCapabilities(t *testing.T) {
+	tmpDir := t.TempDir()
+	client := &agentTestLLM{chat: func(_ context.Context, _ []llm.Message) (llm.Message, error) {
+		return llm.Message{Role: "assistant", Content: "done"}, nil
+	}}
+	runner := NewRunner(client, tmpDir, "test-model")
+	parent := RunRequest{WorkingDir: tmpDir, Model: "test-model"}
+
+	rawArgs := `{"task":"confined task","capabilities":["read","network"],"network_policy":"none"}`
+	out := runner.executeAgentTool(context.Background(), parent, "spawn_agent", rawArgs)
+	if !strings.Contains(out, "Spawned agent-") {
+		t.Fatalf("unexpected spawn output: %q", out)
+	}
+
+	record := runner.agents.agents["agent-1"]
+	if record == nil {
+		t.Fatal("expected agent-1 in manager")
+	}
+	if len(record.Capabilities) != 2 || record.Capabilities[0] != "read" || record.Capabilities[1] != "network" {
+		t.Fatalf("unexpected capabilities recorded: %v", record.Capabilities)
+	}
+	if record.NetworkPolicy != "none" {
+		t.Fatalf("unexpected network policy: %q", record.NetworkPolicy)
+	}
+}
+
