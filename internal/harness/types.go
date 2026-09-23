@@ -32,6 +32,11 @@ type RunRequest struct {
 	// zero value used by older non-interactive callers.
 	CommandsConfigured bool `json:"-"`
 
+	// Sandbox runs every command in the platform's isolated backend. It is
+	// opt-in, and where no isolated backend exists the run fails rather than
+	// running commands unsandboxed.
+	Sandbox bool `json:"sandbox,omitempty"`
+
 	// CommandTimeout is the maximum execution time for each run_command invocation.
 	// Defaults to 60 seconds if <= 0.
 	CommandTimeout time.Duration `json:"command_timeout,omitempty"`

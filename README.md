@@ -82,7 +82,7 @@ list them, `/resume <id>` to reopen one, and `/new` to start fresh. Runtime
 settings can be changed without restarting via `/set turns`, `/set timeout`,
 `/set think`, `/set commands`, and `/set permissions`; `/set` displays their
 current values. Permission modes are `ask` (the default for model-initiated
-writes and commands), `read-only`, and `auto`. Direct Shell Mode commands are
+writes and commands), `read-only`, and `auto`. Direct shell-mode commands are
 already explicit user actions and do not prompt again.
 
 Skills are discovered from project and user-level Codex, OpenCode, Claude,

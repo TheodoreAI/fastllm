@@ -129,7 +129,7 @@ func TestFormatStatusCardAndModelsTable(t *testing.T) {
 	if !strings.Contains(status, "Session Status") || !strings.Contains(status, "150 total") {
 		t.Errorf("unexpected status card: %s", status)
 	}
-	runtime := FormatRuntimeCard(20, time.Minute, "high", true, PermissionAsk, "session-1")
+	runtime := FormatRuntimeCard(InteractiveRuntime{MaxTurns: 20, CommandTimeout: time.Minute, ThinkLevel: "high", AllowCommands: true, PermissionMode: PermissionAsk}, "session-1")
 	if !strings.Contains(runtime, "permissions") || !strings.Contains(runtime, "ask") {
 		t.Errorf("runtime card missing permissions: %s", runtime)
 	}

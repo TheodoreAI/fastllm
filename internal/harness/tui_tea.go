@@ -201,12 +201,14 @@ type teaModel struct {
 	commandTimeout    time.Duration
 	thinkLevel        string
 	allowCommands     bool
+	sandbox           bool
 	permissionMode    PermissionMode
 	expandedTools     bool
 	permissions       *PermissionController
 	pendingPermission *teaPermissionRequestMsg
 	skillsModal       bool
 	skillCursor       int
+	changes           sessionChanges
 
 	// Prompt history navigation
 	promptHistory []string
@@ -298,6 +300,7 @@ func newTeaModel(runner *Runner, req RunRequest) (*teaModel, error) {
 		commandTimeout: commandTimeout,
 		thinkLevel:     req.ThinkLevel,
 		allowCommands:  req.AllowCommands,
+		sandbox:        req.Sandbox,
 		permissionMode: permissionMode,
 		permissionChan: make(chan teaPermissionRequestMsg),
 	}
@@ -346,8 +349,23 @@ func (m *teaModel) frameWidth() int {
 	return m.width - 1
 }
 
+// showChangesColumn reports whether the terminal is wide enough to give the
+// session's file changes their own column beside the conversation.
+func (m *teaModel) showChangesColumn() bool {
+	return m.frameWidth() >= changesColumnMinFrame
+}
+
+// conversationWidth is the width of the conversation viewport: the full frame,
+// less the changes column when it is shown.
+func (m *teaModel) conversationWidth() int {
+	if m.showChangesColumn() {
+		return m.frameWidth() - changesColumnWidth
+	}
+	return m.frameWidth()
+}
+
 func (m *teaModel) contentWidth() int {
-	w := m.width - 4
+	w := m.conversationWidth() - 3
 	if w < 40 {
 		return 76
 	}
@@ -377,13 +395,13 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncInputHeight()
 
 		if !m.ready {
-			m.viewport = viewport.New(m.frameWidth(), 3)
+			m.viewport = viewport.New(m.conversationWidth(), 3)
 			m.viewport.SetContent(m.historyText.String())
 			m.ready = true
 			m.resizeViewport()
 			m.viewport.GotoBottom()
 		} else {
-			m.viewport.Width = m.frameWidth()
+			m.viewport.Width = m.conversationWidth()
 			m.resizeViewport()
 		}
 
@@ -608,6 +626,7 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.startAgentWork(ev.Turn)
 				m.activeTool = ""
 				m.activeArgs = ""
+				m.changes.Record(m.workingDir, ev.ToolCall.Name, ev.ToolCall.Arguments, ev.ToolCall.Result)
 				previewLines := 4
 				if m.expandedTools {
 					previewLines = 10000
@@ -738,7 +757,13 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Update viewport & input
 	var vpCmd, inCmd tea.Cmd
-	m.viewport, vpCmd = m.viewport.Update(msg)
+	// Keystrokes belong to the input box. The viewport's default keymap binds
+	// plain letters (j/k/d/u/f/b/space) to scrolling, so forwarding typed keys
+	// here made the conversation jump up and down while typing. Scrolling by key
+	// is handled explicitly above (PgUp/PgDn) and by the mouse-wheel branch.
+	if _, isKey := msg.(tea.KeyMsg); !isKey {
+		m.viewport, vpCmd = m.viewport.Update(msg)
+	}
 	m.input, inCmd = m.input.Update(msg)
 	cmds = append(cmds, vpCmd, inCmd)
 	m.syncInputHeight()
@@ -1114,7 +1139,7 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 			m.appendHistory(styleUserPrompt.Render("❯ /status") + "\n")
 			card := FormatStatusCard(m.workingDir, m.modelName, len(m.rules), m.sessionMetrics, m.processMgr)
 			m.appendHistory(card + "\n\n")
-			m.appendHistory(FormatRuntimeCard(m.maxTurns, m.commandTimeout, m.thinkLevel, m.allowCommands, m.permissionMode, m.activeSessionID()) + "\n\n")
+			m.appendHistory(FormatRuntimeCard(m.runtimeSettings(), m.activeSessionID()) + "\n\n")
 			if summary := m.runner.agents.Summary(); summary.Total > 0 {
 				m.appendHistory(FormatCard("Child Agents", strings.Split(m.runner.agents.Status(""), "\n"), 74) + "\n\n")
 			}
@@ -1256,6 +1281,7 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 		ThinkLevel:         m.thinkLevel,
 		AllowCommands:      m.allowCommands,
 		CommandsConfigured: true,
+		Sandbox:            m.sandbox,
 		PermissionMode:     m.permissionMode,
 		InitialMessages:    priorMessages,
 		StreamTokens:       true,
@@ -1544,7 +1570,12 @@ func (m *teaModel) View() string {
 	sb.WriteString(styleMuted.Render(strings.Repeat("─", m.frameWidth())) + "\n")
 
 	// 2. Viewport (Conversation & Tool Call History)
-	sb.WriteString(m.viewport.View() + "\n")
+	// The changes column sits beside it on wide terminals.
+	conversation := m.viewport.View()
+	if m.showChangesColumn() {
+		conversation = lipgloss.JoinHorizontal(lipgloss.Top, conversation, m.changes.Render(changesColumnWidth, m.viewport.Height))
+	}
+	sb.WriteString(conversation + "\n")
 
 	// 3. Bottom Input Box with Rounded Border
 	var borderCol lipgloss.Color = tuiColorBorder

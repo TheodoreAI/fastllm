@@ -4,8 +4,6 @@ import (
 	"context"
 	"os/exec"
 	"runtime"
-	"strings"
-	"sync"
 	"time"
 )
 
@@ -31,14 +29,6 @@ type localScope struct {
 
 // Close releases nothing: local processes are owned by the scope lifetime.
 func (*localScope) Close(context.Context) error { return nil }
-
-type localProcess struct {
-	mu     sync.Mutex
-	state  ProcessState
-	output *outputBuffer
-	done   chan struct{}
-	cancel context.CancelFunc
-}
 
 func (l *localScope) Start(ctx context.Context, launch Launch) (Process, error) {
 	if err := ctx.Err(); err != nil {
@@ -78,7 +68,7 @@ func (l *localScope) Start(ctx context.Context, launch Launch) (Process, error) 
 		cleanup()
 		return nil, err
 	}
-	p := &localProcess{
+	p := &managedProcess{
 		state:  ProcessState{ID: launch.ID, PID: cmd.Process.Pid, StartedAt: time.Now()},
 		output: buffer,
 		done:   make(chan struct{}),
@@ -87,51 +77,14 @@ func (l *localScope) Start(ctx context.Context, launch Launch) (Process, error) 
 	go func() {
 		err := cmd.Wait()
 		cleanup()
-		state := p.state
+		state := p.Snapshot()
 		state.Exited = true
 		state.ExitCode = cmd.ProcessState.ExitCode()
-		state.Reason = "exit"
-		if processCtx.Err() == context.DeadlineExceeded {
-			state.Reason = "timeout"
-		} else if processCtx.Err() != nil {
-			state.Reason = "canceled"
-		} else if err != nil && state.ExitCode == 0 {
+		state.Reason = exitReason(processCtx)
+		if state.Reason == "exit" && err != nil && state.ExitCode == 0 {
 			state.ExitCode = 1
 		}
-		p.mu.Lock()
-		p.state = state
-		p.mu.Unlock()
-		cancel()
-		buffer.finish()
-		close(p.done)
+		p.exited(state)
 	}()
 	return p, nil
 }
-
-func (p *localProcess) Snapshot() ProcessState { p.mu.Lock(); defer p.mu.Unlock(); return p.state }
-func (p *localProcess) ReadOutput(ctx context.Context, cursor uint64) (Output, error) {
-	return p.output.read(ctx, cursor)
-}
-func (p *localProcess) Wait(ctx context.Context) (Result, error) {
-	select {
-	case <-p.done:
-	case <-ctx.Done():
-		return Result{}, ctx.Err()
-	}
-	out, _ := p.output.read(context.Background(), 0)
-	r := Result{ProcessState: p.Snapshot(), Truncated: out.Truncated}
-	var stdout, stderr, combined strings.Builder
-	for _, chunk := range out.Chunks {
-		combined.WriteString(chunk.Data)
-		if chunk.Stream == "stdout" {
-			stdout.WriteString(chunk.Data)
-		} else {
-			stderr.WriteString(chunk.Data)
-		}
-	}
-	r.Stdout = stdout.String()
-	r.Stderr = stderr.String()
-	r.Output = combined.String()
-	return r, nil
-}
-func (p *localProcess) Stop(ctx context.Context) error { p.cancel(); _, err := p.Wait(ctx); return err }

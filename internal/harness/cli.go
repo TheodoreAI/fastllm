@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"fastllm/internal/config"
+	"fastllm/internal/execution"
 	"fastllm/internal/llm"
 )
 
@@ -41,6 +42,10 @@ func RunCLI(args []string) int {
 	systemFlag := fs.String("system", "", "Custom system prompt override")
 	thinkFlag := fs.String("think", "", "Reasoning effort level (e.g. low, medium, high)")
 	noCmdsFlag := fs.Bool("no-commands", false, "Disable the run_command tool")
+	sandboxFlag := fs.Bool("sandbox", false, "Run commands isolated from the rest of this machine, with no network (Windows only for now)")
+	revokeSandboxFlag := fs.Bool("revoke-sandbox", false, "Remove every permission the sandbox was granted and delete its identity, then exit")
+	revokeSetupSID := fs.String(revokeSetupFlag, "", "Internal: the elevated half of -revoke-sandbox")
+	setupReport := fs.String(reportFlag, "", "Internal: where the elevated half reports its result")
 	jsonFlag := fs.Bool("json", false, "Output only the final RunResult JSON")
 	quietFlag := fs.Bool("quiet", false, "Suppress turn-by-turn progress output")
 	obsFlag := fs.Bool("on-observations", false, "Archive large tool output and send the model an evidence receipt or packed handle instead of the full text")
@@ -49,6 +54,12 @@ func RunCLI(args []string) int {
 
 	if err := fs.Parse(args); err != nil {
 		return 1
+	}
+	switch {
+	case *revokeSetupSID != "":
+		return runElevatedSetupStep(*revokeSetupSID, *setupReport, execution.RevokeIsolationSetup)
+	case *revokeSandboxFlag:
+		return runSandboxRevoke()
 	}
 
 	task := strings.TrimSpace(*taskFlag)
@@ -168,6 +179,7 @@ func RunCLI(args []string) int {
 		SystemPrompt:   *systemFlag,
 		MaxTurns:       *maxTurnsFlag,
 		AllowCommands:  !*noCmdsFlag,
+		Sandbox:        *sandboxFlag,
 		CommandTimeout: time.Duration(*timeoutFlag) * time.Second,
 		ThinkLevel:     *thinkFlag,
 		ResumeSession:  strings.TrimSpace(*resumeFlag),
@@ -205,6 +217,7 @@ func RunCLI(args []string) int {
 			FormatKV("model", model, 10),
 			FormatKV("endpoint", baseURL, 10),
 			FormatKV("commands", cmdStr, 10),
+			FormatKV("sandbox", sandboxLabel(*sandboxFlag), 10),
 			"",
 		}
 		fmt.Println(FormatCard("fastllm "+SymDot+" autonomous agent task", lines, 74))
