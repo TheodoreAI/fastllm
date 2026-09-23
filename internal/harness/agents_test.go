@@ -49,7 +49,7 @@ func TestAgentManagerReturnsStructuredResult(t *testing.T) {
 	runner := NewRunner(client, t.TempDir(), "test-model")
 	id, err := runner.agents.Spawn(RunRequest{
 		WorkingDir: runner.DefaultWorkingDir, Model: "test-model", AllowCommands: false,
-		PermissionMode: PermissionReadOnly,
+		PermissionMode: PermissionPlan,
 	}, "inspect the project", "", "", 2)
 	if err != nil {
 		t.Fatal(err)
@@ -92,7 +92,7 @@ func TestAgentStatusWaitsForCompletionInsteadOfPolling(t *testing.T) {
 	}}
 	runner := NewRunner(client, t.TempDir(), "test-model")
 	id, err := runner.agents.Spawn(RunRequest{
-		WorkingDir: runner.DefaultWorkingDir, Model: "test-model", PermissionMode: PermissionReadOnly,
+		WorkingDir: runner.DefaultWorkingDir, Model: "test-model", PermissionMode: PermissionPlan,
 	}, "wait for release", "", "", 2)
 	if err != nil {
 		t.Fatal(err)
@@ -130,7 +130,7 @@ func TestAgentStatusToolWaitsByDefault(t *testing.T) {
 		}
 	}}
 	runner := NewRunner(client, t.TempDir(), "test-model")
-	parent := RunRequest{WorkingDir: runner.DefaultWorkingDir, Model: "test-model", PermissionMode: PermissionReadOnly}
+	parent := RunRequest{WorkingDir: runner.DefaultWorkingDir, Model: "test-model", PermissionMode: PermissionPlan}
 	id, err := runner.agents.Spawn(parent, "wait through tool", "", "", 2)
 	if err != nil {
 		t.Fatal(err)
@@ -163,7 +163,7 @@ func TestAgentStatusWaitHonorsContextCancellation(t *testing.T) {
 	}}
 	runner := NewRunner(client, t.TempDir(), "test-model")
 	id, err := runner.agents.Spawn(RunRequest{
-		WorkingDir: runner.DefaultWorkingDir, Model: "test-model", PermissionMode: PermissionReadOnly,
+		WorkingDir: runner.DefaultWorkingDir, Model: "test-model", PermissionMode: PermissionPlan,
 	}, "stay active", "", "", 2)
 	if err != nil {
 		t.Fatal(err)
@@ -190,7 +190,7 @@ func TestRunnerCloseCancelsAndJoinsChildren(t *testing.T) {
 		return llm.Message{}, ctx.Err()
 	}}
 	runner := NewRunner(client, t.TempDir(), "test-model")
-	parent := RunRequest{WorkingDir: runner.DefaultWorkingDir, Model: "test-model", PermissionMode: PermissionReadOnly}
+	parent := RunRequest{WorkingDir: runner.DefaultWorkingDir, Model: "test-model", PermissionMode: PermissionPlan}
 	if _, err := runner.agents.Spawn(parent, "wait until owner closes", "", "", 2); err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +218,7 @@ func TestAgentManagerEnforcesConcurrencyAndWorkspace(t *testing.T) {
 	}}
 	root := t.TempDir()
 	runner := NewRunner(client, root, "test-model")
-	parent := RunRequest{WorkingDir: root, Model: "test-model", PermissionMode: PermissionAuto}
+	parent := RunRequest{WorkingDir: root, Model: "test-model", PermissionMode: PermissionFull}
 	if _, err := runner.agents.Spawn(parent, "escape", "..", "", 1); err == nil || !strings.Contains(err.Error(), "must stay within") {
 		t.Fatalf("expected workspace escape rejection, got %v", err)
 	}
@@ -389,16 +389,17 @@ func TestSpawnAgent_AttenuatedCapabilities(t *testing.T) {
 func TestSpawnAgent_NetworkPolicy_Confinement(t *testing.T) {
 	runner := NewRunner(nil, t.TempDir(), "test-model")
 	req := RunRequest{
-		WorkingDir:    t.TempDir(),
-		NetworkPolicy: "none",
-		Capabilities:  []string{"read", "write"},
+		WorkingDir:     t.TempDir(),
+		PermissionMode: PermissionFull,
+		NetworkPolicy:  "none",
+		Capabilities:   []string{"read", "write"},
 	}
 
 	resSearch := runner.executeTool(toolExecutionContext{
 		ctx:     context.Background(),
 		request: req,
 	}, "web_search", `{"query":"secret"}`)
-	if !strings.Contains(resSearch.output, "Network access is denied") {
+	if !strings.Contains(resSearch.output, "denied") {
 		t.Fatalf("expected network denial for web_search, got: %q", resSearch.output)
 	}
 
@@ -406,7 +407,7 @@ func TestSpawnAgent_NetworkPolicy_Confinement(t *testing.T) {
 		ctx:     context.Background(),
 		request: req,
 	}, "web_fetch", `{"url":"https://example.com"}`)
-	if !strings.Contains(resFetch.output, "Network access is denied") {
+	if !strings.Contains(resFetch.output, "denied") {
 		t.Fatalf("expected network denial for web_fetch, got: %q", resFetch.output)
 	}
 }
@@ -436,4 +437,3 @@ func TestExecuteAgentTool_SpawnWithCapabilities(t *testing.T) {
 		t.Fatalf("unexpected network policy: %q", record.NetworkPolicy)
 	}
 }
-

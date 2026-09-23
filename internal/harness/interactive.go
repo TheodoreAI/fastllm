@@ -87,7 +87,11 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 		cmdTimeout = 60 * time.Second
 	}
 	thinkLevel := initialReq.ThinkLevel
-	permissionMode := PermissionAsk
+	// A terminal session can ask, so it starts in agent mode unless -mode chose.
+	permissionMode := PermissionAgent
+	if initialReq.PermissionMode != "" {
+		permissionMode = NormalizeMode(initialReq.PermissionMode)
+	}
 	expandedTools := false
 	sandbox := initialReq.Sandbox
 	runtimeSettings := func() InteractiveRuntime {
@@ -217,10 +221,7 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 			cmdTimeout = 60 * time.Second
 		}
 		thinkLevel, allowCmds = loaded.Runtime.ThinkLevel, loaded.Runtime.AllowCommands
-		permissionMode = loaded.Runtime.PermissionMode
-		if permissionMode == "" {
-			permissionMode = PermissionAsk
-		}
+		permissionMode = loadedPermissionMode(loaded.Runtime.PermissionMode)
 		expandedTools = loaded.Runtime.ExpandedTools
 		sandbox = loaded.Runtime.Sandbox
 		permissions.SetMode(permissionMode)
@@ -275,6 +276,9 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 	}
 
 	var shellMode bool
+	// queuedLine is a turn the user already chose, such as carrying out an
+	// approved plan; it runs instead of reading the next prompt.
+	var queuedLine string
 
 	for {
 		// Rebuilt every prompt so it reflects the turn that just finished.
@@ -296,7 +300,13 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 		if shellMode {
 			prompt = status + FormatShellPrompt(absWorkingDir)
 		}
-		rawLine, readErr := input.ReadLine(prompt)
+		var rawLine string
+		var readErr error
+		if queuedLine != "" {
+			rawLine, queuedLine = queuedLine, ""
+		} else {
+			rawLine, readErr = input.ReadLine(prompt)
+		}
 		if readErr != nil {
 			break
 		}
@@ -851,7 +861,7 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 			}
 		}()
 
-		r.runInteractiveTurn(
+		plan := r.runInteractiveTurn(
 			ctx,
 			model,
 			tools,
@@ -876,6 +886,17 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 		saveSession()
 		cancel()
 		signal.Stop(sigChan)
+
+		// Approval is the user's act, made here, outside the model's turn (I1).
+		if plan != "" {
+			if mode := askPlanApproval(input); mode != "" {
+				permissionMode = mode
+				permissions.SetMode(mode)
+				tools = interactiveTools(allowCmds, permissionMode, r.EnableObservations)
+				fmt.Println(ColorGreen(fmt.Sprintf("  %s Switched to %s mode.", SymCheck, mode.Label())))
+				queuedLine = implementPlanTask(plan)
+			}
+		}
 	}
 
 	if activeSession != nil {
@@ -906,13 +927,20 @@ func (r *Runner) runInteractiveTurn(
 	observations *ObservationManager,
 	observationStore *ObservationStore,
 	compactionCfg CompactionConfig,
-) {
+) (proposedPlan string) {
 	owner := r.executions
 	if owner == nil {
 		owner = execution.NewManager()
 		defer owner.Close(context.Background())
 	}
-	opts, err := sandboxOptions(owner, execution.Options{Workspace: absWorkingDir, Policy: executionPolicy(RunRequest{PermissionMode: permissions.Mode}, allowCmds), Timeout: cmdTimeout, MaxOutputBytes: 64 * 1024}, sandbox)
+	// The mode is captured once for the whole turn (I6).
+	turnReq := RunRequest{
+		WorkingDir: absWorkingDir, Model: model, MaxTurns: maxTurns,
+		AllowCommands: allowCmds, CommandsConfigured: true, Sandbox: sandbox, CommandTimeout: cmdTimeout,
+		ThinkLevel: thinkLevel, PermissionMode: NormalizeMode(permissions.Mode),
+		Authorize: permissions.Authorize,
+	}
+	opts, err := sandboxOptions(owner, execution.Options{Workspace: absWorkingDir, Policy: executionPolicy(turnReq, allowCmds), Timeout: cmdTimeout, MaxOutputBytes: 64 * 1024}, sandbox)
 	if err != nil {
 		fmt.Println("Execution setup failed:", err)
 		return
@@ -929,7 +957,12 @@ func (r *Runner) runInteractiveTurn(
 		// The caller restores the base system prompt after every turn.
 		(*sessionMessages)[0].Content += note
 	}
-	fileReader = files.New(absWorkingDir, permissions.Mode != PermissionReadOnly)
+	turnReq.WorkingDir = absWorkingDir
+	if note := modePrompt(turnReq); note != "" && len(*sessionMessages) > 0 {
+		// The caller restores the base system prompt after every turn.
+		(*sessionMessages)[0].Content += note
+	}
+	fileReader = files.New(absWorkingDir, policyForRequest(turnReq).write)
 	processMgr.KillAll()
 	processMgr.mu.Lock()
 	processMgr.scope = scope
@@ -1032,18 +1065,6 @@ func (r *Runner) runInteractiveTurn(
 			}
 			call.Function.Arguments = normalizedArgs
 			fmt.Println(FormatToolCall(call.Function.Name, summarizeArgs(call.Function.Arguments)))
-			if requiresPermission(call.Function.Name) && !permissions.Authorize(call.Function.Name, summarizeArgs(call.Function.Arguments)) {
-				toolResult := "Permission denied by user. Do not retry this action unless the user explicitly asks."
-				fmt.Println(FormatToolResult(call.Function.Name, toolResult, previewLines))
-				*sessionMessages = append(*sessionMessages, llm.Message{Role: "tool", Content: toolResult, ToolCallID: call.ID})
-				continue
-			}
-			if followUp := followUpFromArguments(call.Function.Arguments); followUp != nil && !permissions.Authorize("run_command", "command="+followUp.Command) {
-				toolResult := "Permission denied for the fused follow-up command. The file mutation was not attempted."
-				fmt.Println(FormatToolResult(call.Function.Name, toolResult, previewLines))
-				*sessionMessages = append(*sessionMessages, llm.Message{Role: "tool", Content: toolResult, ToolCallID: call.ID})
-				continue
-			}
 
 			// A tool can block for a long time (a big search, a build, a network
 			// fetch). Animate for the whole execution so the session never looks
@@ -1051,14 +1072,9 @@ func (r *Runner) runInteractiveTurn(
 			running := NewSpinner("Running " + call.Function.Name)
 			running.Start()
 			toolStart := time.Now()
-			parent := RunRequest{
-				WorkingDir: absWorkingDir, Model: model, MaxTurns: maxTurns,
-				AllowCommands: allowCmds, Sandbox: sandbox, CommandTimeout: cmdTimeout,
-				ThinkLevel: thinkLevel, PermissionMode: permissions.Mode,
-			}
 			execution := r.executeTool(toolExecutionContext{
 				ctx:               ctx,
-				request:           parent,
+				request:           turnReq,
 				fileReader:        fileReader,
 				workingDir:        absWorkingDir,
 				allowCommands:     allowCmds,
@@ -1074,6 +1090,9 @@ func (r *Runner) runInteractiveTurn(
 			if execution.taskFinished {
 				finishSummary = execution.finalResponse
 				taskFinished = true
+			}
+			if execution.proposedPlan != "" {
+				proposedPlan = execution.proposedPlan
 			}
 
 			running.Stop()
@@ -1105,6 +1124,7 @@ func (r *Runner) runInteractiveTurn(
 	}
 
 	fmt.Println(ColorYellow(fmt.Sprintf("\n%s Max turns limit reached for this prompt.", SymCross)))
+	return ""
 }
 
 func parseDirectoryChange(command string) (string, bool) {
@@ -1142,32 +1162,20 @@ func followUpFromArguments(raw string) *FollowUpCommand {
 	return arguments.ThenRun
 }
 
+// interactiveTools is the line-mode tool list; it is the same monitor view
+// Runner.Run offers, so the two terminal modes cannot drift apart.
 func interactiveTools(allowCommands bool, permissionMode PermissionMode, enableObservations bool) []llm.Tool {
-	tools := []llm.Tool{
-		readFileTool,
-		listFilesTool,
-		searchFilesTool,
-		globFilesTool,
-		webSearchTool,
-		webFetchTool,
-		updatePlanTool,
-		finishTaskTool,
-		agentStatusTool,
-		sendAgentMessageTool,
+	req := RunRequest{PermissionMode: NormalizeMode(permissionMode), AllowCommands: allowCommands, CommandsConfigured: true}
+	return toolsForRequest(req, toolAvailability{observations: enableObservations, delegation: true})
+}
+
+// loadedPermissionMode restores a saved session's mode. Legacy names map to
+// the new modes; anything unreadable fails closed to plan.
+func loadedPermissionMode(stored PermissionMode) PermissionMode {
+	if stored == "" {
+		return PermissionAgent
 	}
-	if enableObservations {
-		tools = append(tools, readObservationTool)
-	}
-	if permissionMode != PermissionReadOnly {
-		tools = append(tools, writeFileTool, editFileTool, patchFileTool, spawnAgentTool, cancelAgentTool)
-	}
-	if allowCommands {
-		if permissionMode != PermissionReadOnly {
-			tools = append(tools, runCommandTool, killProcessTool)
-		}
-		tools = append(tools, processStatusTool)
-	}
-	return tools
+	return NormalizeMode(stored)
 }
 
 func activeSessionID(session *InteractiveSession) string {

@@ -124,6 +124,47 @@ or name contains `image`. The endpoint must implement OpenAI's
 and validates the response, then writes the image under `generated-images/` in
 the active workspace; base64 is never added to session history.
 
+## Permission modes
+
+The harness treats the model as an untrusted process whose only system calls
+are tool calls. Every call is decided by one reference monitor
+(`internal/harness/monitor.go`). The tool list the model is offered, dispatch,
+the subprocess broker, and the file writer are all views of that one decision,
+so a prompt shapes behaviour but never grants anything.
+
+| mode | reads | web | file edits | commands / processes | child agents |
+|------|-------|-----|------------|----------------------|--------------|
+| **plan** | yes | no | no | no | no |
+| **agent** | yes | yes | ask | ask | ask |
+| **edit** | yes | yes | yes | no | no |
+| **full** | yes | yes | yes | yes | yes |
+
+- **plan** explores read-only with no network, since a fetched URL can carry
+  workspace contents out. It ends with `submit_plan`. The TUI then offers
+  **Approve → Agent / Edit / Full-Access** or **Keep planning**. Approving
+  switches the mode and starts a turn that carries out the plan. The model
+  itself has no way to change the mode.
+- **agent** asks before every mutating call: once, for the session, or deny.
+  A child agent of an agent-mode run cannot ask, so it runs as plan.
+- **edit** applies file edits without asking but never starts a process. This
+  includes fused `then_run` follow-ups, and a refused `then_run` also blocks its
+  edit.
+- **full** allows everything the run's capabilities permit, without asking.
+
+In the TUI, **Shift+Tab** cycles plan → agent → edit → full. The header badge
+shows the current mode. `/set permissions <mode>` works in both terminal modes.
+Neither can change the mode while a turn is running.
+
+Fail-closed defaults:
+
+- An empty or unknown mode is **plan**.
+- A one-shot `-task` run and a `POST /api/harness/run` without
+  `permission_mode` therefore cannot change anything. Pass `-mode edit` or
+  `-mode full` (or `"permission_mode"`) for unattended changes.
+- A headless `agent` run has nobody to ask, so each of its asks is denied.
+- The old names `ask`, `read-only`, and `auto` are accepted as agent, plan,
+  and full.
+
 ## Agent permissions
 
 `spawn_agent` accepts `capabilities` containing `read`, `write`, `network`,
@@ -148,7 +189,7 @@ stored on disk. Direct user shell commands (`!cmd`, `$ cmd`, `/shell`) retain
 the user's authority.
 
 Both terminal UIs support `/permissions [list]`,
-`/permissions revoke <grant-id|tool>`, and `/permissions clear`. In `ask` mode,
+`/permissions revoke <grant-id|tool>`, and `/permissions clear`. In `agent` mode,
 session approvals are tracked with IDs and workspace scope. Revocation makes
 subsequent calls prompt again; it does not undo work or stop already running
 commands. Directory, session, and permission-mode changes clear grants. Grants

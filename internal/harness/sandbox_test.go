@@ -48,7 +48,7 @@ func TestTeaSandboxSettingValidatesAndPersists(t *testing.T) {
 	store := &SessionStore{Dir: t.TempDir()}
 	m := &teaModel{
 		workingDir: t.TempDir(), modelName: "test-model", sessionStore: store,
-		maxTurns: 20, commandTimeout: time.Minute, allowCommands: true, permissionMode: PermissionAsk,
+		maxTurns: 20, commandTimeout: time.Minute, allowCommands: true, permissionMode: PermissionAgent,
 	}
 	if err := m.setRuntimeValue("sandbox", "maybe"); err == nil {
 		t.Fatal("invalid sandbox value accepted")

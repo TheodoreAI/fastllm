@@ -124,6 +124,9 @@ func interactiveCompletions(line string, cursor int, cwd string, models, session
 	if len(fields) > 0 && (fields[0] == "/resume" || fields[0] == "/delete-session" || fields[0] == "/session") {
 		return filterCompletionValues(sessions, lastField(prefix))
 	}
+	if len(fields) >= 2 && fields[0] == "/set" && (fields[1] == "permissions" || fields[1] == "permission") && (len(fields) > 2 || strings.HasSuffix(prefix, " ")) {
+		return filterCompletionValues([]string{"plan", "agent", "edit", "full"}, lastField(prefix))
+	}
 	if len(fields) > 0 && (fields[0] == "/permissions" || fields[0] == "/permission") {
 		return filterCompletionValues([]string{"list", "revoke", "clear"}, lastField(prefix))
 	}

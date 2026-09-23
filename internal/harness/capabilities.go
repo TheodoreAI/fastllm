@@ -6,24 +6,6 @@ import (
 	"strings"
 )
 
-type capabilityPolicy struct {
-	write, network, commands, delegate bool
-}
-
-func policyForRequest(req RunRequest) capabilityPolicy {
-	readOnly := req.PermissionMode == PermissionReadOnly || (req.AgentDepth > 0 && req.PermissionMode == PermissionAsk)
-	networkPolicy, err := normalizeNetworkPolicy(req.NetworkPolicy)
-	p := capabilityPolicy{
-		write:    !readOnly && allowsCapability(req.Capabilities, "write"),
-		network:  err == nil && allowsCapability(req.Capabilities, "network") && networkPolicy != "none",
-		delegate: !readOnly && allowsCapability(req.Capabilities, "delegate"),
-	}
-	// Shells are not OS-sandboxed. They can both write files and access the
-	// network, so granting them under either restriction would bypass it.
-	p.commands = p.write && p.network && allowsCapability(req.Capabilities, "commands")
-	return p
-}
-
 func canonicalCapability(value string) string {
 	switch value = strings.ToLower(strings.TrimSpace(value)); value {
 	case "filesystem_write":

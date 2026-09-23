@@ -472,7 +472,6 @@ func formatTerminalBoxLine(content string, contentWidth int) string {
 	return ColorGray(SymVLine) + " " + clamped + strings.Repeat(" ", padding) + " " + ColorGray(SymVLine)
 }
 
-
 // FormatMarkdown renders Markdown structures with a default width of 76 characters.
 func FormatMarkdown(markdown string) string {
 	return FormatMarkdownWidth(markdown, 76)
@@ -693,7 +692,7 @@ func FormatHelp() string {
 		{"/set think <level>", "Set off, low, medium, or high reasoning"},
 		{"/set commands <on|off>", "Enable or disable command/process tools"},
 		{"/set sandbox <on|off>", "Run commands isolated from this machine, with no network"},
-		{"/set permissions <mode>", "Set ask, read-only, or auto tool permissions"},
+		{"/set permissions <mode>", "Set plan, agent, edit, or full (Shift+Tab cycles in the TUI)"},
 		{"/set output <mode>", "Set compact or expanded tool results"},
 		{"/permissions [list]", "List active session capability grants"},
 		{"/permissions revoke <id>", "Revoke a capability grant by ID or tool name"},
@@ -755,24 +754,44 @@ func FormatRuntimeCard(settings InteractiveRuntime, sessionID string) string {
 		FormatKV("thinking", think, 12),
 		FormatKV("commands", commands, 12),
 		FormatKV("sandbox", sandboxLabel(settings.Sandbox), 12),
-		FormatKV("permissions", string(settings.PermissionMode), 12),
+		FormatKV("permissions", colorForMode(settings.PermissionMode)(settings.PermissionMode.Label()), 12),
 		"",
 	}
 	return FormatCard("Runtime Settings", lines, 74)
 }
 
 func FormatPermissionPrompt(toolName, summary string) string {
-	runes := []rune(summary)
-	if len(runes) > 52 {
-		summary = string(runes[:49]) + "..."
+	// The request is shown whole, wrapped rather than truncated: an approval is
+	// only informed if every part of what it permits is visible.
+	lines := []string{"", FormatKV("tool", toolName, 10)}
+	for i, chunk := range wrapRunes(summary, 58) {
+		if i == 0 {
+			lines = append(lines, FormatKV("request", chunk, 10))
+		} else {
+			lines = append(lines, FormatKV("", chunk, 10))
+		}
 	}
-	lines := []string{
-		"",
-		FormatKV("tool", toolName, 10),
-		FormatKV("request", summary, 10),
-		"",
-	}
+	lines = append(lines, "")
 	return FormatCard("Permission Required", lines, 74)
+}
+
+// wrapRunes splits s into rows of at most width runes, breaking on existing
+// newlines as well.
+func wrapRunes(s string, width int) []string {
+	var rows []string
+	for _, line := range strings.Split(s, "\n") {
+		runes := []rune(line)
+		if len(runes) == 0 {
+			rows = append(rows, "")
+			continue
+		}
+		for len(runes) > width {
+			rows = append(rows, string(runes[:width]))
+			runes = runes[width:]
+		}
+		rows = append(rows, string(runes))
+	}
+	return rows
 }
 
 func FormatSessionsTable(sessions []InteractiveSession, activeID string) string {
