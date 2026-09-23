@@ -111,6 +111,9 @@ func (m *teaModel) closeSession() {
 		m.gitWatchStop()
 		m.gitWatchStop = nil
 	}
+	if m.processMgr != nil {
+		m.processMgr.KillAll()
+	}
 	if m.activeSession == nil {
 		return
 	}

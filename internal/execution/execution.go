@@ -154,6 +154,15 @@ func (m *Manager) OpenUser(ctx context.Context, workspace string) (*Scope, error
 	return m.open(ctx, Options{Workspace: workspace, Policy: LocalPolicy()}, true)
 }
 
+// OpenUserWithOptions is reserved for direct human shell actions with custom options,
+// such as extended timeouts or enlarged output buffers for background dev servers.
+func (m *Manager) OpenUserWithOptions(ctx context.Context, opts Options) (*Scope, error) {
+	if opts.Policy == (Policy{}) {
+		opts.Policy = LocalPolicy()
+	}
+	return m.open(ctx, opts, true)
+}
+
 // backendLocked resolves a backend without ever widening the request.
 func (m *Manager) backendLocked(opts Options) (Backend, error) {
 	name := opts.Backend

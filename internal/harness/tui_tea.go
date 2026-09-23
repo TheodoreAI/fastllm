@@ -2,13 +2,16 @@ package harness
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"fastllm/internal/config"
+	"fastllm/internal/execution"
 	"fastllm/internal/gitrepo"
 	"fastllm/internal/llm"
 	"fastllm/internal/webtools"
@@ -147,6 +150,7 @@ type teaShellDoneMsg struct {
 	Canceled     bool
 	Duration     time.Duration
 	ClearScreen  bool
+	ProcID       string
 }
 type teaGitWatchMsg struct{}
 type teaGitRefreshMsg struct {
@@ -193,6 +197,9 @@ type teaModel struct {
 	cancelTurn        context.CancelFunc
 	cancelShell       context.CancelFunc
 	shellExecuting    bool
+	currentShellProc  *BackgroundProcess
+	currentShellExec  execution.Process
+	shellBackgrounded bool
 	eventChan         chan Event
 	permissionChan    chan teaPermissionRequestMsg
 	statusNotice      string
@@ -338,6 +345,7 @@ func newTeaModel(runner *Runner, req RunRequest) (*teaModel, error) {
 	m.appendHistory(m.formatWelcome())
 	m.appendSessionTranscript()
 	m.initGitWatcher()
+	m.updatePromptAndPlaceholder()
 
 	return m, nil
 }
@@ -683,28 +691,39 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, m.clearStatusAfter(3*time.Second))
 				return m, tea.Batch(cmds...)
 			}
-			if m.shellExecuting && m.cancelShell != nil {
+			if m.shellExecuting && (m.cancelShell != nil || m.currentShellExec != nil) {
 				m.cancelActiveOperation()
 				cmds = append(cmds, m.clearStatusAfter(3*time.Second))
 				return m, tea.Batch(cmds...)
 			}
-			if m.gitWatchStop != nil {
-				m.gitWatchStop()
-				m.gitWatchStop = nil
-			}
+			m.closeSession()
 			return m, tea.Quit
+
+		case tea.KeyCtrlB:
+			if m.shellExecuting && m.currentShellProc != nil {
+				bp := m.currentShellProc
+				m.shellBackgrounded = true
+				m.shellExecuting = false
+				m.cancelShell = nil
+				m.currentShellExec = nil
+				m.currentShellProc = nil
+				notice := fmt.Sprintf("✓ Sent %q to background (%s · PID: %d)\n  Inspect logs: /logs %s (or logs %s)  •  Stop: /kill %s\n\n",
+					bp.Command, bp.ID, bp.PID, bp.ID, bp.ID, bp.ID)
+				m.appendHistory(styleStatusNotice.Render(notice))
+				m.statusNotice = fmt.Sprintf("Sent %s to background", bp.ID)
+				return m, m.clearStatusAfter(3 * time.Second)
+			}
 
 		case tea.KeyTab:
 			// Toggle between Agent Mode and Shell Mode
 			if m.mode == modeAgent {
 				m.mode = modeShell
-				m.input.Placeholder = "Enter shell command ($ go test, !git status, ls)..."
 				m.statusNotice = "Engaged Shell Mode."
 			} else {
 				m.mode = modeAgent
-				m.input.Placeholder = "Ask a question, enter a task, or type /help..."
 				m.statusNotice = "Returned to chat input."
 			}
+			m.updatePromptAndPlaceholder()
 			cmds = append(cmds, m.clearStatusAfter(2*time.Second))
 			return m, tea.Batch(cmds...)
 
@@ -1014,6 +1033,17 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case teaShellDoneMsg:
 		if msg.ShellCommand {
+			if m.shellBackgrounded && msg.ProcID != "" {
+				m.currentShellProc = nil
+				m.currentShellExec = nil
+				m.shellBackgrounded = false
+				return m, nil
+			}
+			if msg.ProcID != "" && m.processMgr != nil {
+				m.processMgr.Remove(msg.ProcID)
+			}
+			m.currentShellProc = nil
+			m.currentShellExec = nil
 			m.shellExecuting = false
 			m.cancelShell = nil
 			exitCode := 0
@@ -1192,10 +1222,20 @@ func (m *teaModel) cancelActiveOperation() {
 	if m.cancelTurn != nil {
 		m.cancelTurn()
 	}
-	canceledShell := m.cancelShell != nil
+	canceledShell := m.shellExecuting || m.cancelShell != nil
 	if m.cancelShell != nil {
 		m.cancelShell()
+		m.cancelShell = nil
 	}
+	if m.currentShellExec != nil {
+		_ = m.currentShellExec.Stop(context.Background())
+		m.currentShellExec = nil
+	}
+	if m.currentShellProc != nil && m.processMgr != nil {
+		m.processMgr.Remove(m.currentShellProc.ID)
+		m.currentShellProc = nil
+	}
+	m.shellExecuting = false
 	switch {
 	case canceledAgent && canceledShell:
 		m.statusNotice = "Canceled active operations."
@@ -1207,28 +1247,121 @@ func (m *teaModel) cancelActiveOperation() {
 }
 
 func (m *teaModel) handleShellSubmit(cmdStr string) tea.Cmd {
+	if m.processMgr == nil {
+		m.processMgr = NewProcessManager()
+	}
 	if m.isExecuting || m.shellExecuting {
 		m.statusNotice = "An operation is already running — Esc cancels it."
 		return m.clearStatusAfter(3 * time.Second)
 	}
-	if cmdStr == "exit" || cmdStr == "quit" || cmdStr == "/exit" || cmdStr == "/shell" {
+	trimmed := strings.TrimSpace(cmdStr)
+	if trimmed == "exit" || trimmed == "quit" || trimmed == "/exit" || trimmed == "/shell" {
 		m.mode = modeAgent
 		m.statusNotice = "Returned to Agent Mode."
+		m.updatePromptAndPlaceholder()
 		return m.clearStatusAfter(2 * time.Second)
 	}
-	if cmdStr == "/c" || cmdStr == "/clear" || cmdStr == "clear" || cmdStr == "cls" {
+	if trimmed == "/c" || trimmed == "/clear" || trimmed == "clear" || trimmed == "cls" {
 		m.historyText.Reset()
 		m.appendHistory(m.formatWelcome())
 		m.statusNotice = "History cleared."
 		return m.clearStatusAfter(2 * time.Second)
 	}
-	if path, ok := parseDirectoryChange(cmdStr); ok {
-		if err := m.changeWorkingDirectory(path); err != nil {
-			m.appendHistory(styleDiffDel.Render(fmt.Sprintf("Cannot change directory: %v\n\n", err)))
-		} else {
-			m.appendHistory(styleStatusNotice.Render(fmt.Sprintf("Working directory changed to %s\n\n", m.workingDir)))
-		}
+	if trimmed == "ps" || trimmed == "/ps" {
+		m.appendHistory(styleUserPrompt.Render("❯ "+cmdStr) + "\n")
+		m.appendHistory(m.processMgr.FormatProcessTable() + "\n\n")
 		return nil
+	}
+	if strings.HasPrefix(trimmed, "logs ") || trimmed == "logs" || strings.HasPrefix(trimmed, "/logs ") || trimmed == "/logs" {
+		m.appendHistory(styleUserPrompt.Render("❯ "+cmdStr) + "\n")
+		return m.handleLogsCommand(cmdStr)
+	}
+	if strings.HasPrefix(trimmed, "kill ") || trimmed == "kill" || strings.HasPrefix(trimmed, "/kill ") || trimmed == "/kill" {
+		m.appendHistory(styleUserPrompt.Render("❯ "+cmdStr) + "\n")
+		return m.handleKillCommand(cmdStr)
+	}
+
+	// Direct background execution via trailing '&' or 'bg <cmd>'
+	isBackground := false
+	var bgCmd string
+	if strings.HasSuffix(trimmed, "&") {
+		isBackground = true
+		bgCmd = strings.TrimSpace(strings.TrimSuffix(trimmed, "&"))
+	} else if strings.HasPrefix(trimmed, "bg ") {
+		isBackground = true
+		bgCmd = strings.TrimSpace(strings.TrimPrefix(trimmed, "bg "))
+	} else if trimmed == "bg" {
+		m.appendHistory(styleUserPrompt.Render("❯ "+cmdStr) + "\n")
+		m.appendHistory(styleMuted.Render("Usage: bg <command> (e.g. bg npm run dev, bg yarn serve)\n\n"))
+		return nil
+	}
+
+	if isBackground {
+		m.appendHistory(styleUserPrompt.Render("❯ "+cmdStr) + "\n")
+		if bgCmd == "" {
+			m.appendHistory(styleDiffDel.Render("Error: empty background command\n\n"))
+			return nil
+		}
+		started := time.Now()
+		bp, err := m.processMgr.Start(bgCmd, m.workingDir)
+		if err != nil {
+			box := FormatTerminalBox(TerminalBoxOptions{
+				Command:     cmdStr,
+				Output:      fmt.Sprintf("Failed to start background process: %v", err),
+				Width:       m.contentWidth(),
+				ExitCode:    1,
+				Duration:    time.Since(started),
+				IsError:     true,
+				AgentCalled: false,
+			})
+			m.appendHistory(box + "\n\n")
+			return nil
+		}
+		output := fmt.Sprintf("◈ Started background process: %s (PID: %d)\n  Command: %s\n  Inspect logs: /logs %s (or logs %s)  •  Stop: /kill %s",
+			bp.ID, bp.PID, bp.Command, bp.ID, bp.ID, bp.ID)
+		box := FormatTerminalBox(TerminalBoxOptions{
+			Command:     cmdStr,
+			Output:      output,
+			Width:       m.contentWidth(),
+			ExitCode:    0,
+			Duration:    time.Since(started),
+			IsError:     false,
+			AgentCalled: false,
+		})
+		m.appendHistory(box + "\n\n")
+		m.statusNotice = fmt.Sprintf("Started %s in background", bp.ID)
+		return m.clearStatusAfter(3 * time.Second)
+	}
+
+	if path, ok := parseDirectoryChange(cmdStr); ok {
+		started := time.Now()
+		if err := m.changeWorkingDirectory(path); err != nil {
+			box := FormatTerminalBox(TerminalBoxOptions{
+				Command:     cmdStr,
+				Output:      fmt.Sprintf("Cannot change directory: %v", err),
+				Width:       m.contentWidth(),
+				ExitCode:    1,
+				Duration:    time.Since(started),
+				IsError:     true,
+				AgentCalled: false,
+			})
+			m.appendHistory(box + "\n\n")
+			return nil
+		}
+		box := FormatTerminalBox(TerminalBoxOptions{
+			Command:     cmdStr,
+			Output:      fmt.Sprintf("✓ Working directory changed to %s\n  (%d workspace rules discovered)", abbreviateHome(m.workingDir), len(m.rules)),
+			Width:       m.contentWidth(),
+			ExitCode:    0,
+			Duration:    time.Since(started),
+			IsError:     false,
+			AgentCalled: false,
+		})
+		m.appendHistory(box + "\n\n")
+		return tea.Batch(
+			m.refreshGitStatusCmd(),
+			m.clearStatusAfter(3*time.Second),
+		)
 	}
 
 	// Check for interactive terminal editor (nano, vim, less) or desktop GUI editor (notepad, code)
@@ -1284,16 +1417,34 @@ func (m *teaModel) handleShellSubmit(cmdStr string) tea.Cmd {
 		)
 	}
 
+	p, bp, err := m.processMgr.StartTracked(cmdStr, m.workingDir)
+	if err != nil {
+		started := time.Now()
+		box := FormatTerminalBox(TerminalBoxOptions{
+			Command:     cmdStr,
+			Output:      fmt.Sprintf("Failed to run command: %v", err),
+			Width:       m.contentWidth(),
+			ExitCode:    1,
+			Duration:    time.Since(started),
+			IsError:     true,
+			AgentCalled: false,
+		})
+		m.appendHistory(box + "\n\n")
+		return nil
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelShell = cancel
 	m.shellExecuting = true
+	m.currentShellProc = bp
+	m.currentShellExec = p
+	m.shellBackgrounded = false
 	started := time.Now()
 
-	root := m.workingDir
 	return func() tea.Msg {
-		result, err := runUserCommand(ctx, root, cmdStr)
-		out := result.Output
-		if result.Truncated {
+		res, err := p.Wait(ctx)
+		out := res.Output
+		if res.Truncated {
 			out = "[earlier output truncated]\n" + out
 		}
 		return teaShellDoneMsg{
@@ -1301,10 +1452,99 @@ func (m *teaModel) handleShellSubmit(cmdStr string) tea.Cmd {
 			Output:       strings.TrimRight(string(out), "\r\n"),
 			Err:          err,
 			ShellCommand: true,
-			Canceled:     ctx.Err() != nil,
+			Canceled:     ctx.Err() != nil || res.Reason == "canceled" || errors.Is(err, context.Canceled),
 			Duration:     time.Since(started),
+			ProcID:       bp.ID,
 		}
 	}
+}
+
+func (m *teaModel) handleLogsCommand(inputVal string) tea.Cmd {
+	parts := strings.Fields(inputVal)
+	if len(parts) < 2 {
+		m.appendHistory(styleMuted.Render("Usage: /logs <process_id> [max_lines] (e.g. /logs proc-1, logs 1 50)\n\n"))
+		return nil
+	}
+	targetID := parts[1]
+	maxLines := 50
+	if len(parts) >= 3 {
+		if n, err := strconv.Atoi(parts[2]); err == nil && n > 0 {
+			maxLines = n
+		}
+	}
+	bp, out, err := m.processMgr.Logs(targetID, maxLines)
+	if err != nil {
+		m.appendHistory(styleDiffDel.Render(fmt.Sprintf("Logs error: %v\n\n", err)))
+		return nil
+	}
+	if strings.TrimSpace(out) == "" {
+		out = "[no output recorded yet]"
+	}
+	status := "RUNNING"
+	if bp.Exited {
+		status = fmt.Sprintf("EXIT %d", bp.ExitCode)
+	}
+	box := FormatTerminalBox(TerminalBoxOptions{
+		Command:     fmt.Sprintf("logs %s (%s · PID: %d · %s)", bp.ID, bp.Command, bp.PID, status),
+		Output:      out,
+		Width:       m.contentWidth(),
+		ExitCode:    bp.ExitCode,
+		IsError:     bp.Exited && bp.ExitCode != 0,
+		MaxLines:    maxLines,
+		AgentCalled: false,
+	})
+	m.appendHistory(box + "\n\n")
+	return nil
+}
+
+func (m *teaModel) handleKillCommand(inputVal string) tea.Cmd {
+	parts := strings.Fields(inputVal)
+	if len(parts) < 2 {
+		m.appendHistory(styleMuted.Render("Usage: /kill <process_id|all> (e.g. /kill proc-1, /kill all)\n\n"))
+		return nil
+	}
+	target := parts[1]
+	if err := m.processMgr.Kill(target); err != nil {
+		m.appendHistory(styleDiffDel.Render(fmt.Sprintf("Kill error: %v\n\n", err)))
+		return nil
+	}
+	if target == "all" || target == "--all" || target == "-a" {
+		m.appendHistory(styleStatusNotice.Render("✓ Killed all background processes.\n\n"))
+		m.statusNotice = "Killed all background processes."
+	} else {
+		m.appendHistory(styleStatusNotice.Render(fmt.Sprintf("✓ Killed process %s\n\n", target)))
+		m.statusNotice = fmt.Sprintf("Killed process %s", target)
+	}
+	return m.clearStatusAfter(3 * time.Second)
+}
+
+func (m *teaModel) handleBgSlashCommand(inputVal string) tea.Cmd {
+	parts := strings.SplitN(inputVal, " ", 2)
+	if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
+		m.appendHistory(styleMuted.Render("Usage: /bg <command> (e.g. /bg npm run dev, /bg python -m http.server 8000)\n\n"))
+		return nil
+	}
+	cmdToRun := strings.TrimSpace(parts[1])
+	started := time.Now()
+	bp, err := m.processMgr.Start(cmdToRun, m.workingDir)
+	if err != nil {
+		m.appendHistory(styleDiffDel.Render(fmt.Sprintf("Failed to start background process: %v\n\n", err)))
+		return nil
+	}
+	output := fmt.Sprintf("◈ Started background process: %s (PID: %d)\n  Command: %s\n  Inspect logs: /logs %s (or logs %s)  •  Stop: /kill %s",
+		bp.ID, bp.PID, bp.Command, bp.ID, bp.ID, bp.ID)
+	box := FormatTerminalBox(TerminalBoxOptions{
+		Command:     inputVal,
+		Output:      output,
+		Width:       m.contentWidth(),
+		ExitCode:    0,
+		Duration:    time.Since(started),
+		IsError:     false,
+		AgentCalled: false,
+	})
+	m.appendHistory(box + "\n\n")
+	m.statusNotice = fmt.Sprintf("Started %s in background", bp.ID)
+	return m.clearStatusAfter(3 * time.Second)
 }
 
 func (m *teaModel) changeWorkingDirectory(path string) error {
@@ -1324,8 +1564,23 @@ func (m *teaModel) changeWorkingDirectory(path string) error {
 	m.skills = DiscoverWorkspaceSkills(newDir)
 	m.settings, m.configPath = settings, configPath
 	m.statusNotice = "Directory changed to " + filepath.Base(newDir)
+	m.updatePromptAndPlaceholder()
 	_ = m.saveSession()
 	return nil
+}
+
+func (m *teaModel) updatePromptAndPlaceholder() {
+	if m.mode == modeShell {
+		dirBase := filepath.Base(m.workingDir)
+		if dirBase == "" || dirBase == "." {
+			dirBase = m.workingDir
+		}
+		m.input.Prompt = dirBase + " ❯ "
+		m.input.Placeholder = fmt.Sprintf("Shell (%s) — enter command ($ go test, ls)...", abbreviateHome(m.workingDir))
+	} else {
+		m.input.Prompt = "❯ "
+		m.input.Placeholder = "Ask a question, enter a task, or type /help (Tab switches to Shell Mode)..."
+	}
 }
 
 func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
@@ -1368,7 +1623,7 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 				return m.handleShellSubmit(cmdStr)
 			}
 			m.mode = modeShell
-			m.input.Placeholder = "Enter shell command ($ go test, !git status, ls)..."
+			m.updatePromptAndPlaceholder()
 			m.statusNotice = "Engaged Shell Mode."
 			return m.clearStatusAfter(2 * time.Second)
 
@@ -1626,16 +1881,14 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 
 		case "/kill":
 			m.appendHistory(styleUserPrompt.Render("❯ "+inputVal) + "\n")
-			if len(parts) < 2 {
-				m.appendHistory(styleMuted.Render("Usage: /kill <process_id>\n\n"))
-				return nil
-			}
-			if err := m.processMgr.Kill(parts[1]); err != nil {
-				m.appendHistory(styleDiffDel.Render(fmt.Sprintf("Kill error: %v\n\n", err)))
-			} else {
-				m.appendHistory(styleStatusNotice.Render(fmt.Sprintf("Killed process %s\n\n", parts[1])))
-			}
-			return nil
+			return m.handleKillCommand(inputVal)
+
+		case "/logs":
+			m.appendHistory(styleUserPrompt.Render("❯ "+inputVal) + "\n")
+			return m.handleLogsCommand(inputVal)
+
+		case "/bg":
+			return m.handleBgSlashCommand(inputVal)
 
 		case "/copy", "/yank":
 			m.appendHistory(styleUserPrompt.Render("❯ "+inputVal) + "\n")
@@ -2469,8 +2722,20 @@ func (m *teaModel) View() string {
 	}
 	dirBadge := styleHeaderPill.Render(dirBase)
 	agentBadge := ""
-	if summary := m.runner.agents.Summary(); summary.Total > 0 {
-		agentBadge = " " + styleHeaderPill.Render(fmt.Sprintf("agents %d/%d · %s tok", summary.Pending+summary.Running, summary.Total, compactCount(summary.TotalTokens)))
+	if m.runner != nil && m.runner.agents != nil {
+		if summary := m.runner.agents.Summary(); summary.Total > 0 {
+			agentBadge = " " + styleHeaderPill.Render(fmt.Sprintf("agents %d/%d · %s tok", summary.Pending+summary.Running, summary.Total, compactCount(summary.TotalTokens)))
+		}
+	}
+	serversBadge := ""
+	if m.processMgr != nil {
+		if active := m.processMgr.ActiveCount(); active > 0 {
+			label := "server"
+			if active > 1 {
+				label = "servers"
+			}
+			serversBadge = " " + styleHeaderPill.Render(fmt.Sprintf("◈ %d %s", active, label))
+		}
 	}
 
 	var rightInfo string
@@ -2488,7 +2753,7 @@ func (m *teaModel) View() string {
 			m.latestMetrics.Duration.Seconds(), m.latestMetrics.TokensPerSecond))
 	}
 
-	headerLeft := lipgloss.JoinHorizontal(lipgloss.Center, brand, " ", modeBadge, " ", modelBadge, " ", dirBadge, agentBadge)
+	headerLeft := lipgloss.JoinHorizontal(lipgloss.Center, brand, " ", modeBadge, " ", modelBadge, serversBadge, " ", dirBadge, agentBadge)
 	leftWidth := lipgloss.Width(headerLeft)
 	rightWidth := lipgloss.Width(rightInfo)
 	gap := m.frameWidth() - leftWidth - rightWidth - 2
@@ -2543,9 +2808,12 @@ func (m *teaModel) View() string {
 		hints = "Tab: Agent  •  Enter: Run  •  ↑/↓: History  •  Ctrl+V: Paste  •  exit: Leave Shell"
 		shortHints = "Tab: Agent  •  Enter: Run  •  exit: Leave Shell"
 	}
-	if m.isExecuting || m.shellExecuting {
+	if m.isExecuting {
 		hints = "Esc: Cancel  •  Ctrl+C: Cancel"
 		shortHints = hints
+	} else if m.shellExecuting {
+		hints = "Ctrl+B: Background  •  Esc: Cancel  •  Ctrl+C: Cancel"
+		shortHints = "Ctrl+B: Bg  •  Esc: Cancel"
 	}
 	used, budget := m.contextUsage()
 	gauge := formatContextGauge(used, budget, 8)
