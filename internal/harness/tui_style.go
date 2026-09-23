@@ -707,7 +707,7 @@ func FormatHelp() string {
 	})
 
 	renderSection("Models & Endpoints", []cmdEntry{
-		{"/models, /model", "List configured model endpoints"},
+		{"/models, /model", "Open interactive model selector modal (Alt+M)"},
 		{"/model <name>", "Switch active model (e.g. /model llama3.1)"},
 		{"/models add <id> <url>", "Register a new inference endpoint in config.json"},
 	})

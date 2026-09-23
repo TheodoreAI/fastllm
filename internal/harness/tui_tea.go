@@ -215,6 +215,8 @@ type teaModel struct {
 	pendingPermission *teaPermissionRequestMsg
 	skillsModal       bool
 	skillCursor       int
+	modelsModal       bool
+	modelCursor       int
 	changes           sessionChanges
 	gitWatchChan      <-chan struct{}
 	gitWatchStop      func()
@@ -538,6 +540,44 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.modelsModal {
+			switch msg.Type {
+			case tea.KeyEsc, tea.KeyCtrlC:
+				m.closeModelsModal()
+			case tea.KeyEnter:
+				m.selectModelFromModal()
+			case tea.KeyUp:
+				if m.modelCursor > 0 {
+					m.modelCursor--
+				}
+			case tea.KeyDown:
+				if m.settings != nil && m.modelCursor < len(m.settings.Models)-1 {
+					m.modelCursor++
+				}
+			case tea.KeyHome:
+				m.modelCursor = 0
+			case tea.KeyEnd:
+				if m.settings != nil && len(m.settings.Models) > 0 {
+					m.modelCursor = len(m.settings.Models) - 1
+				}
+			case tea.KeyRunes:
+				if len(msg.Runes) > 0 {
+					switch msg.Runes[0] {
+					case 'q', 'Q':
+						m.closeModelsModal()
+					case 'j':
+						if m.settings != nil && m.modelCursor < len(m.settings.Models)-1 {
+							m.modelCursor++
+						}
+					case 'k':
+						if m.modelCursor > 0 {
+							m.modelCursor--
+						}
+					}
+				}
+			}
+			return m, nil
+		}
 		if m.diffModal {
 			if m.diffConfirmDiscard {
 				switch msg.Type {
@@ -603,13 +643,19 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, vpCmd
 		}
 
-		if msg.Alt && len(msg.Runes) > 0 && (msg.Runes[0] == 'c' || msg.Runes[0] == 'C') {
-			if len(m.changes.files) > 0 {
-				targetIdx := 0
-				if m.changes.cursor >= 0 && m.changes.cursor < len(m.changes.files) {
-					targetIdx = m.changes.cursor
+		if msg.Alt && len(msg.Runes) > 0 {
+			switch msg.Runes[0] {
+			case 'c', 'C':
+				if len(m.changes.files) > 0 {
+					targetIdx := 0
+					if m.changes.cursor >= 0 && m.changes.cursor < len(m.changes.files) {
+						targetIdx = m.changes.cursor
+					}
+					m.openDiffModal(targetIdx)
+					return m, nil
 				}
-				m.openDiffModal(targetIdx)
+			case 'm', 'M':
+				m.openModelsModal()
 				return m, nil
 			}
 		}
@@ -763,7 +809,18 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.diffViewport, vpCmd = m.diffViewport.Update(msg)
 			return m, vpCmd
 		}
+		if m.modelsModal || m.skillsModal {
+			return m, nil
+		}
 		if (msg.Button == tea.MouseButtonLeft || msg.Type == tea.MouseLeft) && msg.Action != tea.MouseActionRelease {
+			if msg.Y == 0 {
+				modelStart := 7 + 1 + 9 + 1 // brand(7) + " " + modeBadge(9) + " " = 18
+				modelEnd := modelStart + VisualLen(m.modelName) + 2
+				if msg.X >= modelStart && msg.X <= modelEnd {
+					m.openModelsModal()
+					return m, nil
+				}
+			}
 			if m.showChangesColumn() && msg.X >= m.frameWidth()-changesColumnWidth && msg.X < m.frameWidth() {
 				if msg.Y >= 2 && msg.Y < 2+m.viewport.Height {
 					if _, idx, ok := m.changes.FileAtRow(msg.Y - 2); ok {
@@ -1455,8 +1512,8 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 			return nil
 
 		case "/model", "/models":
-			m.appendHistory(styleUserPrompt.Render("❯ "+inputVal) + "\n")
 			if len(parts) > 1 && parts[1] != "list" {
+				m.appendHistory(styleUserPrompt.Render("❯ "+inputVal) + "\n")
 				matched := m.settings.FindModel(parts[1])
 				if matched == nil {
 					m.appendHistory(styleDiffDel.Render(fmt.Sprintf("Model %q is not configured. Use /models to list available models.\n\n", parts[1])))
@@ -1472,11 +1529,7 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 				m.appendHistory(styleStatusNotice.Render(fmt.Sprintf("Active model: %s (%s)\nEndpoint: %s", matched.ID, matched.Name, matched.URL)) + "\n\n")
 				return m.clearStatusAfter(2 * time.Second)
 			}
-			if m.settings != nil && len(m.settings.Models) > 0 {
-				m.appendHistory(FormatModelsTable(m.settings.Models, m.modelName, m.configPath) + "\n\n")
-			} else {
-				m.appendHistory(styleMuted.Render("No models configured. Usage: /model <name>\n\n"))
-			}
+			m.openModelsModal()
 			return nil
 
 		case "/ps":
@@ -1688,6 +1741,53 @@ func (m *teaModel) selectSkillFromModal() {
 	m.input.CursorEnd()
 }
 
+func (m *teaModel) openModelsModal() {
+	if m.settings == nil || len(m.settings.Models) == 0 {
+		m.statusNotice = "No models configured in config.json."
+		return
+	}
+	m.modelsModal = true
+	m.modelCursor = 0
+	for i, mdl := range m.settings.Models {
+		if strings.EqualFold(mdl.ID, m.modelName) {
+			m.modelCursor = i
+			break
+		}
+	}
+	m.input.Blur()
+}
+
+func (m *teaModel) closeModelsModal() {
+	m.modelsModal = false
+	m.input.Focus()
+}
+
+func (m *teaModel) selectModelFromModal() {
+	if m.settings == nil || m.modelCursor < 0 || m.modelCursor >= len(m.settings.Models) {
+		m.closeModelsModal()
+		return
+	}
+	selected := &m.settings.Models[m.modelCursor]
+	m.closeModelsModal()
+
+	if strings.EqualFold(selected.ID, m.modelName) {
+		m.statusNotice = fmt.Sprintf("Model is already active: %s", selected.ID)
+		return
+	}
+
+	if err := m.runner.SwitchModel(selected); err != nil {
+		m.statusNotice = fmt.Sprintf("Could not switch model: %v", err)
+		m.appendHistory(styleDiffDel.Render(fmt.Sprintf("Could not switch model: %v\n\n", err)))
+		return
+	}
+
+	m.modelName = selected.ID
+	_ = m.saveSession()
+	m.statusNotice = fmt.Sprintf("✓ Switched active model to %s", selected.ID)
+	m.appendHistory(styleStatusNotice.Render(fmt.Sprintf("✓ Switched active model to %s (%s)\nEndpoint: %s",
+		selected.ID, selected.Name, selected.URL)) + "\n\n")
+}
+
 // compactionConfig sizes compaction against the active model's context window.
 // Read through this rather than caching: /model and /dir both change the answer.
 func (m *teaModel) compactionConfig() CompactionConfig {
@@ -1798,6 +1898,121 @@ func (m *teaModel) renderSkillsModal() string {
 		Padding(0, 1).
 		Width(contentWidth).
 		Render(strings.Join(lines, "\n"))
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box,
+		lipgloss.WithWhitespaceBackground(tuiColorDarkBg))
+}
+
+func (m *teaModel) renderModelsModal() string {
+	width, height := m.width, m.height
+	if width < 1 {
+		width = 80
+	}
+	if height < 1 {
+		height = 24
+	}
+	contentWidth := width - 8
+	if contentWidth > 110 {
+		contentWidth = 110
+	}
+	if contentWidth < 40 {
+		contentWidth = 40
+	}
+
+	models := []config.ModelEndpoint{}
+	if m.settings != nil {
+		models = m.settings.Models
+	}
+
+	header := fmt.Sprintf("MODELS · %d configured", len(models))
+	lines := []string{styleAgentBadge.Render(header), ""}
+
+	if len(models) == 0 {
+		lines = append(lines, styleMuted.Render("No models configured in config.json."))
+	} else {
+		visibleRows := (height - 8) / 2
+		if visibleRows < 1 {
+			visibleRows = 1
+		}
+		start := m.modelCursor - visibleRows/2
+		if start < 0 {
+			start = 0
+		}
+		if maxStart := len(models) - visibleRows; start > maxStart && maxStart > 0 {
+			start = maxStart
+		}
+		end := start + visibleRows
+		if end > len(models) {
+			end = len(models)
+		}
+
+		for i := start; i < end; i++ {
+			mdl := models[i]
+			isActive := strings.EqualFold(mdl.ID, m.modelName)
+			isSelected := i == m.modelCursor
+
+			activeIndicator := styleMuted.Render("○ ")
+			if isActive {
+				activeIndicator = ColorGreen("● ")
+			}
+
+			idStr := ColorBrightWhite(StyleBold(mdl.ID))
+			if isSelected {
+				idStr = ColorCyan(StyleBold(mdl.ID))
+			}
+
+			activeTag := ""
+			if isActive {
+				activeTag = " " + styleStatusNotice.Render("(Active)")
+			}
+
+			nameStr := ""
+			if mdl.Name != "" && !strings.EqualFold(mdl.Name, mdl.ID) {
+				nameStr = styleMuted.Render(" · " + mdl.Name)
+			}
+
+			prefix := "  "
+			if isSelected {
+				prefix = ColorCyan(StyleBold("› "))
+			}
+
+			row1 := prefix + activeIndicator + idStr + nameStr + activeTag
+
+			var details []string
+			if mdl.Provider != "" {
+				details = append(details, fmt.Sprintf("Provider: %s", mdl.Provider))
+			}
+			if mdl.URL != "" {
+				details = append(details, fmt.Sprintf("URL: %s", mdl.URL))
+			}
+			if mdl.ContextWindow > 0 {
+				details = append(details, fmt.Sprintf("Ctx: %s tok", compactCount(mdl.ContextWindow)))
+			}
+			detailStr := "    " + styleMuted.Render(strings.Join(details, " · "))
+
+			lines = append(lines, clampToWidth(row1, contentWidth-2))
+			if len(details) > 0 {
+				lines = append(lines, clampToWidth(detailStr, contentWidth-2))
+			}
+			if i < end-1 {
+				lines = append(lines, "")
+			}
+		}
+	}
+
+	footer := "↑/↓ or j/k: Navigate · Enter: Select & Switch · Esc/q: Cancel"
+	if len(models) == 0 {
+		footer = "Esc/q: Close"
+	}
+	lines = append(lines, "", styleMuted.Render(footer))
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(tuiColorCyan).
+		Background(tuiColorCardBg).
+		Padding(0, 1).
+		Width(contentWidth).
+		Render(strings.Join(lines, "\n"))
+
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box,
 		lipgloss.WithWhitespaceBackground(tuiColorDarkBg))
 }
@@ -2127,6 +2342,9 @@ func (m *teaModel) View() string {
 	}
 	if m.diffModal {
 		return m.renderDiffModal()
+	}
+	if m.modelsModal {
+		return m.renderModelsModal()
 	}
 	if m.skillsModal {
 		return m.renderSkillsModal()

@@ -1,7 +1,9 @@
 package harness
 
 import (
+	"fastllm/internal/config"
 	"fastllm/internal/gitrepo"
+	"fastllm/internal/llm"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -497,6 +499,97 @@ func TestDiscardSlashCommand(t *testing.T) {
 		t.Fatalf("expected 'Not a git repository' message")
 	}
 }
+
+func TestModelsModalNavigationAndSelection(t *testing.T) {
+	tmp := t.TempDir()
+	ta := textarea.New()
+	ta.ShowLineNumbers = false
+	settings := &config.Settings{
+		Models: []config.ModelEndpoint{
+			{ID: "model-a", Name: "Model Alpha", URL: "http://localhost:8001/v1"},
+			{ID: "model-b", Name: "Model Beta", URL: "http://localhost:8002/v1"},
+			{ID: "model-c", Name: "Model Gamma", URL: "http://localhost:8003/v1"},
+		},
+	}
+	client := llm.New("http://localhost:8002/v1", "", "model-b", "")
+	runner := NewRunner(client, tmp, "model-b")
+	m := &teaModel{
+		runner:        runner,
+		workingDir:    tmp,
+		checkpointMgr: NewCheckpointManager(tmp),
+		modelName:     "model-b",
+		settings:      settings,
+		input:         ta,
+		viewport:      viewport.New(120, 20),
+		width:         120,
+		height:        30,
+	}
+
+	// 1. openModelsModal pre-selects the currently active model (model-b at index 1)
+	m.openModelsModal()
+	if !m.modelsModal {
+		t.Fatal("expected modelsModal to be true")
+	}
+	if m.modelCursor != 1 {
+		t.Fatalf("expected modelCursor=1 (pre-selecting active model-b), got %d", m.modelCursor)
+	}
+
+	// 2. Navigate down with 'j'
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m = updated.(*teaModel)
+	if m.modelCursor != 2 {
+		t.Fatalf("expected modelCursor=2, got %d", m.modelCursor)
+	}
+
+	// 3. Navigate up with 'k' twice to model-a (index 0)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	m = updated.(*teaModel)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	m = updated.(*teaModel)
+	if m.modelCursor != 0 {
+		t.Fatalf("expected modelCursor=0, got %d", m.modelCursor)
+	}
+
+	// 4. Press Enter to select model-a
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(*teaModel)
+	if m.modelsModal {
+		t.Fatal("expected modelsModal to close on Enter")
+	}
+	if m.modelName != "model-a" {
+		t.Fatalf("expected modelName='model-a', got %s", m.modelName)
+	}
+	if !strings.Contains(m.statusNotice, "Switched active model to model-a") {
+		t.Fatalf("expected statusNotice to confirm switch, got %q", m.statusNotice)
+	}
+
+	// 5. Test Alt+M shortcut opens modal
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}, Alt: true})
+	m = updated.(*teaModel)
+	if !m.modelsModal {
+		t.Fatal("expected Alt+M to open modelsModal")
+	}
+	if m.modelCursor != 0 {
+		t.Fatalf("expected modelCursor=0 (active model-a), got %d", m.modelCursor)
+	}
+
+	// 6. Test Esc closes modal without switching
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(*teaModel)
+	if m.modelsModal {
+		t.Fatal("expected Esc to close modelsModal")
+	}
+
+	// 7. Test /model with no args opens modal
+	cmd := m.handleAgentSubmit("/model")
+	if cmd != nil {
+		t.Fatal("expected nil cmd from /model modal open")
+	}
+	if !m.modelsModal {
+		t.Fatal("expected /model to open modelsModal")
+	}
+}
+
 
 
 
