@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"fastllm/internal/execution"
 	"fastllm/internal/llm"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -477,8 +476,8 @@ func (m *teaModel) setRuntimeValue(name, value string) error {
 		}
 	case "sandbox":
 		if value == "on" {
-			if _, ok := execution.IsolatedBackend(); !ok {
-				return errSandboxUnavailable()
+			if err := sandboxReady(); err != nil {
+				return err
 			}
 			m.sandbox = true
 			m.appendHistory(styleMuted.Render(sandboxFirstUseNotice + "\n\n"))

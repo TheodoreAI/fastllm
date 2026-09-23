@@ -581,8 +581,8 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 					tools = interactiveTools(allowCmds, permissionMode, r.EnableObservations)
 				case "sandbox":
 					if value == "on" {
-						if _, ok := execution.IsolatedBackend(); !ok {
-							setErr = errSandboxUnavailable()
+						if err := sandboxReady(); err != nil {
+							setErr = err
 						} else {
 							sandbox = true
 							fmt.Println(ColorYellow("  " + sandboxFirstUseNotice))
@@ -925,6 +925,10 @@ func (r *Runner) runInteractiveTurn(
 	defer scope.Close(context.Background())
 	ctx = execution.WithScope(ctx, scope)
 	absWorkingDir = scope.Workspace()
+	if note := sandboxPromptNote(scope); note != "" && len(*sessionMessages) > 0 {
+		// The caller restores the base system prompt after every turn.
+		(*sessionMessages)[0].Content += note
+	}
 	fileReader = files.New(absWorkingDir, permissions.Mode != PermissionReadOnly)
 	processMgr.KillAll()
 	processMgr.mu.Lock()

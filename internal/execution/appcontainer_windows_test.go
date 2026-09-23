@@ -56,6 +56,68 @@ func runIn(t *testing.T, s *Scope, cmd Command) Result {
 	return result
 }
 
+func psLiteral(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
+
+// assertShellAndGitWork checks that PowerShell and native programs start at
+// the workspace drive, that work there lands in the real workspace, and that
+// git can commit: PowerShell and git are the tools that check every directory
+// above their working directory.
+func assertShellAndGitWork(t *testing.T, workspace string) {
+	t.Helper()
+	if err := os.Mkdir(filepath.Join(workspace, "sub"), 0o755); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+	sandboxed, _ := containerScopes(t, workspace)
+	root := sandboxed.CommandWorkspace()
+	if len(root) != 3 || root[1:] != `:\` {
+		t.Fatalf("command workspace = %q, want a drive root", root)
+	}
+
+	shell := runIn(t, sandboxed, Command{Shell: "Set-Content inside.txt -Value sandbox-ok; Get-Content inside.txt; (Get-Location).Path; cmd /c cd"})
+	lines := strings.Fields(shell.Stdout)
+	if shell.ExitCode != 0 || len(lines) != 3 || lines[0] != "sandbox-ok" {
+		t.Fatalf("shell in workspace: exit %d\n%s", shell.ExitCode, shell.Output)
+	}
+	for i, label := range map[int]string{1: "PowerShell location", 2: "native working directory"} {
+		if !strings.EqualFold(lines[i], root) {
+			t.Errorf("%s = %q, want the workspace drive %q", label, lines[i], root)
+		}
+	}
+	if data, err := os.ReadFile(filepath.Join(workspace, "inside.txt")); err != nil || !strings.Contains(string(data), "sandbox-ok") {
+		t.Errorf("a write at the drive did not land in the real workspace: %q, %v", data, err)
+	}
+	nested := runIn(t, sandboxed, Command{Shell: "(Get-Location).Path", Dir: "sub"})
+	if got := strings.TrimSpace(nested.Stdout); !strings.EqualFold(got, root+"sub") {
+		t.Errorf("subdirectory location = %q\n%s", got, nested.Output)
+	}
+
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Log("git is not installed; skipping the git half")
+		return
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "tracked.txt"), []byte("v1\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	identity := []string{"-c", "user.name=fastllm-test", "-c", "user.email=test@fastllm.invalid"}
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"add", "tracked.txt"},
+		append(append([]string{}, identity...), "commit", "-q", "-m", "first"),
+	} {
+		if result := runIn(t, sandboxed, Command{Executable: "git", Args: args}); result.ExitCode != 0 {
+			t.Fatalf("git %s: exit %d\n%s", strings.Join(args, " "), result.ExitCode, result.Output)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "tracked.txt"), []byte("v2\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	// Checkpoints are built on stash create, which writes a commit object.
+	stash := runIn(t, sandboxed, Command{Executable: "git", Args: append(append([]string{}, identity...), "stash", "create")})
+	if stash.ExitCode != 0 || len(strings.TrimSpace(stash.Stdout)) < 7 {
+		t.Fatalf("git stash create: exit %d\n%s", stash.ExitCode, stash.Output)
+	}
+}
+
 func TestAppContainerScopeReportsIsolation(t *testing.T) {
 	sandboxed, local := containerScopes(t, t.TempDir())
 	if !sandboxed.Isolated() || sandboxed.Backend() != AppContainerBackendName {
@@ -66,45 +128,47 @@ func TestAppContainerScopeReportsIsolation(t *testing.T) {
 	}
 }
 
-func TestAppContainerShellRunsInTheWorkspace(t *testing.T) {
+func TestAppContainerShellAndGitWork(t *testing.T) {
+	// A temp directory sits under the user profile, which the container can
+	// neither read nor list: exactly the case the workspace drive exists for.
+	assertShellAndGitWork(t, t.TempDir())
+}
+
+func TestWorkspaceDriveLivesAsLongAsItsScopes(t *testing.T) {
 	workspace := t.TempDir()
-	if err := os.Mkdir(filepath.Join(workspace, "sub"), 0o755); err != nil {
-		t.Fatalf("Mkdir: %v", err)
+	m := NewManager()
+	defer m.Close(context.Background())
+	if err := m.Register(NewAppContainerBackend()); err != nil {
+		t.Fatalf("Register: %v", err)
 	}
-	resolved, err := filepath.EvalSymlinks(workspace)
-	if err != nil {
-		t.Fatalf("EvalSymlinks: %v", err)
-	}
-	sandboxed, _ := containerScopes(t, workspace)
-
-	// The workspace sits under the user profile, which the container cannot
-	// read: PowerShell only lands here because of the workspace drive.
-	result := runIn(t, sandboxed, Command{Shell: "Set-Content inside.txt -Value sandbox-ok; Get-Content inside.txt; (Get-Location).Path; $PWD.ProviderPath; cmd /c cd"})
-	lines := strings.Fields(result.Stdout)
-	if result.ExitCode != 0 || len(lines) != 4 {
-		t.Fatalf("exit %d, output:\n%s", result.ExitCode, result.Output)
-	}
-	if lines[0] != "sandbox-ok" {
-		t.Errorf("relative write/read = %q", lines[0])
-	}
-	if lines[1] != workspaceDrive+`:\` {
-		t.Errorf("PowerShell location = %q, want %q", lines[1], workspaceDrive+`:\`)
-	}
-	for i, label := range map[int]string{2: "provider path", 3: "native working directory"} {
-		if got := strings.TrimRight(lines[i], `\`); !strings.EqualFold(got, resolved) {
-			t.Errorf("%s = %q, want the real workspace %q", label, got, resolved)
+	open := func() *Scope {
+		s, err := m.Open(context.Background(), Options{Workspace: workspace, Policy: LocalPolicy(), Backend: AppContainerBackendName, RequireIsolation: true})
+		if err != nil {
+			t.Fatalf("Open: %v", err)
 		}
+		return s
+	}
+	first, second := open(), open()
+	drive := strings.TrimSuffix(first.CommandWorkspace(), `\`)
+	if second.CommandWorkspace() != first.CommandWorkspace() {
+		t.Fatalf("two scopes on one workspace got %q and %q; they should share a letter", first.CommandWorkspace(), second.CommandWorkspace())
+	}
+	resolved, _ := filepath.EvalSymlinks(workspace)
+	if target, ok := driveTarget(drive); !ok || !strings.EqualFold(target, resolved) {
+		t.Fatalf("%s maps to %q (%v), want %q", drive, target, ok, resolved)
 	}
 
-	nested := runIn(t, sandboxed, Command{Shell: "(Get-Location).Path; cmd /c cd", Dir: "sub"})
-	if !strings.Contains(nested.Stdout, workspaceDrive+`:\sub`) || !strings.Contains(strings.ToLower(nested.Stdout), strings.ToLower(filepath.Join(resolved, "sub"))) {
-		t.Errorf("subdirectory launch did not land in sub:\n%s", nested.Output)
+	if err := first.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
-
-	absolute := filepath.Join(workspace, "absolute.txt")
-	written := runIn(t, sandboxed, Command{Shell: "Set-Content -LiteralPath " + psLiteral(absolute) + " -Value abs-ok; Get-Content -LiteralPath " + psLiteral(absolute)})
-	if !strings.Contains(written.Stdout, "abs-ok") {
-		t.Errorf("absolute path inside the workspace failed:\n%s", written.Output)
+	if target, ok := driveTarget(drive); !ok || !strings.EqualFold(target, resolved) {
+		t.Fatalf("closing one scope removed the drive the other still uses: %q %v", target, ok)
+	}
+	if err := second.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if target, ok := driveTarget(drive); ok && strings.EqualFold(target, resolved) {
+		t.Fatalf("%s still maps to the workspace after every scope closed", drive)
 	}
 }
 
@@ -270,7 +334,7 @@ func TestAppContainerBuildsAndRunsGo(t *testing.T) {
 	}
 }
 
-func TestRevokeRemovesATreeGrant(t *testing.T) {
+func TestRevokeRemovesTreeAndDirectoryGrants(t *testing.T) {
 	identity, err := NewAppContainerBackend().(*appContainerBackend).profile()
 	if err != nil {
 		t.Skipf("AppContainer unavailable: %v", err)
@@ -305,55 +369,53 @@ func TestRevokeRemovesATreeGrant(t *testing.T) {
 	if direct, err := directGrant(shared, identity.sid); err != nil || direct {
 		t.Fatalf("direct grant remains after revoke: %v, %v", direct, err)
 	}
+
+	if granted, err := grantSelf(shared, identity.sid, fileReadAttributes); err != nil || !granted {
+		t.Fatalf("grantSelf = %v, %v", granted, err)
+	}
+	if has, _ := hasSelfGrant(shared, identity.sid, fileReadAttributes); !has {
+		t.Fatal("grantSelf left no grant")
+	}
+	if err := revokeSelf(shared, identity.sid); err != nil {
+		t.Fatalf("revokeSelf: %v", err)
+	}
+	if direct, _ := directGrant(shared, identity.sid); direct {
+		t.Fatal("revokeSelf left the grant in place")
+	}
 }
 
-func TestGrantRecordDeduplicates(t *testing.T) {
-	record := grantRecord{path: filepath.Join(t.TempDir(), "grants.txt")}
-	if paths, err := record.paths(); err != nil || len(paths) != 0 {
-		t.Fatalf("empty record = %v, %v", paths, err)
+func TestSetupRejectsANonContainerIdentity(t *testing.T) {
+	// The Users group: an elevated helper handed it must grant nothing.
+	for _, sid := range []string{"S-1-5-32-545", "not-a-sid"} {
+		if err := RevokeIsolationSetup(sid); err == nil {
+			t.Errorf("RevokeIsolationSetup(%q) succeeded", sid)
+		}
 	}
-	for _, path := range []string{`C:\ws`, `c:\WS`, `C:\cache`} {
-		if err := record.add(path); err != nil {
+}
+
+func TestGrantRecordKeepsKindsAndDeduplicates(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "grants.txt")
+	// A record written before directory grants existed holds bare tree paths.
+	if err := os.WriteFile(path, []byte("C:\\legacy\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	record := grantRecord{path: path}
+	for _, add := range []grantEntry{{treeGrant, `C:\ws`}, {treeGrant, `c:\WS`}, {selfGrant, `C:\ws`}, {selfGrant, `C:\Users\me`}} {
+		if err := record.add(add.kind, add.path); err != nil {
 			t.Fatalf("add: %v", err)
 		}
 	}
-	paths, err := record.paths()
+	entries, err := record.entries()
 	if err != nil {
-		t.Fatalf("paths: %v", err)
+		t.Fatalf("entries: %v", err)
 	}
-	if len(paths) != 2 || paths[0] != `C:\ws` || paths[1] != `C:\cache` {
-		t.Fatalf("paths = %q, want the case-only duplicate collapsed", paths)
+	want := []grantEntry{{treeGrant, `C:\legacy`}, {treeGrant, `C:\ws`}, {selfGrant, `C:\ws`}, {selfGrant, `C:\Users\me`}}
+	if len(entries) != len(want) {
+		t.Fatalf("entries = %v, want %v", entries, want)
 	}
-}
-
-func TestAppContainerRunsGit(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git is not installed")
-	}
-	// Known gap: Git for Windows (MSYS) checks every directory above its
-	// working directory and fails on C:\Users, which the container cannot
-	// read. Remove this skip with the fix.
-	t.Skip(`known gap: git cannot resolve a working directory under C:\Users inside the container`)
-	workspace := t.TempDir()
-	if err := os.WriteFile(filepath.Join(workspace, "tracked.txt"), []byte("v1\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-	sandboxed, _ := containerScopes(t, workspace)
-	for _, args := range [][]string{
-		{"init", "-q"},
-		{"add", "tracked.txt"},
-		{"commit", "-q", "-m", "first"},
-	} {
-		if result := runIn(t, sandboxed, Command{Executable: "git", Args: args}); result.ExitCode != 0 {
-			t.Fatalf("git %s: exit %d\n%s", strings.Join(args, " "), result.ExitCode, result.Output)
+	for i := range want {
+		if entries[i] != want[i] {
+			t.Errorf("entry %d = %v, want %v", i, entries[i], want[i])
 		}
-	}
-	if err := os.WriteFile(filepath.Join(workspace, "tracked.txt"), []byte("v2\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-	// Checkpoints are built on stash create, which writes a commit object.
-	stash := runIn(t, sandboxed, Command{Executable: "git", Args: []string{"stash", "create"}})
-	if stash.ExitCode != 0 || len(strings.TrimSpace(stash.Stdout)) < 7 {
-		t.Fatalf("git stash create: exit %d\n%s", stash.ExitCode, stash.Output)
 	}
 }

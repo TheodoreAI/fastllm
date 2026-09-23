@@ -31,19 +31,12 @@ const (
 	procThreadAttributeSecurityCapabilities = 0x00020009
 	hresultAlreadyExists                    = 0x800700B7
 
-	fileAllAccess   windows.ACCESS_MASK = 0x001F01FF
-	fileReadExecute windows.ACCESS_MASK = 0x001200A9
+	fileAllAccess      windows.ACCESS_MASK = 0x001F01FF
+	fileReadExecute    windows.ACCESS_MASK = 0x001200A9
+	fileReadAttributes windows.ACCESS_MASK = windows.FILE_READ_ATTRIBUTES | windows.SYNCHRONIZE
 
 	// A ceiling on descendants, so a fork bomb exhausts its job, not the host.
 	maxContainerProcesses = 512
-
-	// workspaceDrive is the PowerShell drive a sandboxed shell runs from.
-	// PowerShell rebuilds a location from the volume root and checks every
-	// directory on the way; the container cannot read C:\Users, so a location
-	// beneath it fails and PowerShell falls back to C:\. A drive rooted at the
-	// workspace has nothing above it to check. Native programs still receive
-	// the real host directory.
-	workspaceDrive = "Workspace"
 )
 
 var (
@@ -77,8 +70,9 @@ func IsolatedBackend() (Backend, bool) { return NewAppContainerBackend(), true }
 //
 // Opening a scope grants the container full access to the workspace and read
 // access to the Go module cache the workspace resolves, which holds any
-// auto-selected toolchain. Grants persist, are detected so each tree is
-// granted once, and are recorded so RevokeIsolatedBackend can remove them.
+// auto-selected toolchain, and maps a drive letter to the workspace for
+// commands to start in. Grants persist, are detected so each tree is granted
+// once, and are recorded so RevokeIsolatedBackend can remove them.
 func NewAppContainerBackend() Backend { return &appContainerBackend{} }
 
 type appContainerBackend struct {
@@ -140,6 +134,13 @@ func openIdentity() (*containerIdentity, error) {
 	return identity, nil
 }
 
+// profilesDirectory is the directory holding every user profile, C:\Users on
+// a default install. The container cannot read it, and only an administrator
+// can change that.
+func profilesDirectory() (string, error) {
+	return windows.KnownFolderPath(windows.FOLDERID_UserProfiles, 0)
+}
+
 func (b *appContainerBackend) Open(ctx context.Context, spec ScopeSpec) (BackendScope, error) {
 	identity, err := b.profile()
 	if err != nil {
@@ -172,18 +173,22 @@ func (b *appContainerBackend) Open(ctx context.Context, spec ScopeSpec) (Backend
 	if err != nil {
 		return nil, err
 	}
-	return &appContainerScope{spec: spec, identity: identity, lifetime: ctx, environment: block}, nil
+	drive, unmap, err := mapWorkspaceDrive(spec.Workspace)
+	if err != nil {
+		return nil, err
+	}
+	return &appContainerScope{spec: spec, identity: identity, lifetime: ctx, environment: block, drive: drive, unmap: unmap}, nil
 }
 
 // grant makes the workspace and its toolchain reachable to the container, and
-// records each tree so a revoke can find it later.
+// records each tree so a revoke can find it.
 func (b *appContainerBackend) grant(identity *containerIdentity, workspace string) error {
 	b.grants.Lock()
 	defer b.grants.Unlock()
 	record := grantRecord{path: filepath.Join(identity.folder, "grants.txt")}
 
 	// Recorded before granting, so an interrupted grant is still revoked.
-	if err := record.add(workspace); err != nil {
+	if err := record.add(treeGrant, workspace); err != nil {
 		return err
 	}
 	if _, err := grantTree(workspace, identity.sid, fileAllAccess); err != nil {
@@ -201,31 +206,92 @@ func (b *appContainerBackend) grant(identity *containerIdentity, workspace strin
 		}
 		// Recorded even when the grant already existed, so one made before
 		// the record did is still revoked.
-		if err := record.add(dir); err != nil {
+		if err := record.add(treeGrant, dir); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
+// IsolationIdentity names the sandbox identity, so an elevated helper can be
+// told exactly which identity to grant rather than looking up its own, which
+// differs when another administrator account approves the elevation.
+func IsolationIdentity() (string, error) {
+	identity, err := openIdentity()
+	if err != nil {
+		return "", err
+	}
+	return identity.sid.String(), nil
+}
+
+// IsolationSetupPresent reports whether the sandbox holds a grant on the
+// profiles directory. The backend no longer needs one, since commands start
+// from a workspace drive, but an earlier one-time setup made it, and only an
+// administrator can remove it.
+func IsolationSetupPresent() (bool, error) {
+	identity, err := openIdentity()
+	if err != nil {
+		return false, err
+	}
+	profiles, err := profilesDirectory()
+	if err != nil {
+		return false, err
+	}
+	return directGrant(profiles, identity.sid)
+}
+
+// RevokeIsolationSetup removes the profiles-directory grant. It needs
+// administrator rights.
+func RevokeIsolationSetup(sidString string) error {
+	sid, profiles, err := setupTarget(sidString)
+	if err != nil {
+		return err
+	}
+	return revokeSelf(profiles, sid)
+}
+
+func setupTarget(sidString string) (*windows.SID, string, error) {
+	sid, err := windows.StringToSid(sidString)
+	if err != nil {
+		return nil, "", fmt.Errorf("sandbox identity %q: %w", sidString, err)
+	}
+	// Only an AppContainer identity may receive this grant, never a user or
+	// group handed to an elevated process by mistake.
+	if !strings.HasPrefix(sid.String(), "S-1-15-2-") {
+		return nil, "", fmt.Errorf("%s is not an AppContainer identity", sid)
+	}
+	profiles, err := profilesDirectory()
+	return sid, profiles, err
+}
+
 // RevokeIsolatedBackend removes every permission the sandbox was granted and
 // deletes its identity, returning the machine to its state before first use.
-// A backend constructed earlier must not be used afterwards.
+// The profiles-directory grant must be revoked first, with administrator
+// rights; while it remains the identity is kept, so the grant never outlives
+// the identity it names. A backend constructed earlier must not be used
+// afterwards.
 func RevokeIsolatedBackend() error {
 	identity, err := openIdentity()
 	if err != nil {
 		return err
 	}
+	if present, err := IsolationSetupPresent(); err == nil && present {
+		return errors.New("the sandbox's profiles-directory grant is still present; revoke it with administrator rights first")
+	}
 	record := grantRecord{path: filepath.Join(identity.folder, "grants.txt")}
-	paths, err := record.paths()
+	entries, err := record.entries()
 	if err != nil {
 		return err
 	}
 	var errs []error
-	for _, path := range paths {
-		err := revokeTree(path, identity.sid)
+	for _, entry := range entries {
+		revoke := revokeTree
+		if entry.kind == selfGrant {
+			revoke = revokeSelf
+		}
+		err := revoke(entry.path, identity.sid)
 		if err != nil && !errors.Is(err, windows.ERROR_FILE_NOT_FOUND) && !errors.Is(err, windows.ERROR_PATH_NOT_FOUND) {
-			errs = append(errs, fmt.Errorf("revoke %s: %w", path, err))
+			errs = append(errs, fmt.Errorf("revoke %s: %w", entry.path, err))
 		}
 	}
 	if len(errs) > 0 {
@@ -241,12 +307,26 @@ func RevokeIsolatedBackend() error {
 	return nil
 }
 
-// grantRecord is an append-only list of granted trees, one path per line,
-// kept in the container's own folder so it is deleted with the identity it
-// describes.
+type grantKind int
+
+const (
+	treeGrant grantKind = iota // the path and everything beneath it
+	selfGrant                  // the directory itself only
+)
+
+type grantEntry struct {
+	kind grantKind
+	path string
+}
+
+// grantRecord is an append-only list of granted paths, one per line, kept in
+// the container's own folder so it is deleted with the identity it describes.
+// A tree grant is a bare path; a directory-only grant is prefixed "self\t".
 type grantRecord struct{ path string }
 
-func (r grantRecord) paths() ([]string, error) {
+const selfPrefix = "self\t"
+
+func (r grantRecord) entries() ([]grantEntry, error) {
 	data, err := os.ReadFile(r.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -254,22 +334,25 @@ func (r grantRecord) paths() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	var paths []string
+	var entries []grantEntry
 	for _, line := range strings.Split(string(data), "\n") {
-		if path := strings.TrimSpace(line); path != "" {
-			paths = append(paths, path)
+		line = strings.TrimRight(line, "\r")
+		if path, ok := strings.CutPrefix(line, selfPrefix); ok {
+			entries = append(entries, grantEntry{selfGrant, strings.TrimSpace(path)})
+		} else if path := strings.TrimSpace(line); path != "" {
+			entries = append(entries, grantEntry{treeGrant, path})
 		}
 	}
-	return paths, nil
+	return entries, nil
 }
 
-func (r grantRecord) add(path string) error {
-	existing, err := r.paths()
+func (r grantRecord) add(kind grantKind, path string) error {
+	existing, err := r.entries()
 	if err != nil {
 		return err
 	}
-	for _, recorded := range existing {
-		if strings.EqualFold(recorded, path) {
+	for _, entry := range existing {
+		if entry.kind == kind && strings.EqualFold(entry.path, path) {
 			return nil
 		}
 	}
@@ -277,7 +360,11 @@ func (r grantRecord) add(path string) error {
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintln(file, path)
+	line := path
+	if kind == selfGrant {
+		line = selfPrefix + path
+	}
+	_, err = fmt.Fprintln(file, line)
 	if closeErr := file.Close(); err == nil {
 		err = closeErr
 	}
@@ -289,11 +376,34 @@ type appContainerScope struct {
 	identity    *containerIdentity
 	lifetime    context.Context
 	environment []uint16
+	// drive is the letter ("W:") commands see the workspace as.
+	drive string
+	unmap func()
 }
 
-// Close releases nothing: grants are durable by design, and processes are
-// owned by the scope lifetime.
-func (*appContainerScope) Close(context.Context) error { return nil }
+// Close releases the workspace drive. Grants are durable by design, and the
+// scope has already stopped its processes.
+func (s *appContainerScope) Close(context.Context) error {
+	s.unmap()
+	return nil
+}
+
+// CommandWorkspace is the workspace as commands see it: the root of the
+// workspace drive.
+func (s *appContainerScope) CommandWorkspace() string { return s.drive + `\` }
+
+// commandDir translates a host directory inside the workspace to the same
+// directory under the workspace drive.
+func (s *appContainerScope) commandDir(dir string) (string, error) {
+	rel, err := filepath.Rel(s.spec.Workspace, dir)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("working directory %q is outside the workspace", dir)
+	}
+	if rel == "." {
+		return s.drive + `\`, nil
+	}
+	return s.drive + `\` + rel, nil
+}
 
 func (s *appContainerScope) Start(ctx context.Context, launch Launch) (Process, error) {
 	if err := ctx.Err(); err != nil {
@@ -302,7 +412,11 @@ func (s *appContainerScope) Start(ctx context.Context, launch Launch) (Process, 
 	if launch.Command.Stdin != nil {
 		return nil, errAppContainerStdin
 	}
-	application, commandLine, err := containerCommandLine(launch.Command, s.spec.Workspace, launch.Dir)
+	application, commandLine, err := containerCommandLine(launch.Command)
+	if err != nil {
+		return nil, err
+	}
+	dir, err := s.commandDir(launch.Dir)
 	if err != nil {
 		return nil, err
 	}
@@ -311,7 +425,7 @@ func (s *appContainerScope) Start(ctx context.Context, launch Launch) (Process, 
 		return nil, err
 	}
 	processCtx, cancel := context.WithTimeout(s.lifetime, launch.Timeout)
-	started, err := s.create(application, commandLine, launch.Dir, job)
+	started, err := s.create(application, commandLine, dir, job)
 	if err != nil {
 		cancel()
 		windows.CloseHandle(job)
@@ -479,20 +593,12 @@ func containerJob() (windows.Handle, error) {
 }
 
 // containerCommandLine resolves the program on the host and quotes argv for
-// CreateProcess. Shell commands use the local backend's PowerShell invocation,
-// entered through the workspace drive, so a command means the same thing
-// under either backend.
-func containerCommandLine(command Command, workspace, dir string) (string, string, error) {
+// CreateProcess. Shell commands use the same PowerShell invocation as the
+// local backend, so a command means the same thing under either backend.
+func containerCommandLine(command Command) (string, string, error) {
 	if command.Shell != "" {
-		location := workspaceDrive + `:\`
-		if rel, err := filepath.Rel(workspace, dir); err == nil && rel != "." {
-			location += rel
-		}
-		script := "New-PSDrive -Name " + workspaceDrive + " -PSProvider FileSystem -Root " + psLiteral(workspace) + " | Out-Null\n" +
-			"Set-Location -LiteralPath " + psLiteral(location) + "\n" +
-			command.Shell
 		shell := filepath.Join(os.Getenv("SystemRoot"), "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
-		argv := []string{shell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script}
+		argv := []string{shell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command.Shell}
 		return shell, joinCommandLine(argv), nil
 	}
 	application, err := exec.LookPath(command.Executable)
@@ -504,10 +610,6 @@ func containerCommandLine(command Command, workspace, dir string) (string, strin
 	}
 	return application, joinCommandLine(append([]string{application}, command.Args...)), nil
 }
-
-// psLiteral quotes s as a PowerShell single-quoted string, in which only a
-// doubled quote is special.
-func psLiteral(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
 
 func joinCommandLine(argv []string) string {
 	quoted := make([]string, len(argv))
@@ -613,8 +715,7 @@ func goReadPaths(workspace string) []string {
 	return paths
 }
 
-// within reports whether path is inside one of roots, so a toolchain under the
-// module cache is granted once, with its parent.
+// within reports whether path is one of roots or inside one of them.
 func within(path string, roots []string) bool {
 	for _, root := range roots {
 		if rel, err := filepath.Rel(root, path); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {

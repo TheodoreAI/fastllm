@@ -244,6 +244,7 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 	if strings.TrimSpace(systemPrompt) == "" {
 		systemPrompt = DefaultSystemPrompt
 	}
+	systemPrompt += sandboxPromptNote(scope)
 
 	// Auto-discover workspace rules (AGENTS.md, CLAUDE.md, etc.)
 	discoveredRules := DiscoverWorkspaceRules(absWorkingDir)

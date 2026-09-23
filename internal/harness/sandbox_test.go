@@ -25,12 +25,13 @@ func TestSandboxOptionsLeaveAnUnsandboxedRunAlone(t *testing.T) {
 func TestSandboxOptionsRequireIsolationOrFail(t *testing.T) {
 	m := execution.NewManager()
 	defer m.Close(context.Background())
-	backend, available := execution.IsolatedBackend()
+	backend, _ := execution.IsolatedBackend()
+	ready := sandboxReady()
 	for attempt := 0; attempt < 2; attempt++ { // registering twice must be harmless
 		out, err := sandboxOptions(m, execution.Options{Workspace: t.TempDir()}, true)
-		if !available {
+		if ready != nil {
 			if err == nil {
-				t.Fatal("sandbox on a platform without an isolated backend did not fail")
+				t.Fatalf("sandbox not ready (%v) but options were granted: %+v", ready, out)
 			}
 			return
 		}
@@ -53,11 +54,11 @@ func TestTeaSandboxSettingValidatesAndPersists(t *testing.T) {
 		t.Fatal("invalid sandbox value accepted")
 	}
 
-	_, available := execution.IsolatedBackend()
 	err := m.setRuntimeValue("sandbox", "on")
-	if !available {
+	if ready := sandboxReady(); ready != nil {
+		// No backend, or setup not done: turning it on must be refused.
 		if err == nil || m.sandbox {
-			t.Fatalf("sandbox turned on without an isolated backend: err=%v on=%v", err, m.sandbox)
+			t.Fatalf("sandbox turned on while not ready (%v): err=%v on=%v", ready, err, m.sandbox)
 		}
 		return
 	}

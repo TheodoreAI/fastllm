@@ -21,7 +21,10 @@ func runReadingSecret(t *testing.T, sandbox bool, secret string) string {
 	args, _ := json.Marshal(map[string]string{"command": "Get-Content -LiteralPath " + quoted})
 	var toolResult string
 	mock := &mockLLM{turns: []func([]llm.Message) (llm.Message, error){
-		func([]llm.Message) (llm.Message, error) {
+		func(messages []llm.Message) (llm.Message, error) {
+			if sandbox && !strings.Contains(messages[0].Content, "isolated sandbox") {
+				t.Errorf("sandboxed run did not tell the model about the sandbox:\n%s", messages[0].Content)
+			}
 			call := llm.ToolCall{ID: "read-1", Type: "function"}
 			call.Function.Name = "run_command"
 			call.Function.Arguments = string(args)
@@ -44,6 +47,9 @@ func runReadingSecret(t *testing.T, sandbox bool, secret string) string {
 }
 
 func TestSandboxedRunCannotReadOutsideTheWorkspace(t *testing.T) {
+	if err := sandboxReady(); err != nil {
+		t.Skipf("sandbox not ready: %v", err)
+	}
 	secret := filepath.Join(t.TempDir(), "secret.txt")
 	if err := os.WriteFile(secret, []byte("HARNESS-SECRET-91c2"), 0o600); err != nil {
 		t.Fatal(err)

@@ -122,22 +122,29 @@ Grants persist and are recorded in the identity's own folder, and
 `RevokeIsolatedBackend` removes them and deletes the identity. Scratch state
 (`TEMP`, `GOCACHE`, `HOME`) lives in that folder, not the profile or workspace.
 
-Two platform details are load-bearing. A custom environment block must carry
-`LOCALAPPDATA`, or process creation fails with an unrelated environment error.
-And PowerShell rebuilds its location from the volume root, checking each
-directory; the container cannot read `C:\Users`, so shell commands run from a
-`Workspace:` PowerShell drive rooted at the workspace. `Get-Location` shows
-`Workspace:\`; `$PWD.ProviderPath` and native programs see the real path.
+Commands start in a drive letter mapped to the workspace, not at its host
+path. PowerShell needs read-attributes on every directory above its working
+directory, and Git for Windows, like other MSYS programs, needs list access on
+every one. Under `C:\Users` that would mean an administrator grant on
+`C:\Users` and exposing the names of everything in the user's home folder. A
+drive root has no directory above it, so the container needs no access outside
+the workspace. Each scope pushes its own definition of the letter and pops it
+on close; Windows stacks definitions, so scopes and processes on one workspace
+share a letter, and a definition left by a crash is reused and lasts until
+logoff. The drive shows in Explorer while mapped. A sandboxed run tells the
+model that commands see the workspace as that drive and should use
+workspace-relative paths; absolute host paths under `C:\Users` do not resolve
+inside commands. File tools keep the host path.
+
+A custom environment block must carry `LOCALAPPDATA`, or process creation
+fails with an unrelated environment error.
 
 The sandbox is opt-in: `/set sandbox on` in either terminal mode, saved with
 the session, or `-sandbox` on the command line. Child agents inherit it and
 cannot turn it off. Where no isolated backend exists, turning it on is refused
 and a sandboxed run fails rather than running unsandboxed. `-revoke-sandbox`
-removes the grants and the identity.
-
-Known gap: Git for Windows, like other MSYS programs, checks every directory
-above its working directory and fails on `C:\Users`, so git commands, and the
-checkpoints built on them, do not yet work inside the sandbox.
+removes the grants and the identity, asking for administrator approval first
+if an earlier version's grant on `C:\Users` is present.
 
 It does not isolate the workspace from the model: whatever a command prints is
 returned to the model, a legitimate channel no sandbox can close. It forwards no

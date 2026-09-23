@@ -262,6 +262,20 @@ func (m *Manager) open(ctx context.Context, opts Options, user bool) (*Scope, er
 
 func (s *Scope) Workspace() string { return s.workspace }
 
+// commandView is implemented by a backend that presents the workspace to
+// commands at a different path than the host's.
+type commandView interface{ CommandWorkspace() string }
+
+// CommandWorkspace is the workspace as this scope's commands see it. It equals
+// Workspace unless the backend maps the workspace elsewhere; file tools keep
+// using Workspace.
+func (s *Scope) CommandWorkspace() string {
+	if view, ok := s.backend.(commandView); ok {
+		return view.CommandWorkspace()
+	}
+	return s.workspace
+}
+
 // Backend names the backend executing this scope's commands.
 func (s *Scope) Backend() string { return s.backendName }
 
