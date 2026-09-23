@@ -20,11 +20,9 @@ import (
 )
 
 func TestInteractiveShellSupportsLS(t *testing.T) {
-	cmd := newInteractiveShellCommand("ls")
-	cmd.Dir = t.TempDir()
-	out, err := cmd.CombinedOutput()
+	out, err := runUserCommand(context.Background(), t.TempDir(), "ls")
 	if err != nil {
-		t.Fatalf("ls failed: %v\n%s", err, out)
+		t.Fatalf("ls failed: %v\n%s", err, out.Output)
 	}
 }
 

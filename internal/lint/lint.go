@@ -12,8 +12,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fastllm/internal/execution"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"time"
@@ -87,9 +87,15 @@ func Lint(ctx context.Context, absPath string) ([]Diagnostic, error) {
 	runCtx, cancel := context.WithTimeout(ctx, Timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(runCtx, binPath, "--format", "json", absPath)
-	cmd.Dir = workDir
-	output, _ := cmd.Output() // oxlint exits non-zero when it finds any diagnostics — that's not a failure here
+	result, err := execution.RunLocal(runCtx, workDir, execution.LocalPolicy(), execution.Command{Executable: binPath, Args: []string{"--format", "json", absPath}, Timeout: Timeout})
+	if err != nil {
+		return nil, err
+	}
+	if result.Truncated {
+		return nil, errors.New("lint output exceeded capture limit")
+	}
+	// A nonzero exit with JSON diagnostics is a normal lint result.
+	output := []byte(result.Stdout)
 
 	var parsed struct {
 		Diagnostics []struct {
