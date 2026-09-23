@@ -213,13 +213,17 @@ type teaModel struct {
 	expandedTools     bool
 	permissions       *PermissionController
 	pendingPermission *teaPermissionRequestMsg
-	skillsModal       bool
-	skillCursor       int
-	modelsModal       bool
-	modelCursor       int
-	changes           sessionChanges
-	gitWatchChan      <-chan struct{}
-	gitWatchStop      func()
+	// pendingPlan is a plan-mode run's submit_plan text awaiting the user's
+	// decision; planCursor indexes planApprovals.
+	pendingPlan  string
+	planCursor   int
+	skillsModal  bool
+	skillCursor  int
+	modelsModal  bool
+	modelCursor  int
+	changes      sessionChanges
+	gitWatchChan <-chan struct{}
+	gitWatchStop func()
 
 	// Diff modal viewer state
 	diffModal          bool
@@ -283,9 +287,10 @@ func newTeaModel(runner *Runner, req RunRequest) (*teaModel, error) {
 	if commandTimeout <= 0 {
 		commandTimeout = 60 * time.Second
 	}
-	permissionMode := req.PermissionMode
-	if permissionMode == "" {
-		permissionMode = PermissionAsk
+	// A terminal session can ask, so it starts in agent mode unless -mode chose.
+	permissionMode := PermissionAgent
+	if req.PermissionMode != "" {
+		permissionMode = NormalizeMode(req.PermissionMode)
 	}
 
 	ta := textarea.New()
@@ -475,6 +480,9 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
+		if m.pendingPlan != "" && !m.isExecuting {
+			return m.updatePlanApproval(msg)
+		}
 		if m.pendingPermission != nil {
 			if msg.Type == tea.KeyCtrlC {
 				m.resolvePermission(false, false)
@@ -696,9 +704,13 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.mode = modeAgent
 				m.input.Placeholder = "Ask a question, enter a task, or type /help..."
-				m.statusNotice = "Returned to Agent Mode."
+				m.statusNotice = "Returned to chat input."
 			}
 			cmds = append(cmds, m.clearStatusAfter(2*time.Second))
+			return m, tea.Batch(cmds...)
+
+		case tea.KeyShiftTab:
+			cmds = append(cmds, m.cyclePermissionMode())
 			return m, tea.Batch(cmds...)
 
 		case tea.KeyCtrlV:
@@ -943,6 +955,9 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.appendHistory(FormatTurnSummary(*ev.Metrics) + "\n\n")
 			}
 
+		case EventPlanProposed:
+			m.pendingPlan = ev.Response
+
 		case EventTaskFinished:
 			m.isExecuting = false
 			m.activeTool = ""
@@ -964,6 +979,11 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				response = ev.Result.FinalResponse
 			}
 			m.recordCompletedPrompt(response)
+			if m.pendingPlan != "" {
+				m.planCursor = 0
+				m.input.Blur()
+				m.statusNotice = "Plan ready: choose how to carry it out"
+			}
 		}
 		// Listen for next event
 		if m.eventChan != nil {
@@ -1652,7 +1672,9 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 	// Launch background task
 	go func() {
 		defer close(events)
-		if req.PermissionMode == PermissionAsk {
+		// The monitor calls this only for its Ask decisions, which exist only in
+		// agent mode; every other mode decides without asking.
+		{
 			req.Authorize = func(toolName, summary string) bool {
 				reply := make(chan permissionDecision, 1)
 				request := teaPermissionRequestMsg{ToolName: toolName, Summary: summary, Workspace: req.WorkingDir, Reply: reply}
@@ -2320,7 +2342,6 @@ func (m *teaModel) renderDiffModal() string {
 		lipgloss.WithWhitespaceBackground(tuiColorDarkBg))
 }
 
-
 func truncateText(value string, width int) string {
 	if width <= 0 {
 		return ""
@@ -2355,7 +2376,8 @@ func (m *teaModel) View() string {
 	// 1. Top Header Bar
 	var modeBadge string
 	if m.mode == modeAgent {
-		modeBadge = styleAgentBadge.Render("◈ AGENT")
+		modeBadge = styleAgentBadge.Foreground(permissionModeColor(m.permissionMode)).
+			Render("◈ " + strings.ToUpper(m.permissionMode.Label()))
 	} else {
 		modeBadge = styleShellBadge.Render("❯_ SHELL")
 	}
@@ -2421,6 +2443,9 @@ func (m *teaModel) View() string {
 		inputContent = FormatPermissionPrompt(m.pendingPermission.ToolName, m.pendingPermission.Summary) +
 			"\n" + FormatPermissionKeyLegend()
 		borderCol = tuiColorYellow
+	} else if m.pendingPlan != "" && !m.isExecuting {
+		inputContent = m.renderPlanApproval()
+		borderCol = tuiColorCyan
 	}
 	inputBox := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -2433,8 +2458,8 @@ func (m *teaModel) View() string {
 	// Hints drop to a short form rather than wrapping: the full string is ~97
 	// columns, so on a narrower terminal it silently became a second row and
 	// pushed the frame past the terminal height.
-	hints := "Tab: Mode  •  Enter: Send  •  ↑/↓: History  •  Ctrl+J: Newline  •  /copy: Copy  •  Ctrl+C: Quit"
-	shortHints := "Tab: Mode  •  Enter: Send  •  Ctrl+C: Quit"
+	hints := "Shift+Tab: Permissions  •  Tab: Shell  •  Enter: Send  •  ↑/↓: History  •  Ctrl+J: Newline  •  Ctrl+C: Quit"
+	shortHints := "Shift+Tab: Permissions  •  Enter: Send  •  Ctrl+C: Quit"
 	if m.mode == modeShell {
 		hints = "Tab: Agent  •  Enter: Run  •  ↑/↓: History  •  Ctrl+V: Paste  •  exit: Leave Shell"
 		shortHints = "Tab: Agent  •  Enter: Run  •  exit: Leave Shell"

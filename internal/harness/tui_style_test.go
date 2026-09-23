@@ -129,8 +129,8 @@ func TestFormatStatusCardAndModelsTable(t *testing.T) {
 	if !strings.Contains(status, "Session Status") || !strings.Contains(status, "150 total") {
 		t.Errorf("unexpected status card: %s", status)
 	}
-	runtime := FormatRuntimeCard(InteractiveRuntime{MaxTurns: 20, CommandTimeout: time.Minute, ThinkLevel: "high", AllowCommands: true, PermissionMode: PermissionAsk}, "session-1")
-	if !strings.Contains(runtime, "permissions") || !strings.Contains(runtime, "ask") {
+	runtime := FormatRuntimeCard(InteractiveRuntime{MaxTurns: 20, CommandTimeout: time.Minute, ThinkLevel: "high", AllowCommands: true, PermissionMode: PermissionAgent}, "session-1")
+	if !strings.Contains(runtime, "permissions") || !strings.Contains(runtime, "Agent") {
 		t.Errorf("runtime card missing permissions: %s", runtime)
 	}
 
@@ -225,4 +225,3 @@ func TestFormatTerminalBox(t *testing.T) {
 		t.Errorf("expected 'more lines' truncation hint:\n%s", truncPlain)
 	}
 }
-

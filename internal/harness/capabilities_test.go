@@ -49,7 +49,7 @@ func TestChildCapabilitiesCannotExpandParent(t *testing.T) {
 			r := NewRunner(mock, t.TempDir(), "test")
 			defer r.Close()
 			parent := RunRequest{WorkingDir: r.DefaultWorkingDir, Model: "test", AllowCommands: true,
-				PermissionMode: PermissionAuto, Capabilities: []string{"read", "delegate"}, NetworkPolicy: "none"}
+				PermissionMode: PermissionFull, Capabilities: []string{"read", "delegate"}, NetworkPolicy: "none"}
 			id, err := r.agents.Spawn(parent, "inspect", "", "", 1, SpawnOptions{Capabilities: tc.requested, NetworkPolicy: "public"})
 			if err != nil {
 				t.Fatal(err)
@@ -115,7 +115,7 @@ func TestRunnerCapabilityToolCatalog(t *testing.T) {
 			mock := &mockLLM{}
 			r := NewRunner(mock, t.TempDir(), "test")
 			defer r.Close()
-			_, err := r.Run(context.Background(), RunRequest{Task: "inspect", Capabilities: tc.caps, NetworkPolicy: tc.network}, nil)
+			_, err := r.Run(context.Background(), RunRequest{Task: "inspect", PermissionMode: PermissionFull, Capabilities: tc.caps, NetworkPolicy: tc.network}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -149,7 +149,7 @@ func TestDispatcherRejectsForgedRestrictedTools(t *testing.T) {
 			}
 			r := NewRunner(nil, root, "test")
 			defer r.Close()
-			result := r.executeTool(toolExecutionContext{ctx: context.Background(), request: RunRequest{Capabilities: []string{}},
+			result := r.executeTool(toolExecutionContext{ctx: context.Background(), request: RunRequest{PermissionMode: PermissionFull, AllowCommands: true, Capabilities: []string{}},
 				workingDir: root, fileReader: files.New(root, true), allowCommands: true}, tc.name, tc.args)
 			if !strings.Contains(result.output, "disabled") && !strings.Contains(result.output, "denied") {
 				t.Fatalf("tool escaped: %s", result.output)
@@ -164,7 +164,9 @@ func TestDispatcherRejectsForgedRestrictedTools(t *testing.T) {
 
 func TestRestrictedShellPathsCannotRun(t *testing.T) {
 	for _, req := range []RunRequest{
-		{NetworkPolicy: "none"}, {Capabilities: []string{"write", "commands"}}, {Capabilities: []string{"network", "commands"}},
+		{PermissionMode: PermissionFull, AllowCommands: true, NetworkPolicy: "none"},
+		{PermissionMode: PermissionFull, AllowCommands: true, Capabilities: []string{"write", "commands"}},
+		{PermissionMode: PermissionFull, AllowCommands: true, Capabilities: []string{"network", "commands"}},
 	} {
 		for _, tc := range []struct{ name, args string }{
 			{"run_command", `{"command":"echo escaped"}`},
@@ -176,7 +178,7 @@ func TestRestrictedShellPathsCannotRun(t *testing.T) {
 			for _, live := range []bool{false, true} {
 				result := r.executeTool(toolExecutionContext{ctx: context.Background(), request: req, workingDir: root,
 					fileReader: files.New(root, true), allowCommands: true, liveCommandOutput: live}, tc.name, tc.args)
-				if !strings.Contains(result.output, "disabled") {
+				if !strings.Contains(result.output, "denied") {
 					t.Fatalf("restricted command executed: %s", result.output)
 				}
 			}

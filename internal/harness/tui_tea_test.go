@@ -377,7 +377,7 @@ func TestTeaRuntimeSettingsValidateAndPersistValues(t *testing.T) {
 			t.Fatalf("set %s: %v", tc.name, err)
 		}
 	}
-	if m.maxTurns != 42 || m.commandTimeout != 90*time.Second || m.thinkLevel != "high" || m.allowCommands || m.permissionMode != PermissionReadOnly || !m.expandedTools {
+	if m.maxTurns != 42 || m.commandTimeout != 90*time.Second || m.thinkLevel != "high" || m.allowCommands || m.permissionMode != PermissionPlan || !m.expandedTools {
 		t.Fatalf("unexpected runtime state: %+v", m.runtimeSettings())
 	}
 	if len(m.permissionController().ActiveGrants()) != 0 {
@@ -393,7 +393,7 @@ func TestTeaSessionRoundTripIncludesMetricsAndMessages(t *testing.T) {
 	m := &teaModel{
 		workingDir: t.TempDir(), modelName: "test-model", sessionStore: store,
 		maxTurns: 20, commandTimeout: time.Minute, allowCommands: true,
-		permissionMode:  PermissionAsk,
+		permissionMode:  PermissionAgent,
 		sessionMessages: []llm.Message{{Role: "user", Content: "remember this"}, {Role: "assistant", Content: "remembered"}},
 		sessionMetrics:  SessionMetrics{TotalTurns: 2, TotalTokens: 123},
 	}
@@ -405,7 +405,7 @@ func TestTeaSessionRoundTripIncludesMetricsAndMessages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(loaded.Messages) != 2 || loaded.Metrics.TotalTokens != 123 || loaded.Runtime.PermissionMode != PermissionAsk {
+	if len(loaded.Messages) != 2 || loaded.Metrics.TotalTokens != 123 || loaded.Runtime.PermissionMode != PermissionAgent {
 		t.Fatalf("loaded session = %+v", loaded)
 	}
 }
@@ -416,7 +416,7 @@ func TestTeaCompactSessionContextTrimsUnboundedTranscript(t *testing.T) {
 	m := &teaModel{
 		workingDir: t.TempDir(), modelName: "test-model", sessionStore: store,
 		maxTurns: 20, commandTimeout: time.Minute, allowCommands: true,
-		permissionMode: PermissionAsk,
+		permissionMode: PermissionAgent,
 	}
 	// Well past the budget, and long enough that KeepRecentMessages cannot hold it all.
 	turn := strings.Repeat("x", 4000)
@@ -544,7 +544,7 @@ func TestFailedTurnIsReportedExactlyOnce(t *testing.T) {
 		workingDir: tmp, modelName: "test-model",
 		input: ta, viewport: viewport.New(80, 10), ready: true, width: 80,
 		maxTurns: 3, commandTimeout: time.Minute,
-		permissionMode: PermissionAuto,
+		permissionMode: PermissionFull,
 		permissionChan: make(chan teaPermissionRequestMsg),
 	}
 
@@ -573,7 +573,7 @@ func TestPreflightFailureStillReportsOnce(t *testing.T) {
 		workingDir: string([]byte{0}), modelName: "test-model",
 		input: ta, viewport: viewport.New(80, 10), ready: true, width: 80,
 		maxTurns: 3, commandTimeout: time.Minute,
-		permissionMode: PermissionAuto,
+		permissionMode: PermissionFull,
 		permissionChan: make(chan teaPermissionRequestMsg),
 	}
 
@@ -745,7 +745,7 @@ func newBusyModel(t *testing.T, client LLMClient) *teaModel {
 		runner: NewRunner(client, tmp, "test-model"), workingDir: tmp, modelName: "test-model",
 		input: ta, viewport: viewport.New(80, 10), ready: true, width: 80,
 		maxTurns: 2, commandTimeout: time.Minute,
-		permissionMode: PermissionAuto,
+		permissionMode: PermissionFull,
 		permissionChan: make(chan teaPermissionRequestMsg),
 	}
 }

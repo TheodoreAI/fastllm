@@ -34,6 +34,16 @@ func (h *Handler) HarnessRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "task description is required", http.StatusBadRequest)
 		return
 	}
+	// An omitted mode runs as plan (read-only); a misspelled one is an error
+	// rather than silently read-only, so the caller learns why nothing changed.
+	if strings.TrimSpace(string(req.PermissionMode)) != "" {
+		mode, err := harness.ParsePermissionMode(string(req.PermissionMode))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		req.PermissionMode = mode
+	}
 
 	if req.WorkingDir == "" {
 		if root := h.Files.GetRoot(); root != "" {

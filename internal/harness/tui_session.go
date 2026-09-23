@@ -76,7 +76,7 @@ func (m *teaModel) loadSession(session *InteractiveSession) error {
 	m.thinkLevel = session.Runtime.ThinkLevel
 	m.allowCommands = session.Runtime.AllowCommands
 	if session.Runtime.PermissionMode != "" {
-		m.permissionMode = session.Runtime.PermissionMode
+		m.permissionMode = loadedPermissionMode(session.Runtime.PermissionMode)
 	}
 	m.expandedTools = session.Runtime.ExpandedTools
 	m.sandbox = session.Runtime.Sandbox
@@ -499,8 +499,9 @@ func (m *teaModel) setRuntimeValue(name, value string) error {
 		if err != nil {
 			return err
 		}
-		m.permissionMode = mode
-		m.permissionController().SetMode(mode)
+		if err := m.setPermissionMode(mode); err != nil {
+			return err
+		}
 	case "output":
 		if value == "expanded" {
 			m.expandedTools = true

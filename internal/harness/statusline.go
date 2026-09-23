@@ -43,17 +43,9 @@ func FormatStatusLine(s StatusLine) string {
 		parts = append(parts, ColorCyan(s.Model))
 	}
 
-	if mode := strings.TrimSpace(string(s.PermissionMode)); mode != "" {
-		// Permission mode decides whether the agent can touch the filesystem, so
-		// the two non-default modes are coloured rather than left as grey chrome.
-		switch s.PermissionMode {
-		case PermissionAuto:
-			parts = append(parts, ColorYellow(mode))
-		case PermissionReadOnly:
-			parts = append(parts, ColorGreen(mode))
-		default:
-			parts = append(parts, ColorGray(mode))
-		}
+	if strings.TrimSpace(string(s.PermissionMode)) != "" {
+		// The mode decides what the agent may touch, so it is always coloured.
+		parts = append(parts, colorForMode(s.PermissionMode)(strings.ToLower(s.PermissionMode.Label())))
 	}
 
 	if s.ContextBudget > 0 {
@@ -182,4 +174,19 @@ func terminalWidth() int {
 		return width
 	}
 	return 0
+}
+
+// colorForMode is the one colour per mode shared by every surface that shows
+// it: plan cyan, agent grey, edit green, full-access yellow.
+func colorForMode(mode PermissionMode) func(string) string {
+	switch NormalizeMode(mode) {
+	case PermissionPlan:
+		return ColorCyan
+	case PermissionEdit:
+		return ColorGreen
+	case PermissionFull:
+		return ColorYellow
+	default:
+		return ColorGray
+	}
 }

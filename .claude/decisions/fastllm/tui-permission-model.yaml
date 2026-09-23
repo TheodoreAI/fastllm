@@ -1,3 +1,3 @@
-value: Three session-scoped modes for model-initiated mutations: ask by default, read-only removes mutating tools, and auto permits autonomous execution. Ask supports once/session-tool/deny; grants are never persisted or restored.
-reason: Ask is the safest usable default, read-only provides a hard capability boundary, and auto preserves unattended workflows; direct user-entered shell commands are already explicit authorization and do not reprompt.
-decided_at: 2026-09-19T21:05:55+00:00
+value: Four session modes enforced by one reference monitor (internal/harness/monitor.go): plan (read-only, no network, ends in submit_plan + user approval to agent/edit/full), agent (ask per mutating call; default in TUI), edit (file edits unasked, no subprocess/then_run/delegation), full (unasked). Shift+Tab cycles in the TUI; mode changes refused mid-turn; grants never persisted; legacy ask/read-only/auto accepted.
+reason: User wants the harness to act like a kernel treating the LLM as untrusted: modes must be enforced (tool list, dispatch, broker, file writer are all views of one authorize), not prompt-only. Considered keeping 3 modes + prompt injection for plan; rejected as prompt-only enforcement.
+decided_at: 2026-09-23T20:52:09+00:00

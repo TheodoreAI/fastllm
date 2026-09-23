@@ -59,8 +59,8 @@ type RunRequest struct {
 	AgentDepth     int            `json:"-"`
 	AgentInbox     <-chan string  `json:"-"`
 	PermissionMode PermissionMode `json:"permission_mode,omitempty"`
-	// Authorize is an optional interactive approval callback used by terminal
-	// clients in ask mode. Non-interactive callers leave it nil.
+	// Authorize answers the monitor's Ask decisions (agent mode) by asking the
+	// user. Nil means nobody can be asked, and every Ask is denied.
 	Authorize func(toolName, summary string) bool `json:"-"`
 
 	// StreamTokens makes the run emit EventTokenDelta as assistant text arrives,
@@ -115,6 +115,11 @@ type RunResult struct {
 	DurationMS    int64           `json:"duration_ms"`
 	Metrics       *SessionMetrics `json:"metrics,omitempty"`
 	Error         string          `json:"error,omitempty"`
+	// ProposedPlan is set when a plan-mode run ends with submit_plan. It is a
+	// proposal only: carrying it out needs the user to choose a mode.
+	ProposedPlan string `json:"proposed_plan,omitempty"`
+	// PermissionMode is the mode the run was actually evaluated under.
+	PermissionMode PermissionMode `json:"permission_mode,omitempty"`
 }
 
 // EventType distinguishes streamable harness progress events.
@@ -134,6 +139,8 @@ const (
 	// for the current turn: the text was a tool call written as prose, or the
 	// stream failed and is about to be retried from the beginning.
 	EventTokenDiscard EventType = "token_discard"
+	// EventPlanProposed carries a plan-mode run's submit_plan text in Response.
+	EventPlanProposed EventType = "plan_proposed"
 )
 
 // Event is emitted in real time during a harness run.
