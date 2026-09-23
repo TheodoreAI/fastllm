@@ -103,6 +103,7 @@ func Watch(ctx context.Context, root string) (changes <-chan struct{}, stop func
 		filepath.Join(gitDir, "refs"),
 		filepath.Join(gitDir, "refs", "heads"),
 		filepath.Join(gitDir, "refs", "tags"),
+		filepath.Join(gitDir, "refs", "remotes"),
 	}
 	for _, dir := range watchTargets {
 		// Best-effort: refs/tags (etc.) may not exist in a fresh repo with
@@ -110,6 +111,13 @@ func Watch(ctx context.Context, root string) (changes <-chan struct{}, stop func
 		// there, not a failure of the whole watcher.
 		_ = w.Add(dir)
 	}
+	_ = filepath.WalkDir(filepath.Join(gitDir, "refs"), func(path string, d fs.DirEntry, err error) error {
+		if err == nil && d != nil && d.IsDir() {
+			_ = w.Add(path)
+		}
+		return nil
+	})
+	_ = w.Add(filepath.Join(gitDir, "index"))
 
 	out := make(chan struct{}, 1)
 	done := make(chan struct{})

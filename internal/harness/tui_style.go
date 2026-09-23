@@ -339,6 +339,140 @@ func FormatToolResult(toolName, result string, maxPreviewLines int) string {
 	return b.String()
 }
 
+// TerminalBoxOptions configures the rendering of a command execution inside a terminal box.
+type TerminalBoxOptions struct {
+	Command     string
+	Output      string
+	Width       int
+	ExitCode    int
+	Duration    time.Duration
+	IsError     bool
+	Canceled    bool
+	MaxLines    int
+	AgentCalled bool
+}
+
+// FormatTerminalBox renders a command execution inside a styled terminal box frame.
+func FormatTerminalBox(opts TerminalBoxOptions) string {
+	width := opts.Width
+	if width <= 0 {
+		width = 76
+	}
+	contentWidth := width - 4
+	if contentWidth < 10 {
+		contentWidth = 10
+		width = contentWidth + 4
+	}
+
+	var b strings.Builder
+
+	// Title
+	title := "terminal"
+	titleColor := ColorYellow
+	if opts.AgentCalled {
+		title = "terminal " + SymDot + " agent"
+		titleColor = ColorCyan
+	}
+
+	// 1. Top border: ╭─ terminal ─────────────────────────╮
+	b.WriteString(ColorGray(SymCornerTL + SymHLine + " "))
+	b.WriteString(titleColor(StyleBold(title)))
+	b.WriteString(" ")
+	titleVisLen := VisualLen(title)
+	topDashes := width - titleVisLen - 5
+	if topDashes < 2 {
+		topDashes = 2
+	}
+	b.WriteString(ColorGray(strings.Repeat(SymHLine, topDashes) + SymCornerTR + "\n"))
+
+	// 2. Command Prompt line: │ ❯ command                 │
+	cmdText := strings.TrimSpace(opts.Command)
+	prompt := ColorGreen(StyleBold(SymPrompt)) + " " + ColorBrightWhite(cmdText)
+	b.WriteString(formatTerminalBoxLine(prompt, contentWidth) + "\n")
+
+	// 3. Divider: ├─────────────────────────────────────────┤
+	b.WriteString(ColorGray(SymTeeL + strings.Repeat(SymHLine, width-2) + SymTeeR + "\n"))
+
+	// 4. Output lines
+	output := strings.TrimRight(opts.Output, "\r\n")
+	var rawLines []string
+	if output != "" {
+		rawLines = strings.Split(output, "\n")
+	}
+
+	showLines := rawLines
+	truncatedCount := 0
+	if opts.MaxLines > 0 && len(rawLines) > opts.MaxLines {
+		showLines = rawLines[:opts.MaxLines]
+		truncatedCount = len(rawLines) - opts.MaxLines
+	}
+
+	if len(showLines) == 0 {
+		if opts.Canceled {
+			b.WriteString(formatTerminalBoxLine(ColorGray("[Command canceled]"), contentWidth) + "\n")
+		} else if opts.IsError {
+			b.WriteString(formatTerminalBoxLine(ColorRed("[Command failed]"), contentWidth) + "\n")
+		} else {
+			b.WriteString(formatTerminalBoxLine(ColorGray("(no output)"), contentWidth) + "\n")
+		}
+	} else {
+		for _, line := range showLines {
+			line = strings.TrimRight(line, "\r")
+			b.WriteString(formatTerminalBoxLine(ColorGray(line), contentWidth) + "\n")
+		}
+		if truncatedCount > 0 {
+			hint := fmt.Sprintf("... %d more lines ...", truncatedCount)
+			b.WriteString(formatTerminalBoxLine(ColorGray(hint), contentWidth) + "\n")
+		}
+	}
+
+	// 5. Footer: ╰─ ✓ exit 0 · 120ms ───────────────────────╯
+	var statusSym, statusMsg string
+	if opts.Canceled {
+		statusSym = ColorYellow("⊘")
+		statusMsg = ColorYellow("canceled")
+	} else if opts.IsError || opts.ExitCode != 0 {
+		statusSym = ColorRed(SymCross)
+		if opts.ExitCode != 0 {
+			statusMsg = ColorRed(fmt.Sprintf("exit %d", opts.ExitCode))
+		} else {
+			statusMsg = ColorRed("error")
+		}
+	} else {
+		statusSym = ColorGreen(SymCheck)
+		statusMsg = ColorGreen("exit 0")
+	}
+
+	durStr := ""
+	if opts.Duration > 0 {
+		durStr = fmt.Sprintf(" · %.1fs", opts.Duration.Seconds())
+		if opts.Duration < time.Second {
+			durStr = fmt.Sprintf(" · %dms", opts.Duration.Milliseconds())
+		}
+	}
+
+	footerContent := fmt.Sprintf("%s %s%s", statusSym, statusMsg, ColorGray(durStr))
+	footerVisLen := VisualLen(footerContent)
+	bottomDashes := width - footerVisLen - 5
+	if bottomDashes < 2 {
+		bottomDashes = 2
+	}
+	b.WriteString(ColorGray(SymCornerBL+SymHLine+" ") + footerContent + " " + ColorGray(strings.Repeat(SymHLine, bottomDashes)+SymCornerBR))
+
+	return b.String()
+}
+
+func formatTerminalBoxLine(content string, contentWidth int) string {
+	clamped := clampToWidth(content, contentWidth)
+	vLen := VisualLen(clamped)
+	padding := contentWidth - vLen
+	if padding < 0 {
+		padding = 0
+	}
+	return ColorGray(SymVLine) + " " + clamped + strings.Repeat(" ", padding) + " " + ColorGray(SymVLine)
+}
+
+
 // FormatMarkdown renders Markdown structures with a default width of 76 characters.
 func FormatMarkdown(markdown string) string {
 	return FormatMarkdownWidth(markdown, 76)
@@ -573,13 +707,15 @@ func FormatHelp() string {
 	})
 
 	renderSection("Models & Endpoints", []cmdEntry{
-		{"/models, /model", "List configured model endpoints"},
+		{"/models, /model", "Open interactive model selector modal (Alt+M)"},
 		{"/model <name>", "Switch active model (e.g. /model llama3.1)"},
 		{"/models add <id> <url>", "Register a new inference endpoint in config.json"},
 	})
 
 	renderSection("Git & Checkpoints", []cmdEntry{
-		{"/diff", "Syntax-highlighted git diff of uncommitted changes"},
+		{"/changes [file]", "Inspect changed files list & per-file diff modal (Alt+C / Ctrl+O)"},
+		{"/diff [file]", "Syntax-highlighted diff of uncommitted changes (or inspect file)"},
+		{"/discard [file|all]", "Discard uncommitted edits for a file or all files ('x' in diff modal)"},
 		{"/undo", "Rollback working directory to pre-turn git checkpoint"},
 		{"/rules", "Inspect discovered workspace instruction files"},
 		{"/skills [list|name] [task]", "List, inspect, or run an installed skill"},
@@ -800,4 +936,26 @@ func FormatPermissionKeyLegend() string {
 		ColorGreen("[a]") + " all this session   " +
 		ColorRed("[n]") + " deny   " +
 		ColorGray("(enter or esc denies)")
+}
+
+// FormatUntrackedAsDiff formats new or untracked file content as a unified diff with additions.
+func FormatUntrackedAsDiff(path, content string) string {
+	var b strings.Builder
+	cleanPath := filepath.ToSlash(path)
+	b.WriteString(fmt.Sprintf("diff --git a/%s b/%s\n", cleanPath, cleanPath))
+	b.WriteString("new file mode 100644\n")
+	b.WriteString("--- /dev/null\n")
+	b.WriteString(fmt.Sprintf("+++ b/%s\n", cleanPath))
+
+	trimmed := strings.TrimRight(content, "\r\n")
+	if trimmed == "" {
+		b.WriteString("@@ -0,0 +0,0 @@\n")
+		return b.String()
+	}
+	lines := strings.Split(trimmed, "\n")
+	b.WriteString(fmt.Sprintf("@@ -0,0 +1,%d @@\n", len(lines)))
+	for _, l := range lines {
+		b.WriteString("+" + strings.TrimRight(l, "\r") + "\n")
+	}
+	return b.String()
 }
