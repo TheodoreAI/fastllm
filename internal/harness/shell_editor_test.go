@@ -149,3 +149,139 @@ func TestClassifyShellCommandEditAlias(t *testing.T) {
 		t.Errorf("edit my_script.py: should resolve to an editor, not standard command")
 	}
 }
+
+func TestClassifyShellCommandGH(t *testing.T) {
+	tests := []struct {
+		cmd  string
+		want CommandKind
+	}{
+		{"gh auth login", CmdKindInteractive},
+		{"gh auth refresh", CmdKindInteractive},
+		{"gh auth switch", CmdKindInteractive},
+		{"gh auth setup-git", CmdKindInteractive},
+		{"gh auth status", CmdKindStandard},
+		{"gh auth token", CmdKindStandard},
+		{"gh copilot", CmdKindInteractive},
+		{"gh browse", CmdKindInteractive},
+		{"gh pr view 42 --web", CmdKindInteractive},
+		{"gh pr list -w", CmdKindInteractive},
+		{"gh pr create", CmdKindInteractive},
+		{"gh pr create --title 'Fix' --body 'Done'", CmdKindStandard},
+		{"gh pr create -t Fix -b Done", CmdKindStandard},
+		{"gh pr create --fill", CmdKindStandard},
+		{"gh pr create --fill-first", CmdKindStandard},
+		{"gh pr checkout", CmdKindInteractive},
+		{"gh pr checkout 123", CmdKindStandard},
+		{"gh pr checkout feat-branch", CmdKindStandard},
+		{"gh pr list", CmdKindStandard},
+		{"gh pr status", CmdKindStandard},
+		{"gh pr checks", CmdKindStandard},
+		{"gh pr diff", CmdKindStandard},
+		{"gh run list", CmdKindStandard},
+		{"gh run view 123", CmdKindStandard},
+		{"gh issue create", CmdKindInteractive},
+		{"gh issue create -t bug -b broken", CmdKindStandard},
+		{"gh issue list", CmdKindStandard},
+		{"gh repo create", CmdKindInteractive},
+		{"gh repo fork", CmdKindInteractive},
+		{"gh repo fork --clone=true", CmdKindStandard},
+		{"gh repo clone owner/repo", CmdKindStandard},
+	}
+
+	for _, tc := range tests {
+		spec := ClassifyShellCommand(tc.cmd, ".")
+		if spec.Kind != tc.want {
+			t.Errorf("command %q: want kind %v, got %v", tc.cmd, tc.want, spec.Kind)
+		}
+		if tc.want == CmdKindInteractive && spec.Cmd == nil {
+			t.Errorf("command %q: expected non-nil exec.Cmd for interactive kind", tc.cmd)
+		}
+	}
+}
+
+func TestClassifyShellCommandGit(t *testing.T) {
+	tests := []struct {
+		cmd  string
+		want CommandKind
+	}{
+		{"git commit", CmdKindInteractive},
+		{"git commit -m 'Initial commit'", CmdKindStandard},
+		{"git commit --message 'Initial commit'", CmdKindStandard},
+		{"git commit -m 'Fix' -e", CmdKindInteractive},
+		{"git commit --no-edit", CmdKindStandard},
+		{"git add -p", CmdKindInteractive},
+		{"git add --patch", CmdKindInteractive},
+		{"git add -i", CmdKindInteractive},
+		{"git add .", CmdKindStandard},
+		{"git rebase -i HEAD~2", CmdKindInteractive},
+		{"git rebase main", CmdKindStandard},
+		{"git checkout -p", CmdKindInteractive},
+		{"git reset -p", CmdKindInteractive},
+		{"git restore -p", CmdKindInteractive},
+		{"git status", CmdKindStandard},
+		{"git log --oneline -n 10", CmdKindStandard},
+		{"git diff", CmdKindStandard},
+	}
+
+	for _, tc := range tests {
+		spec := ClassifyShellCommand(tc.cmd, ".")
+		if spec.Kind != tc.want {
+			t.Errorf("command %q: want kind %v, got %v", tc.cmd, tc.want, spec.Kind)
+		}
+	}
+}
+
+func TestClassifyShellCommandREPLsAndTUIs(t *testing.T) {
+	tests := []struct {
+		cmd  string
+		want CommandKind
+	}{
+		{"python", CmdKindInteractive},
+		{"python -i", CmdKindInteractive},
+		{"python main.py", CmdKindStandard},
+		{"python -c 'print(1)'", CmdKindStandard},
+		{"node", CmdKindInteractive},
+		{"node server.js", CmdKindStandard},
+		{"lazygit", CmdKindInteractive},
+		{"htop", CmdKindInteractive},
+		{"fzf", CmdKindInteractive},
+		{"sudo htop", CmdKindInteractive},
+		{"bash", CmdKindInteractive},
+		{"bash script.sh", CmdKindStandard},
+		{"zsh", CmdKindInteractive},
+	}
+
+	for _, tc := range tests {
+		spec := ClassifyShellCommand(tc.cmd, ".")
+		if spec.Kind != tc.want {
+			t.Errorf("command %q: want kind %v, got %v", tc.cmd, tc.want, spec.Kind)
+		}
+	}
+}
+
+func TestClassifyShellCommandOverrides(t *testing.T) {
+	// Colon prefix forces interactive
+	spec := ClassifyShellCommand(":my-script.sh", ".")
+	if spec.Kind != CmdKindInteractive {
+		t.Errorf("want CmdKindInteractive for :my-script.sh, got %v", spec.Kind)
+	}
+
+	// 'run -i' prefix forces interactive
+	spec2 := ClassifyShellCommand("run -i my-script.sh", ".")
+	if spec2.Kind != CmdKindInteractive {
+		t.Errorf("want CmdKindInteractive for 'run -i my-script.sh', got %v", spec2.Kind)
+	}
+
+	// 'term' prefix forces interactive
+	spec3 := ClassifyShellCommand("term my-script.sh", ".")
+	if spec3.Kind != CmdKindInteractive {
+		t.Errorf("want CmdKindInteractive for 'term my-script.sh', got %v", spec3.Kind)
+	}
+
+	// 'run -b' forces standard (batch)
+	spec4 := ClassifyShellCommand("run -b gh pr create", ".")
+	if spec4.Kind != CmdKindStandard {
+		t.Errorf("want CmdKindStandard for 'run -b gh pr create', got %v", spec4.Kind)
+	}
+}
+
