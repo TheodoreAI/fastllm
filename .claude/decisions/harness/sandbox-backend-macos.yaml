@@ -1,0 +1,3 @@
+value: macOS isolated backend = Seatbelt via /usr/bin/sandbox-exec, wrapping the local backend: deny-default SBPL profile; reads limited to system dirs + workspace + private scratch + go env GOROOT/GOMODCACHE; writes only workspace + scratch; no network; HOME/TMPDIR/GOCACHE in scratch; paths passed as -D params; Available probes a deny-default profile; nothing persistent to revoke. Profile generation is untagged (tested on every OS); containment tests are darwin-only and not yet run on a Mac
+reason: Mirror the Windows AppContainer grant set; home unreadable so ~/.ssh etc. stay out; sandbox-exec is deprecated but used by Codex/Bazel/Chromium and fails closed via Available if removed
+decided_at: 2026-09-24T03:31:32+00:00

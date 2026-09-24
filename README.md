@@ -294,8 +294,10 @@ inherit this restriction and cannot relax it to `"public"`. Public-web tools
 continue to reject private/local destinations. These policies govern model tools;
 they do not block requests to the configured LLM endpoint.
 
-Model shells are **not OS-sandboxed**: they can write files and make network
-requests. Consequently, `commands` also requires both `write` and `network`;
+Model shells are **not OS-sandboxed** by default: they can write files and make
+network requests. `/set sandbox on` (or `-sandbox`) runs them isolated, with no
+network and no access outside the workspace, on Windows (AppContainer) and macOS
+(Seatbelt); see `docs/execution-boundary.md`. Consequently, `commands` also requires both `write` and `network`;
 with either denied, foreground commands, background commands, and fused
 `then_run` commands are blocked. A blocked fused command also prevents its file
 mutation. When shells are enabled, environment filtering removes variables whose

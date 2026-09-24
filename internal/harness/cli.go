@@ -47,7 +47,7 @@ func RunCLI(args []string) int {
 	thinkFlag := fs.String("think", "", "Reasoning effort level (e.g. low, medium, high)")
 	noCmdsFlag := fs.Bool("no-commands", false, "Disable the run_command tool")
 	modeFlag := fs.String("mode", "", "Permission mode: plan, agent, edit, or full. A -task run defaults to plan (read-only) and cannot ask, so agent-mode changes are denied; use edit or full for unattended changes. The TUI also starts in plan; approve a plan or press Shift+Tab to raise it.")
-	sandboxFlag := fs.Bool("sandbox", false, "Run commands isolated from the rest of this machine, with no network (Windows only for now)")
+	sandboxFlag := fs.Bool("sandbox", false, "Run commands isolated from the rest of this machine, with no network (Windows and macOS)")
 	revokeSandboxFlag := fs.Bool("revoke-sandbox", false, "Remove every permission the sandbox was granted and delete its identity, then exit")
 	revokeSetupSID := fs.String(revokeSetupFlag, "", "Internal: the elevated half of -revoke-sandbox")
 	setupReport := fs.String(reportFlag, "", "Internal: where the elevated half reports its result")
