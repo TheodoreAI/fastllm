@@ -162,6 +162,8 @@ func RunCLI(args []string) int {
 	// detection as the fallback.
 	client.SendThink = config.ShouldSendThink(matched, baseURL)
 	if matched != nil {
+		client.WireAPI = matched.WireAPI
+		client.Headers = matched.ResolveHeaders()
 		applyModelParameters(client, matched.Parameters)
 	}
 

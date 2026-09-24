@@ -153,3 +153,26 @@ func utf16be(s string) []byte {
 	}
 	return out
 }
+
+func TestResolveHeaders(t *testing.T) {
+	t.Setenv("TEST_OPENAI_API_KEY", "secret-test-key")
+
+	endpoint := &ModelEndpoint{
+		ID:      "gpt-5.3-codex",
+		WireAPI: "responses",
+		Headers: map[string]string{
+			"X-Custom-Header": "custom-val",
+		},
+		EnvHTTPHeaders: map[string]string{
+			"api-key": "TEST_OPENAI_API_KEY",
+		},
+	}
+
+	headers := endpoint.ResolveHeaders()
+	if headers["X-Custom-Header"] != "custom-val" {
+		t.Fatalf("expected X-Custom-Header=custom-val, got %q", headers["X-Custom-Header"])
+	}
+	if headers["api-key"] != "secret-test-key" {
+		t.Fatalf("expected api-key=secret-test-key, got %q", headers["api-key"])
+	}
+}
