@@ -99,7 +99,7 @@ type PermissionController struct {
 
 func NewPermissionController(mode PermissionMode, source any) *PermissionController {
 	if mode == "" {
-		mode = PermissionAgent
+		mode = PermissionPlan
 	}
 	var input interactiveInput
 	switch value := source.(type) {

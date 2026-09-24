@@ -86,8 +86,9 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 		cmdTimeout = 60 * time.Second
 	}
 	thinkLevel := initialReq.ThinkLevel
-	// A terminal session can ask, so it starts in agent mode unless -mode chose.
-	permissionMode := PermissionAgent
+	// Sessions start in plan mode (read-only) unless -mode chose: nothing
+	// changes until a plan is approved or the mode is raised with Shift+Tab.
+	permissionMode := PermissionPlan
 	if initialReq.PermissionMode != "" {
 		permissionMode = NormalizeMode(initialReq.PermissionMode)
 	}
@@ -1176,7 +1177,7 @@ func interactiveTools(allowCommands bool, permissionMode PermissionMode, enableO
 // the new modes; anything unreadable fails closed to plan.
 func loadedPermissionMode(stored PermissionMode) PermissionMode {
 	if stored == "" {
-		return PermissionAgent
+		return PermissionPlan
 	}
 	return NormalizeMode(stored)
 }

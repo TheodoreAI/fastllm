@@ -135,3 +135,14 @@ func TestKeepPlanningLeavesModeUnchanged(t *testing.T) {
 		t.Fatalf("esc: mode=%q pending=%q executing=%v", m.permissionMode, m.pendingPlan, m.isExecuting)
 	}
 }
+
+// Sessions default to plan: an unset mode, whether from an old saved session
+// or a controller built without one, is read-only until raised.
+func TestUnsetModeDefaultsToPlan(t *testing.T) {
+	if got := loadedPermissionMode(""); got != PermissionPlan {
+		t.Fatalf("a saved session without a mode loads as %q", got)
+	}
+	if got := NewPermissionController("", nil).Mode; got != PermissionPlan {
+		t.Fatalf("a controller without a mode starts as %q", got)
+	}
+}

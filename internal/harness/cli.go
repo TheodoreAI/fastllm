@@ -43,7 +43,7 @@ func RunCLI(args []string) int {
 	systemFlag := fs.String("system", "", "Custom system prompt override")
 	thinkFlag := fs.String("think", "", "Reasoning effort level (e.g. low, medium, high)")
 	noCmdsFlag := fs.Bool("no-commands", false, "Disable the run_command tool")
-	modeFlag := fs.String("mode", "", "Permission mode: plan, agent, edit, or full. A -task run defaults to plan (read-only) and cannot ask, so agent-mode changes are denied; use edit or full for unattended changes. The TUI defaults to agent.")
+	modeFlag := fs.String("mode", "", "Permission mode: plan, agent, edit, or full. A -task run defaults to plan (read-only) and cannot ask, so agent-mode changes are denied; use edit or full for unattended changes. The TUI also starts in plan; approve a plan or press Shift+Tab to raise it.")
 	sandboxFlag := fs.Bool("sandbox", false, "Run commands isolated from the rest of this machine, with no network (Windows only for now)")
 	revokeSandboxFlag := fs.Bool("revoke-sandbox", false, "Remove every permission the sandbox was granted and delete its identity, then exit")
 	revokeSetupSID := fs.String(revokeSetupFlag, "", "Internal: the elevated half of -revoke-sandbox")
@@ -372,7 +372,7 @@ func runConversationImport(workDir, model string, maxTurns int, timeout time.Dur
 		CommandTimeout: timeout,
 		ThinkLevel:     thinkLevel,
 		AllowCommands:  allowCommands,
-		PermissionMode: PermissionAgent,
+		PermissionMode: PermissionPlan,
 	}
 	report, err := ImportLegacyConversations(src, store, workDir, model, runtime)
 	if err != nil {

@@ -319,8 +319,9 @@ func newTeaModel(runner *Runner, req RunRequest) (*teaModel, error) {
 	if commandTimeout <= 0 {
 		commandTimeout = 60 * time.Second
 	}
-	// A terminal session can ask, so it starts in agent mode unless -mode chose.
-	permissionMode := PermissionAgent
+	// Sessions start in plan mode (read-only) unless -mode chose: nothing
+	// changes until a plan is approved or the mode is raised with Shift+Tab.
+	permissionMode := PermissionPlan
 	if req.PermissionMode != "" {
 		permissionMode = NormalizeMode(req.PermissionMode)
 	}
