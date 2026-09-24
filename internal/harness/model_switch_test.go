@@ -91,3 +91,30 @@ func TestTeaModelRejectsUnknownModelWithoutChangingEndpoint(t *testing.T) {
 		t.Errorf("unknown model changed runtime: model=%q endpoint=%q", m.modelName, client.BaseURL)
 	}
 }
+
+func TestRunnerSwitchModelAppliesWireAPIAndHeaders(t *testing.T) {
+	t.Setenv("TEST_OPENAI_KEY", "env-secret-val")
+	client := llm.New("http://localhost:8010/v1", "", "old-model", "")
+	runner := NewRunner(client, t.TempDir(), "old-model")
+
+	endpoint := &config.ModelEndpoint{
+		ID:      "gpt-5.3-codex",
+		Name:    "Foundry MK2",
+		URL:     "https://fmk2-dev-5ide-apim.azure-api.net/openai",
+		WireAPI: "responses",
+		EnvHTTPHeaders: map[string]string{
+			"api-key": "TEST_OPENAI_KEY",
+		},
+	}
+
+	if err := runner.SwitchModel(endpoint); err != nil {
+		t.Fatalf("SwitchModel() error = %v", err)
+	}
+
+	if client.WireAPI != "responses" {
+		t.Errorf("client.WireAPI = %q, want 'responses'", client.WireAPI)
+	}
+	if client.Headers["api-key"] != "env-secret-val" {
+		t.Errorf("client.Headers['api-key'] = %q, want 'env-secret-val'", client.Headers["api-key"])
+	}
+}

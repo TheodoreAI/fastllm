@@ -142,9 +142,33 @@ type Client struct {
 	// (see New's caller in appserver.go), not the cloud ones New in
 	// router.go's SetCloudProviders constructs.
 	SendThink   bool
+	WireAPI     string
+	Headers     map[string]string
 	Temperature *float64
 	TopP        *float64
 	MaxTokens   *int
+}
+
+func (c *Client) isResponsesAPI() bool {
+	return strings.EqualFold(strings.TrimSpace(c.WireAPI), "responses")
+}
+
+func (c *Client) responsesClient() *ResponsesClient {
+	rc := NewResponsesClient(c.BaseURL, c.APIKey)
+	rc.Headers = c.Headers
+	if c.HTTPClient != nil {
+		rc.HTTPClient = c.HTTPClient
+	}
+	return rc
+}
+
+func (c *Client) applyHeaders(req *http.Request) {
+	for k, v := range c.Headers {
+		req.Header.Set(k, v)
+	}
+	if req.Header.Get("Authorization") == "" && c.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
 }
 
 func New(baseURL, apiKey, chatModel, embedModel string) *Client {
@@ -461,7 +485,14 @@ func (c *Client) ListModels(ctx context.Context) ([]Model, error) {
 	if models, err := c.listModelsFromTags(ctx); err == nil {
 		return models, nil
 	}
-	return c.listModelsFromOpenAI(ctx)
+	models, err := c.listModelsFromOpenAI(ctx)
+	if err == nil {
+		return models, nil
+	}
+	if c.isResponsesAPI() && c.ChatModel != "" {
+		return []Model{{Name: c.ChatModel, Capabilities: []string{"completion"}, SupportsFileTools: true}}, nil
+	}
+	return nil, err
 }
 
 func (c *Client) listModelsFromTags(ctx context.Context) ([]Model, error) {
@@ -470,9 +501,7 @@ func (c *Client) listModelsFromTags(ctx context.Context) ([]Model, error) {
 	if err != nil {
 		return nil, err
 	}
-	if c.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
-	}
+	c.applyHeaders(req)
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
@@ -504,9 +533,7 @@ func (c *Client) listModelsFromOpenAI(ctx context.Context) ([]Model, error) {
 	if err != nil {
 		return nil, err
 	}
-	if c.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
-	}
+	c.applyHeaders(req)
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
@@ -781,6 +808,9 @@ func (c *Client) StreamChat(ctx context.Context, model string, messages []Messag
 	if model == "" {
 		model = c.ChatModel
 	}
+	if c.isResponsesAPI() {
+		return c.responsesClient().StreamChat(ctx, model, messages, thinkLevel, onToken, onReasoning, onUsage)
+	}
 	cr := chatRequest{
 		Model:         model,
 		Messages:      messages,
@@ -803,9 +833,7 @@ func (c *Client) StreamChat(ctx context.Context, model string, messages []Messag
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if c.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
-	}
+	c.applyHeaders(req)
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
@@ -899,6 +927,9 @@ func (c *Client) ChatWithUsage(ctx context.Context, model string, messages []Mes
 	if model == "" {
 		model = c.ChatModel
 	}
+	if c.isResponsesAPI() {
+		return c.responsesClient().ChatWithUsage(ctx, model, messages, tools, thinkLevel)
+	}
 	creq := chatRequest{
 		Model:       model,
 		Messages:    messages,
@@ -921,9 +952,7 @@ func (c *Client) ChatWithUsage(ctx context.Context, model string, messages []Mes
 		return ChatResult{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if c.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
-	}
+	c.applyHeaders(req)
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
@@ -1041,9 +1070,7 @@ func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if c.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
-	}
+	c.applyHeaders(req)
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {

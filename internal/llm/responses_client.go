@@ -51,6 +51,7 @@ func NeedsResponsesAPI(provider, bareModel string) bool {
 type ResponsesClient struct {
 	BaseURL    string // e.g. https://api.openai.com/v1 or https://api.cloudflare.com/client/v4/accounts/{id}/ai/v1
 	APIKey     string
+	Headers    map[string]string
 	HTTPClient *http.Client
 }
 
@@ -189,8 +190,27 @@ func (c *ResponsesClient) newRequest(ctx context.Context, body []byte) (*http.Re
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	for k, v := range c.Headers {
+		req.Header.Set(k, v)
+	}
+	if req.Header.Get("Authorization") == "" && c.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
 	return req, nil
+}
+
+// StreamChatWithTools implements tool-aware execution for ResponsesClient.
+func (c *ResponsesClient) StreamChatWithTools(
+	ctx context.Context,
+	model string,
+	messages []Message,
+	tools []Tool,
+	thinkLevel string,
+	onToken func(string),
+	onReasoning func(string),
+) (ChatResult, bool, error) {
+	result, err := c.ChatWithUsage(ctx, model, messages, tools, thinkLevel)
+	return result, false, err
 }
 
 // responsesStreamEvent covers the three SSE event shapes StreamChat cares

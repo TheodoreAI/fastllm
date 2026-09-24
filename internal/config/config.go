@@ -29,8 +29,34 @@ type ModelEndpoint struct {
 	// table cannot recognize (a fine-tune, a renamed checkpoint, a vLLM server
 	// started with a reduced --max-model-len) should set it explicitly rather than
 	// inherit a guess. Zero means "fall back to the table, then the default".
-	ContextWindow int                    `json:"context_window,omitempty"`
-	Parameters    map[string]interface{} `json:"parameters,omitempty"`
+	ContextWindow int `json:"context_window,omitempty"`
+	// WireAPI specifies the protocol wire format, e.g. "chat" (default) or "responses".
+	WireAPI string `json:"wire_api,omitempty"`
+	// Headers specifies custom HTTP headers to send on requests.
+	Headers map[string]string `json:"headers,omitempty"`
+	// EnvHTTPHeaders maps HTTP header names to environment variable names whose values are resolved at runtime.
+	EnvHTTPHeaders map[string]string      `json:"env_http_headers,omitempty"`
+	Parameters     map[string]interface{} `json:"parameters,omitempty"`
+}
+
+// ResolveHeaders returns merged static and environment-derived HTTP headers.
+func (m *ModelEndpoint) ResolveHeaders() map[string]string {
+	if m == nil {
+		return nil
+	}
+	if len(m.Headers) == 0 && len(m.EnvHTTPHeaders) == 0 {
+		return nil
+	}
+	out := make(map[string]string)
+	for k, v := range m.Headers {
+		out[k] = v
+	}
+	for header, envVar := range m.EnvHTTPHeaders {
+		if val := strings.TrimSpace(os.Getenv(envVar)); val != "" {
+			out[header] = val
+		}
+	}
+	return out
 }
 
 // ResolveAPIKey returns the endpoint's API key. An inline APIKey wins; otherwise the
