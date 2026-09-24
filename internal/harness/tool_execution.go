@@ -48,6 +48,17 @@ func (r *Runner) executeTool(execCtx toolExecutionContext, name, rawArgs string)
 	if ok, refusal := admit(execCtx.request, name, rawArgs); !ok {
 		return toolExecutionResult{output: refusal}
 	}
+	// Permitted is not the same as affordable: the budget is charged next.
+	if refusal := execCtx.request.meter.charge(name, rawArgs); refusal != "" {
+		return toolExecutionResult{output: refusal}
+	}
+	// Journal the file first, so /undo can put it back (journal.go).
+	if toolClasses[name] == classWrite && execCtx.request.Journal != nil {
+		if requested, target := journalTarget(execCtx.fileReader, rawArgs); target != "" {
+			execCtx.request.Journal.before(target, requested)
+			defer execCtx.request.Journal.after(target)
+		}
+	}
 	policy := policyForRequest(execCtx.request)
 	execCtx.allowCommands = execCtx.allowCommands && policy.commands
 	switch name {

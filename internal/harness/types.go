@@ -74,6 +74,13 @@ type RunRequest struct {
 	// Taint records secret files this conversation has read (I10). Share one
 	// across turns of a session; nil gets a fresh one per run.
 	Taint *SessionTaint `json:"-"`
+	// Budget limits what the run and its child agents may consume
+	// (budget.go); zero fields take the defaults. meter is the shared count.
+	Budget Budget       `json:"budget,omitempty"`
+	meter  *budgetMeter `json:"-"`
+	// Journal records model file writes so /undo can revert them; nil means
+	// no undo. Share one across a session's runs.
+	Journal *WriteJournal `json:"-"`
 
 	// StreamTokens makes the run emit EventTokenDelta as assistant text arrives,
 	// instead of only the finished answer at turn end. Opt-in: a token-rate event

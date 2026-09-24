@@ -40,6 +40,9 @@ func RunCLI(args []string) int {
 	keyFlag := fs.String("key", "", "LLM API key (defaults to LLM_API_KEY)")
 	maxTurnsFlag := fs.Int("max-turns", 50, "Maximum tool execution turns")
 	timeoutFlag := fs.Int("timeout", 60, "Command timeout in seconds for run_command")
+	maxTokensFlag := fs.Int("max-tokens", 0, "Token budget for the run including child agents (0: unlimited)")
+	maxCostFlag := fs.Float64("max-cost", 0, "Estimated cost budget in USD for the run (0: unlimited)")
+	maxDurationFlag := fs.Duration("max-duration", 0, "Wall-clock budget for the run (0: the 30m default, -1s: unlimited)")
 	systemFlag := fs.String("system", "", "Custom system prompt override")
 	thinkFlag := fs.String("think", "", "Reasoning effort level (e.g. low, medium, high)")
 	noCmdsFlag := fs.Bool("no-commands", false, "Disable the run_command tool")
@@ -195,6 +198,7 @@ func RunCLI(args []string) int {
 		Model:          model,
 		SystemPrompt:   *systemFlag,
 		MaxTurns:       *maxTurnsFlag,
+		Budget:         Budget{MaxTokens: *maxTokensFlag, MaxCostUSD: *maxCostFlag, MaxDuration: *maxDurationFlag},
 		AllowCommands:  !*noCmdsFlag,
 		Sandbox:        *sandboxFlag,
 		CommandTimeout: time.Duration(*timeoutFlag) * time.Second,

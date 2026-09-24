@@ -19,6 +19,7 @@ func (m *teaModel) runtimeSettings() InteractiveRuntime {
 		PermissionMode: m.permissionMode,
 		ExpandedTools:  m.expandedTools,
 		Sandbox:        m.sandbox,
+		Budget:         m.budget,
 	}
 }
 
@@ -80,6 +81,7 @@ func (m *teaModel) loadSession(session *InteractiveSession) error {
 	}
 	m.expandedTools = session.Runtime.ExpandedTools
 	m.sandbox = session.Runtime.Sandbox
+	m.budget = session.Runtime.Budget
 	m.sessionMessages = append([]llm.Message(nil), session.Messages...)
 	m.sessionMetrics = session.Metrics
 	m.taint = nil
@@ -482,7 +484,7 @@ func (m *teaModel) handleSessionSlash(input string, parts []string, command stri
 			return true, nil
 		}
 		if len(parts) < 3 {
-			m.appendHistory(styleMuted.Render("Usage: /set <turns|timeout|think|commands|sandbox|permissions|output> <value>\n\n"))
+			m.appendHistory(styleMuted.Render("Usage: /set <turns|timeout|think|commands|sandbox|permissions|output|tokens|cost|duration> <value>\n\n"))
 			return true, nil
 		}
 		if err := m.setRuntimeValue(parts[1], parts[2]); err != nil {
@@ -547,6 +549,8 @@ func (m *teaModel) setRuntimeValue(name, value string) error {
 		if err := m.setPermissionMode(mode); err != nil {
 			return err
 		}
+	case "tokens", "cost", "duration":
+		return m.setBudgetValue(name, value)
 	case "output":
 		if value == "expanded" {
 			m.expandedTools = true

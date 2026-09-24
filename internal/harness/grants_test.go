@@ -162,3 +162,13 @@ func TestTUIApprovalGrantsOnlyTheScope(t *testing.T) {
 		t.Fatalf("/permissions should list the scope: %s", list)
 	}
 }
+
+// Found by FuzzPathGrantCoverage: a path resolving to the workspace root was
+// judged by its raw text, so a grant for a/ covered "A/..".
+func TestPathGrantIsJudgedOnTheResolvedPath(t *testing.T) {
+	root := t.TempDir()
+	grant := pathScope("write_file", root, "a/b.go")
+	if grant.Covers(pathScope("write_file", root, "A/..")) || grant.Covers(pathScope("write_file", root, "a/..")) {
+		t.Fatal("a grant for a/ covered the workspace root")
+	}
+}

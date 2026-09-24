@@ -154,6 +154,9 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 	var activeSession *InteractiveSession
 	// taint follows the conversation: replaced whenever the messages are (I10).
 	taint := NewSessionTaint()
+	// journal records the model's file writes for /undo; it follows the
+	// workspace, not the conversation.
+	journal := NewWriteJournal()
 	if sessionStoreErr == nil {
 		activeSession = sessionStore.New(absWorkingDir, model, runtimeSettings())
 	}
@@ -419,18 +422,12 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 				continue
 
 			case "/undo":
-				if !checkpointMgr.IsGitRepo() {
-					fmt.Println(ColorYellow("  " + SymCross + " Current directory is not a Git repository; checkpoints disabled."))
+				report, err := journal.Undo(len(parts) > 1 && strings.EqualFold(parts[1], "force"))
+				if err != nil {
+					fmt.Println(ColorYellow("  " + SymCross + " " + err.Error()))
 					continue
 				}
-				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				err := checkpointMgr.Rollback(ctx, "")
-				cancel()
-				if err != nil {
-					fmt.Println(ColorRed(fmt.Sprintf("  %s Undo failed: %v", SymCross, err)))
-				} else {
-					fmt.Println(ColorGreen(fmt.Sprintf("  %s Successfully rolled back working tree to pre-turn checkpoint.", SymCheck)))
-				}
+				fmt.Println(FormatUndoReport(report))
 				continue
 
 			case "/diff":
@@ -903,6 +900,7 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 			currentCompactionConfig(),
 			OpenAuditLog(auditNameFor(activeSession)),
 			taint,
+			journal,
 		)
 		sessionMessages[0].Content = baseSystemPrompt
 		saveSession()
@@ -952,6 +950,7 @@ func (r *Runner) runInteractiveTurn(
 	compactionCfg CompactionConfig,
 	audit *AuditLog,
 	taint *SessionTaint,
+	journal *WriteJournal,
 ) (proposedPlan string) {
 	owner := r.executions
 	if owner == nil {
@@ -963,7 +962,7 @@ func (r *Runner) runInteractiveTurn(
 		WorkingDir: absWorkingDir, Model: model, MaxTurns: maxTurns,
 		AllowCommands: allowCmds, CommandsConfigured: true, Sandbox: sandbox, CommandTimeout: cmdTimeout,
 		ThinkLevel: thinkLevel, PermissionMode: NormalizeMode(permissions.Mode),
-		Authorize: permissions.Authorize, Audit: audit, Taint: taint,
+		Authorize: permissions.Authorize, Audit: audit, Taint: taint, Journal: journal,
 	}
 	opts, err := sandboxOptions(owner, execution.Options{Workspace: absWorkingDir, Policy: executionPolicy(turnReq, allowCmds), Timeout: cmdTimeout, MaxOutputBytes: 64 * 1024}, sandbox)
 	if err != nil {
@@ -992,11 +991,6 @@ func (r *Runner) runInteractiveTurn(
 	processMgr.owner = nil
 	processMgr.processes = make(map[string]trackedProcess)
 	processMgr.mu.Unlock()
-	if scope.Check() == nil {
-		cpCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		_, _ = checkpointMgr.CreateCheckpoint(cpCtx, "interactive turn")
-		cancel()
-	}
 	var planBoundary bool
 	for turn := 1; turn <= maxTurns; turn++ {
 		if ctx.Err() != nil {

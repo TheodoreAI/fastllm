@@ -83,6 +83,16 @@ func (pm *ProcessManager) StartTracked(command, dir string) (execution.Process, 
 	if err != nil {
 		return nil, nil, err
 	}
+	// A loop that keeps starting servers would otherwise exhaust the machine.
+	running := 0
+	for _, tracked := range pm.processes {
+		if !tracked.process.Snapshot().Exited {
+			running++
+		}
+	}
+	if running >= maxBackgroundProcesses {
+		return nil, nil, fmt.Errorf("%d background processes are already running, the limit; stop one first (kill_process, or /kill <id>)", running)
+	}
 
 	p, err := s.Start(context.Background(), execution.Command{
 		Shell:   command,

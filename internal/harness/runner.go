@@ -168,6 +168,16 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 	if req.Taint == nil {
 		req.Taint = NewSessionTaint()
 	}
+	if req.meter == nil {
+		req.meter = newBudgetMeter(req.Budget)
+	}
+	// The time budget is a deadline on everything the run does, including
+	// model calls, commands, and child agents, which inherit this context.
+	if deadline := req.meter.deadline(); !deadline.IsZero() {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, deadline)
+		defer cancel()
+	}
 	networkPolicy, err := normalizeNetworkPolicy(req.NetworkPolicy)
 	if err != nil {
 		return nil, err
@@ -261,10 +271,10 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 		Mode:        modePrompt(req),
 	})
 
-	// Initialize git checkpoint manager and capture initial state
-	checkpointMgr := NewCheckpointManager(absWorkingDir, scope)
-	if checkpointMgr.IsGitRepo() {
-		_, _ = checkpointMgr.CreateCheckpoint(ctx, "task-start: "+req.Task)
+	// A top-level run is one undo group; child agents write into their
+	// parent's group, since /undo reverts the prompt as a whole.
+	if req.AgentDepth == 0 {
+		req.Journal.begin(req.Task)
 	}
 
 	// Initialize background process manager
@@ -313,6 +323,11 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 	var planBoundary bool
 
 	for turn := 1; turn <= maxTurns; turn++ {
+		if why := req.meter.exhausted(); why != "" {
+			result.Turns = turn - 1
+			result.Error = "stopped: " + why
+			break
+		}
 		drainAgentInbox(&messages, req.AgentInbox)
 		emit(Event{Type: EventTurnStart, Turn: turn})
 
@@ -343,6 +358,9 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 		turnDuration := time.Since(turnStart)
 		if err != nil {
 			result.Error = fmt.Sprintf("LLM chat error on turn %d: %v", turn, err)
+			if why := req.meter.exhausted(); why != "" && ctx.Err() != nil {
+				result.Error = "stopped: " + why
+			}
 			result.Turns = turn
 			result.DurationMS = time.Since(startTime).Milliseconds()
 			result.Transcript = runTranscript(messages, "")
@@ -363,6 +381,7 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 		}
 		turnMetrics := ComputeTurnMetrics(turn, model, promptTokens, compTokens, turnDuration, billable)
 		sessionMetrics.Add(turnMetrics)
+		req.meter.addTurn(turnMetrics, billable)
 
 		turnRec := TurnRecord{
 			Turn:    turn,

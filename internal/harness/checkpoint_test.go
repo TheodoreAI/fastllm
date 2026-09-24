@@ -9,6 +9,8 @@ import (
 	"testing"
 )
 
+// Undo moved to the write journal (journal_test.go); what remains is git
+// inspection.
 func TestCheckpointManagerGit(t *testing.T) {
 	tempDir := t.TempDir()
 
@@ -38,12 +40,7 @@ func TestCheckpointManagerGit(t *testing.T) {
 		t.Fatal("expected IsGitRepo to be true")
 	}
 
-	// Create checkpoint
 	ctx := context.Background()
-	cp, err := cm.CreateCheckpoint(ctx, "before changes")
-	if err != nil {
-		t.Fatalf("CreateCheckpoint failed: %v", err)
-	}
 
 	// Modify file and add new file
 	if err := os.WriteFile(testFile, []byte("version 2 modified\n"), 0644); err != nil {
@@ -60,22 +57,5 @@ func TestCheckpointManagerGit(t *testing.T) {
 	}
 	if !strings.Contains(diff, "version 2 modified") && !strings.Contains(diff, "hello.txt") {
 		t.Errorf("expected diff to show changes, got: %s", diff)
-	}
-
-	// Rollback
-	if err := cm.Rollback(ctx, cp.ID); err != nil {
-		t.Fatalf("Rollback failed: %v", err)
-	}
-
-	data, err := os.ReadFile(testFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.TrimSpace(string(data)) != "version 1" {
-		t.Errorf("file was not restored! got: %q, want 'version 1'", string(data))
-	}
-
-	if _, err := os.Stat(newFile); !os.IsNotExist(err) {
-		t.Errorf("untracked file was not cleaned up!")
 	}
 }

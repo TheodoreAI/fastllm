@@ -232,6 +232,9 @@ func (m *AgentManager) Spawn(parent RunRequest, task, requestedDir, model string
 		Audit: parent.Audit,
 		// A child's result returns to the parent, so they share one taint.
 		Taint: parent.Taint,
+		// Children draw on the parent's budget; delegating cannot reset it.
+		Budget: parent.Budget, meter: parent.meter,
+		Journal: parent.Journal,
 	}
 	go m.run(ctx, record, childReq)
 	return id, nil

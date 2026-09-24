@@ -1,0 +1,3 @@
+value: RunRequest.Budget (JSON) + shared budgetMeter per run tree (children inherit): time as ctx deadline (default 30m), tokens/cost checked before each model call (default unlimited; unpriced billable model stops a cost-limited run), writes 500/50MB and web 100 charged after admit, 8 concurrent background processes; TUI /set tokens|cost|duration saved in InteractiveRuntime; per prompt, not per session
+reason: P2 #9: a looping model had only max-turns and command timeouts; sharing the meter with children stops delegation from resetting limits, and tokens/cost default to unlimited because local models are free and token counts are model-relative
+decided_at: 2026-09-24T03:12:21+00:00

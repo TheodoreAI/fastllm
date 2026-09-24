@@ -169,7 +169,9 @@ func pathScope(label, workingDir, requested string) GrantScope {
 	parts := relativeParts(root, canonicalPath(filepath.Clean(target)))
 	rel := strings.Join(parts, "/")
 	if rel == "" {
-		return GrantScope{Tool: label, Kind: scopeFile, Pattern: requested, Subject: requested}
+		// The workspace root itself. Judge it as ".", never as the raw
+		// text, which a prefix check could match ("A/.." against "a/").
+		return GrantScope{Tool: label, Kind: scopeFile, Pattern: ".", Subject: "."}
 	}
 	if !insideRoot(root, target) {
 		// Outside the workspace the file layer refuses anyway; never widen.

@@ -1,0 +1,4 @@
+- decided_at: 2026-09-24T03:17:01+00:00
+  event: initial
+  value: /undo is a WriteJournal of model file-tool writes: pre-image before the first write per path per top-level run (children share the group), hash of the model's last write after; Undo reverts the latest group, deletes created files, skips files changed since (force overrides); in-memory per session (TUI resets on /dir), 10MB per file, 256MB total; git CreateCheckpoint/Rollback removed
+  reason: P2 #11: TUI /undo never worked (checkpoints were created on the runner's throwaway manager) and the legacy one ran reset --hard + clean -fd, destroying the user's own uncommitted work; journaling only the model's writes is precise and works outside git
