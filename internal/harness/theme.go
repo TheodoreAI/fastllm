@@ -85,6 +85,55 @@ var builtinThemes = []Theme{
 		Ok: "#B8BB26", Warn: "#FABD2F", Error: "#FB4934",
 		DarkBg: "#1D2021", CardBg: "#282828", Track: "#3C3836", BrandFg: "#282828",
 	},
+	{
+		Name: "dracula", Description: "Iconic high-contrast vampire dark palette",
+		Muted: "#6272A4", Border: "#44475A", Frame: "#44475A", Text: "#F8F8F2", Value: "#FFFFFF",
+		Accent: "#BD93F9", Accent2: "#FF79C6", Purple: "#BD93F9",
+		Ok: "#50FA7B", Warn: "#F1FA8C", Error: "#FF5555",
+		DarkBg: "#1E1F29", CardBg: "#282A36", Track: "#44475A", BrandFg: "#282A36",
+	},
+	{
+		Name: "solarized-dark", Description: "Precision teal and blue contrast palette",
+		Muted: "#657B83", Border: "#073642", Frame: "#586E75", Text: "#839496", Value: "#93A1A1",
+		Accent: "#268BD2", Accent2: "#2AA198", Purple: "#6C71C4",
+		Ok: "#859900", Warn: "#B58900", Error: "#DC322F",
+		DarkBg: "#00212B", CardBg: "#002B36", Track: "#073642", BrandFg: "#002B36",
+	},
+	{
+		Name: "monokai", Description: "Iconic vibrant code editor palette",
+		Muted: "#75715E", Border: "#3E3D32", Frame: "#49483E", Text: "#F8F8F2", Value: "#FFFFFF",
+		Accent: "#66D9EF", Accent2: "#FD971F", Purple: "#AE81FF",
+		Ok: "#A6E22E", Warn: "#E6DB74", Error: "#F92672",
+		DarkBg: "#1E1F1C", CardBg: "#272822", Track: "#3E3D32", BrandFg: "#272822",
+	},
+	{
+		Name: "rose-pine", Description: "Minimalist warm dark aesthetic with pine and rose",
+		Muted: "#6E6A86", Border: "#26233A", Frame: "#403D52", Text: "#E0DEF4", Value: "#F0EEF8",
+		Accent: "#EBBCBA", Accent2: "#31748F", Purple: "#C4A7E7",
+		Ok: "#9CCFD8", Warn: "#F6C177", Error: "#EB6F92",
+		DarkBg: "#14121E", CardBg: "#191724", Track: "#26233A", BrandFg: "#191724",
+	},
+	{
+		Name: "one-dark", Description: "Atom and VS Code balanced slate and pastel palette",
+		Muted: "#5C6370", Border: "#3E4451", Frame: "#4B5263", Text: "#ABB2BF", Value: "#DCDFE4",
+		Accent: "#61AFEF", Accent2: "#56B6C2", Purple: "#C678DD",
+		Ok: "#98C379", Warn: "#E5C07B", Error: "#E06C75",
+		DarkBg: "#1E2227", CardBg: "#282C34", Track: "#3E4451", BrandFg: "#282C34",
+	},
+	{
+		Name: "github-dark", Description: "GitHub dark mode with sleek borders and blue accents",
+		Muted: "#8B949E", Border: "#21262D", Frame: "#30363D", Text: "#C9D1D9", Value: "#F0F6FC",
+		Accent: "#58A6FF", Accent2: "#79C0FF", Purple: "#BC8CFF",
+		Ok: "#3FB950", Warn: "#D29922", Error: "#F85149",
+		DarkBg: "#010409", CardBg: "#0D1117", Track: "#21262D", BrandFg: "#0D1117",
+	},
+	{
+		Name: "synthwave", Description: "80s cyberpunk neon pink, cyan and electric glow",
+		Muted: "#7B5EA7", Border: "#341C5B", Frame: "#502888", Text: "#E2E8F0", Value: "#FFFFFF",
+		Accent: "#FF007F", Accent2: "#00F0FF", Purple: "#8B00FF",
+		Ok: "#05FFA1", Warn: "#FFE600", Error: "#FF3366",
+		DarkBg: "#140B24", CardBg: "#1A102F", Track: "#341C5B", BrandFg: "#1A102F",
+	},
 }
 
 func withName(t Theme, name, description string) Theme {

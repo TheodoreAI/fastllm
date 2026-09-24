@@ -122,7 +122,42 @@ func (m *teaModel) renderThemeModal() string {
 			nameWidth = len(t.Name)
 		}
 	}
-	for i, t := range builtinThemes {
+
+	availableHeight := height - 7
+	allFit := len(builtinThemes)*2 <= availableHeight
+	start := 0
+	end := len(builtinThemes)
+
+	if !allFit {
+		maxVisible := (availableHeight - 2) / 2
+		if maxVisible < 2 {
+			maxVisible = 2
+		}
+		if maxVisible > len(builtinThemes) {
+			maxVisible = len(builtinThemes)
+		}
+		start = p.cursor - maxVisible/2
+		if start < 0 {
+			start = 0
+		}
+		if start+maxVisible > len(builtinThemes) {
+			start = len(builtinThemes) - maxVisible
+			if start < 0 {
+				start = 0
+			}
+		}
+		end = start + maxVisible
+		if end > len(builtinThemes) {
+			end = len(builtinThemes)
+		}
+
+		if start > 0 {
+			lines = append(lines, clampToWidth("    "+styleMuted.Render(fmt.Sprintf("▲ %d more above", start)), rowWidth))
+		}
+	}
+
+	for i := start; i < end; i++ {
+		t := builtinThemes[i]
 		isSelected := i == p.cursor
 		prefix := "  "
 		if isSelected {
@@ -139,6 +174,11 @@ func (m *teaModel) renderThemeModal() string {
 		lines = append(lines, clampToWidth(prefix+indicator+name+"  "+themeSwatches(t), rowWidth))
 		lines = append(lines, clampToWidth("      "+styleMuted.Render(t.Description), rowWidth))
 	}
+
+	if !allFit && end < len(builtinThemes) {
+		lines = append(lines, clampToWidth("    "+styleMuted.Render(fmt.Sprintf("▼ %d more below", len(builtinThemes)-end)), rowWidth))
+	}
+
 	lines = append(lines, "",
 		styleMuted.Render("↑/↓ preview · Enter save · Esc cancel"),
 		styleMuted.Render("New colours apply to new output · /cls to redraw"))

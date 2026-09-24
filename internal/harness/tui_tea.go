@@ -2904,12 +2904,11 @@ func (m *teaModel) View() string {
 	}
 
 	brand := styleBrand.Render("fastllm")
-	modelBadge := styleHeaderPill.Render(m.modelName)
 	dirBase := filepath.Base(m.workingDir)
 	if dirBase == "" || dirBase == "." {
 		dirBase = m.workingDir
 	}
-	dirBadge := styleHeaderPill.Render(dirBase)
+	metaBadge := styleHeaderPill.Render(dirBase + " " + SymDot + " " + m.modelName)
 	agentBadge := ""
 	if m.runner != nil && m.runner.agents != nil {
 		if summary := m.runner.agents.Summary(); summary.Total > 0 {
@@ -2938,11 +2937,11 @@ func (m *teaModel) View() string {
 	} else if m.statusNotice != "" {
 		rightInfo = styleStatusNotice.Render(m.statusNotice)
 	} else if m.latestMetrics != nil {
-		rightInfo = styleMuted.Render(fmt.Sprintf("%.1fs • %.0f tok/s",
-			m.latestMetrics.Duration.Seconds(), m.latestMetrics.TokensPerSecond))
+		rightInfo = styleMuted.Render(fmt.Sprintf("%.1fs %s %.0f tok/s",
+			m.latestMetrics.Duration.Seconds(), SymDot, m.latestMetrics.TokensPerSecond))
 	}
 
-	headerLeft := lipgloss.JoinHorizontal(lipgloss.Center, brand, " ", modeBadge, " ", modelBadge, serversBadge, " ", dirBadge, agentBadge)
+	headerLeft := lipgloss.JoinHorizontal(lipgloss.Center, brand, " ", modeBadge, " ", metaBadge, serversBadge, agentBadge)
 	leftWidth := lipgloss.Width(headerLeft)
 	rightWidth := lipgloss.Width(rightInfo)
 	gap := m.frameWidth() - leftWidth - rightWidth - 2
@@ -2956,7 +2955,7 @@ func (m *teaModel) View() string {
 	// jitters the whole UI up and down while a turn runs.
 	headerRow := clampToWidth(headerLeft+strings.Repeat(" ", gap)+rightInfo, m.frameWidth())
 	sb.WriteString(headerRow + "\n")
-	sb.WriteString(styleMuted.Render(strings.Repeat("─", m.frameWidth())) + "\n")
+	sb.WriteString(lipgloss.NewStyle().Foreground(tuiColorBorder).Render(strings.Repeat(SymHLine, m.frameWidth())) + "\n")
 
 	// 2. Viewport (Conversation & Tool Call History)
 	// The changes column sits beside it on wide terminals.
@@ -3008,18 +3007,18 @@ func (m *teaModel) View() string {
 	// Hints drop to a short form rather than wrapping: the full string is ~97
 	// columns, so on a narrower terminal it silently became a second row and
 	// pushed the frame past the terminal height.
-	hints := "Shift+Tab: Permissions  •  Tab: Shell  •  Enter: Send  •  ↑/↓: History  •  Ctrl+J: Newline  •  Ctrl+C: Quit"
-	shortHints := "Shift+Tab: Permissions  •  Enter: Send  •  Ctrl+C: Quit"
+	hints := "Tab: Shell  " + SymDot + "  Enter: Send  " + SymDot + "  Shift+Tab: Permissions  " + SymDot + "  /help"
+	shortHints := "Tab: Shell  " + SymDot + "  Enter: Send  " + SymDot + "  /help"
 	if m.mode == modeShell {
-		hints = "Tab: Agent  •  Enter: Run  •  ↑/↓: History  •  Ctrl+V: Paste  •  exit: Leave Shell"
-		shortHints = "Tab: Agent  •  Enter: Run  •  exit: Leave Shell"
+		hints = "Tab: Agent  " + SymDot + "  Enter: Run  " + SymDot + "  exit: Leave Shell  " + SymDot + "  Ctrl+B: Bg"
+		shortHints = "Tab: Agent  " + SymDot + "  Enter: Run  " + SymDot + "  exit"
 	}
 	if m.isExecuting {
-		hints = "Esc: Cancel  •  Ctrl+C: Cancel"
+		hints = "Esc / Ctrl+C: Cancel"
 		shortHints = hints
 	} else if m.shellExecuting {
-		hints = "Ctrl+B: Background  •  Esc: Cancel  •  Ctrl+C: Cancel"
-		shortHints = "Ctrl+B: Bg  •  Esc: Cancel"
+		hints = "Ctrl+B: Background  " + SymDot + "  Esc / Ctrl+C: Cancel"
+		shortHints = "Ctrl+B: Bg  " + SymDot + "  Esc: Cancel"
 	} else if suggestHints, ok := m.suggestionHints(); ok {
 		hints, shortHints = suggestHints, suggestHints
 	}
