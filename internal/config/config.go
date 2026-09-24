@@ -34,41 +34,16 @@ type ModelEndpoint struct {
 	WireAPI string `json:"wire_api,omitempty"`
 	// Headers specifies custom HTTP headers to send on requests.
 	Headers map[string]string `json:"headers,omitempty"`
-	// EnvHTTPHeaders maps HTTP header names to environment variable names whose values are resolved at runtime.
-	EnvHTTPHeaders map[string]string      `json:"env_http_headers,omitempty"`
-	Parameters     map[string]interface{} `json:"parameters,omitempty"`
+	// EnvHTTPHeaders maps HTTP header names to environment variable names or key file paths whose values are resolved at runtime.
+	EnvHTTPHeaders map[string]string `json:"env_http_headers,omitempty"`
+	// APIKeyHeader optionally overrides the header name for ResolveAPIKey() (defaulting to Authorization: Bearer).
+	APIKeyHeader string                 `json:"api_key_header,omitempty"`
+	Parameters   map[string]interface{} `json:"parameters,omitempty"`
 }
 
-// ResolveHeaders returns merged static and environment-derived HTTP headers.
-func (m *ModelEndpoint) ResolveHeaders() map[string]string {
-	if m == nil {
-		return nil
-	}
-	if len(m.Headers) == 0 && len(m.EnvHTTPHeaders) == 0 {
-		return nil
-	}
-	out := make(map[string]string)
-	for k, v := range m.Headers {
-		out[k] = v
-	}
-	for header, envVar := range m.EnvHTTPHeaders {
-		if val := strings.TrimSpace(os.Getenv(envVar)); val != "" {
-			out[header] = val
-		}
-	}
-	return out
-}
-
-// ResolveAPIKey returns the endpoint's API key. An inline APIKey wins; otherwise the
-// key is read from APIKeyFile. The indirection keeps the secret out of config.json,
-// which is otherwise safe to copy between machines or paste into a bug report.
-// A missing or unreadable file yields an empty key rather than an error, so an
-// endpoint that needs no auth still works when the field is left set.
-func (m *ModelEndpoint) ResolveAPIKey() string {
-	if key := strings.TrimSpace(m.APIKey); key != "" {
-		return key
-	}
-	path := strings.TrimSpace(m.APIKeyFile)
+// readKeyFile reads and normalizes a secret from a path (~-relative or absolute).
+func readKeyFile(path string) string {
+	path = strings.TrimSpace(path)
 	if path == "" {
 		return ""
 	}
@@ -84,6 +59,55 @@ func (m *ModelEndpoint) ResolveAPIKey() string {
 		return ""
 	}
 	return strings.TrimSpace(decodeKeyFile(data))
+}
+
+// ResolveHeaders returns merged static and environment/file-derived HTTP headers.
+func (m *ModelEndpoint) ResolveHeaders() map[string]string {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]string)
+	for k, v := range m.Headers {
+		out[k] = v
+	}
+	for header, envOrPath := range m.EnvHTTPHeaders {
+		trimmed := strings.TrimSpace(envOrPath)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "~") || strings.HasPrefix(trimmed, "/") || strings.HasPrefix(trimmed, ".") {
+			if val := readKeyFile(trimmed); val != "" {
+				out[header] = val
+				continue
+			}
+		}
+		if val := strings.TrimSpace(os.Getenv(trimmed)); val != "" {
+			out[header] = val
+		} else if val := readKeyFile(trimmed); val != "" {
+			out[header] = val
+		}
+	}
+	if m.APIKeyHeader != "" && out[m.APIKeyHeader] == "" {
+		if key := m.ResolveAPIKey(); key != "" {
+			out[m.APIKeyHeader] = key
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// ResolveAPIKey returns the endpoint's API key. An inline APIKey wins; otherwise the
+// key is read from APIKeyFile. The indirection keeps the secret out of config.json,
+// which is otherwise safe to copy between machines or paste into a bug report.
+// A missing or unreadable file yields an empty key rather than an error, so an
+// endpoint that needs no auth still works when the field is left set.
+func (m *ModelEndpoint) ResolveAPIKey() string {
+	if key := strings.TrimSpace(m.APIKey); key != "" {
+		return key
+	}
+	return readKeyFile(m.APIKeyFile)
 }
 
 // decodeKeyFile normalizes a key file's bytes to plain text.
