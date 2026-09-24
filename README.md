@@ -16,7 +16,7 @@ It also includes an interactive terminal UI and a one-shot CLI runner.
 - `internal/llm` — local and cloud model clients and routing
 - `internal/store` — SQLite persistence for conversations, settings, and notes
 - `internal/chat` — chat, compatibility API, and SSE agent handlers
-- `internal/harness` — autonomous tool loop, workspace rules, checkpoints, and TUI
+- `internal/harness` — autonomous tool loop, permission monitor, workspace rules, undo journal, and TUI
 - `internal/webtools` — public-web search and SSRF-protected page fetching
 
 ## Run it locally with Ollama (free, local models)
@@ -52,6 +52,24 @@ go test ./...
 go vet ./...
 gofmt -l .
 ```
+
+The permission monitor's invariants (the I1-I10 list in
+`internal/harness/monitor.go`) have property tests in
+`internal/harness/fuzz_test.go`. `go test` replays their seeds and every input
+the fuzzer has ever failed on (`internal/harness/testdata/fuzz`). To search for
+new violations after changing the monitor, grants, path protection, or the
+text sanitizer, fuzz each target for a while:
+
+```
+go test ./internal/harness -run '^$' -fuzz '^FuzzMonitorInvariants$' -fuzztime 60s
+go test ./internal/harness -run '^$' -fuzz '^FuzzApprovalCannotOverrideDenial$' -fuzztime 60s
+go test ./internal/harness -run '^$' -fuzz '^FuzzCommandGrantCoverage$' -fuzztime 60s
+go test ./internal/harness -run '^$' -fuzz '^FuzzPathGrantCoverage$' -fuzztime 60s
+go test ./internal/harness -run '^$' -fuzz '^FuzzSanitizers$' -fuzztime 60s
+```
+
+A failure writes its input under `testdata/fuzz`; commit it with the fix so it
+stays a regression test.
 
 ## Agent CLI
 
@@ -224,6 +242,43 @@ Fail-closed defaults:
 - A headless `agent` run has nobody to ask, so each of its asks is denied.
 - The old names `ask`, `read-only`, and `auto` are accepted as agent, plan,
   and full.
+
+## Undo
+
+`/undo` reverts the file changes the model made during your last prompt, and
+nothing else. Before the first change a prompt makes to a file, fastllm keeps
+the file's previous contents (or notes that it did not exist). Undo puts them
+back and deletes files the prompt created. Run it again to go back another
+prompt. A file you have edited since the model wrote it is left alone and
+listed; `/undo force` reverts it too. This works in any directory, git
+repository or not, and never runs `git reset` or `git clean`, so your own
+uncommitted work is safe. It covers changes made through the file tools, not
+changes a shell command makes, and it lasts for the session (files over 10 MB
+are not kept).
+
+## Budgets
+
+A model can loop, so every run has resource limits, like rlimits for a process.
+A run is one prompt in the TUI, or one `-task` or API call. It includes every
+tool turn and child agent: children draw on their parent's budget, so
+delegating work cannot reset it.
+
+| Limit | Default | Set with |
+|---|---|---|
+| wall-clock time | 30m | `/set duration 45m`, `-max-duration`, `"budget":{"max_duration":...}` |
+| tokens | unlimited | `/set tokens 200k`, `-max-tokens` |
+| estimated cost | unlimited | `/set cost 2.50`, `-max-cost` |
+| file changes | 500 per run, 50 MB written | `"budget":{"max_writes":...,"max_write_bytes":...}` |
+| web requests | 100 per run | `"budget":{"max_web_requests":...}` |
+| background processes | 8 running at once | fixed |
+
+`off` (or a negative number in the API) removes a limit. Time is enforced as a
+deadline on everything the run does. Tokens and cost are checked before each
+model call, and the run stops with the reason. With a cost limit set, a billable
+model whose price is unknown stops the run rather than going unmetered. When
+file changes or web requests run out, the tool call is refused with the reason
+and the model is told to wrap up. `/set` shows the current budget, and it is
+saved with the session.
 
 ## Agent permissions
 

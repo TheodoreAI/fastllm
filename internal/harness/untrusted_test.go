@@ -110,3 +110,12 @@ func TestFormattersSanitizeTheirUntrustedInput(t *testing.T) {
 		}
 	}
 }
+
+// Found by FuzzSanitizers: ESC followed by a C1 control (U+0092) was spelled
+// out as ⟨ESC⟩ but the C1 character itself reached the approval prompt raw.
+func TestRevealHiddenMarksCharactersInsideEscapes(t *testing.T) {
+	got, hidden := revealHidden("\x1b\u0092run")
+	if !hidden || strings.ContainsRune(got, '\u0092') || !strings.Contains(got, "⟨U+0092⟩") {
+		t.Fatalf("revealHidden = %q", got)
+	}
+}

@@ -689,6 +689,7 @@ func FormatRuntimeCard(settings InteractiveRuntime, sessionID string) string {
 		FormatKV("commands", commands, 12),
 		FormatKV("sandbox", sandboxLabel(settings.Sandbox), 12),
 		FormatKV("permissions", colorForMode(settings.PermissionMode)(settings.PermissionMode.Label()), 12),
+		FormatKV("budget", FormatBudget(settings.Budget), 12),
 		"",
 	}
 	return FormatCard("Runtime Settings", lines, 74)

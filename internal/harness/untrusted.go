@@ -163,15 +163,19 @@ func scanEscape(s string, i int) (end int, sgr bool) {
 	}
 }
 
-// visible spells out an escape sequence for an approval prompt.
+// visible spells out an escape sequence for an approval prompt. The sequence
+// can carry any character after ESC, so every non-printing one is marked, the
+// same set sanitizeText marks outside sequences.
 func visible(seq string) string {
 	var b strings.Builder
 	for _, r := range seq {
 		switch {
 		case r == 0x1b:
 			b.WriteString("⟨ESC⟩")
-		case r < 0x20 || r == 0x7f:
+		case r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) || isDeceptiveRune(r) || isInvisibleRune(r):
 			fmt.Fprintf(&b, "⟨U+%04X⟩", r)
+		case r == utf8.RuneError:
+			b.WriteRune(utf8.RuneError)
 		default:
 			b.WriteRune(r)
 		}

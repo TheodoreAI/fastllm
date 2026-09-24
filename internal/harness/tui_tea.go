@@ -270,6 +270,11 @@ type teaModel struct {
 	themeModal *themePicker
 	// suggest is the slash-command dropdown above the input box.
 	suggest suggestState
+	// budget limits each prompt's run (budget.go); saved with the session.
+	budget Budget
+	// journal records the model's file writes for /undo (journal.go). It is
+	// about files, not the conversation, so only /dir replaces it.
+	journal *WriteJournal
 	// taint records secret files this conversation has read (I10); it lives
 	// as long as the messages that may hold them.
 	taint        *SessionTaint
@@ -376,6 +381,7 @@ func newTeaModel(runner *Runner, req RunRequest) (*teaModel, error) {
 		historyIdx:     -1,
 		maxTurns:       maxTurns,
 		commandTimeout: commandTimeout,
+		budget:         req.Budget,
 		thinkLevel:     req.ThinkLevel,
 		allowCommands:  req.AllowCommands,
 		sandbox:        req.Sandbox,
@@ -1629,6 +1635,7 @@ func (m *teaModel) changeWorkingDirectory(path string) error {
 	m.initGitWatcher()
 	m.permissionController().SetWorkspace(newDir)
 	m.checkpointMgr = NewCheckpointManager(newDir)
+	m.journal = nil // a new workspace starts with nothing to undo
 	m.rules = DiscoverWorkspaceRules(newDir)
 	m.skills = DiscoverWorkspaceSkills(newDir)
 	m.settings, m.configPath = settings, configPath
@@ -1808,19 +1815,17 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 			return nil
 
 		case "/undo":
-			m.appendHistory(styleUserPrompt.Render("❯ /undo") + "\n")
-			if !m.checkpointMgr.IsGitRepo() {
-				m.appendHistory(styleMuted.Render("Not a git repository.\n\n"))
+			m.appendHistory(styleUserPrompt.Render("❯ "+inputVal) + "\n")
+			if m.isExecuting {
+				m.appendHistory(styleMuted.Render("Finish or cancel the current run first.") + "\n\n")
 				return nil
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			err := m.checkpointMgr.Rollback(ctx, "")
-			cancel()
+			report, err := m.writeJournal().Undo(len(parts) > 1 && strings.EqualFold(parts[1], "force"))
 			if err != nil {
-				m.appendHistory(styleDiffDel.Render(fmt.Sprintf("Undo failed: %v\n\n", err)))
-			} else {
-				m.appendHistory(styleStatusNotice.Render("Successfully rolled back working tree to pre-turn checkpoint.\n\n"))
+				m.appendHistory(styleMuted.Render(err.Error()) + "\n\n")
+				return nil
 			}
+			m.appendHistory(FormatUndoReport(report) + "\n\n")
 			return m.refreshGitStatusCmd()
 
 		case "/compact":
@@ -2062,6 +2067,8 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 		Model:              m.modelName,
 		Audit:              OpenAuditLog(auditNameFor(m.activeSession)),
 		Taint:              m.conversationTaint(),
+		Budget:             m.budget,
+		Journal:            m.writeJournal(),
 		PromptExtra:        skillPrompt,
 		MaxTurns:           m.maxTurns,
 		CommandTimeout:     m.commandTimeout,

@@ -23,6 +23,7 @@ type InteractiveRuntime struct {
 	PermissionMode PermissionMode `json:"permission_mode"`
 	ExpandedTools  bool           `json:"expanded_tools,omitempty"`
 	Sandbox        bool           `json:"sandbox,omitempty"`
+	Budget         Budget         `json:"budget,omitempty"`
 }
 
 type InteractiveSession struct {
