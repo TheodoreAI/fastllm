@@ -173,15 +173,37 @@ func anthropicBlocksFor(m Message) []anthropicContentBlock {
 			Input: input,
 		})
 	}
-	for _, img := range m.Images {
-		mediaType, data, ok := splitDataURI(img.DataURI)
-		if !ok {
-			continue
+	for _, att := range m.Attachments {
+		if att.DataURI != "" {
+			mediaType, data, ok := splitDataURI(att.DataURI)
+			if ok {
+				blockType := "image"
+				if mediaType == "application/pdf" {
+					blockType = "document"
+				}
+				blocks = append(blocks, anthropicContentBlock{
+					Type:   blockType,
+					Source: &anthropicImageSource{Type: "base64", MediaType: mediaType, Data: data},
+				})
+			}
+		} else if att.Extracted != "" {
+			blocks = append(blocks, anthropicContentBlock{
+				Type: "text",
+				Text: fmt.Sprintf("\n\n<document name=%q type=\"pdf\">\n%s\n</document>\n", att.Name, att.Extracted),
+			})
 		}
-		blocks = append(blocks, anthropicContentBlock{
-			Type:   "image",
-			Source: &anthropicImageSource{Type: "base64", MediaType: mediaType, Data: data},
-		})
+	}
+	if len(m.Attachments) == 0 {
+		for _, img := range m.Images {
+			mediaType, data, ok := splitDataURI(img.DataURI)
+			if !ok {
+				continue
+			}
+			blocks = append(blocks, anthropicContentBlock{
+				Type:   "image",
+				Source: &anthropicImageSource{Type: "base64", MediaType: mediaType, Data: data},
+			})
+		}
 	}
 	return blocks
 }

@@ -17,6 +17,8 @@ import (
 // points preferences at a temp file so nothing touches ~/.fastllm.
 func isolateTheme(t *testing.T) string {
 	t.Helper()
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("NO_COLOR", "")
 	prefs := filepath.Join(t.TempDir(), "preferences.json")
 	previousPath, previousProfile := preferencesPath, colorProfile
 	preferencesPath = func() string { return prefs }

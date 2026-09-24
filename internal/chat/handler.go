@@ -8,12 +8,14 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fastllm/internal/execution"
 	"fastllm/internal/harness"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
@@ -32,6 +34,7 @@ import (
 	"fastllm/internal/folderpicker"
 	"fastllm/internal/gitrepo"
 	"fastllm/internal/llm"
+	"fastllm/internal/media"
 	"fastllm/internal/store"
 	"fastllm/internal/webtools"
 )
@@ -211,18 +214,19 @@ func newWriteID() string {
 }
 
 type chatRequest struct {
-	Message        string   `json:"message"`
-	Model          string   `json:"model"`
-	ConversationID int64    `json:"conversation_id"`
-	ThinkLevel     string   `json:"think_level"`
-	Images         []string `json:"images,omitempty"`
-	ActiveFile     string   `json:"active_file,omitempty"`
+	Message        string           `json:"message"`
+	Model          string           `json:"model"`
+	ConversationID int64            `json:"conversation_id"`
+	ThinkLevel     string           `json:"think_level"`
+	Images         []string         `json:"images,omitempty"`
+	Attachments    []llm.Attachment `json:"attachments,omitempty"`
+	ActiveFile     string           `json:"active_file,omitempty"`
 }
 
 func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	var req chatRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || (strings.TrimSpace(req.Message) == "" && len(req.Images) == 0) {
-		http.Error(w, "message or an image is required", http.StatusBadRequest)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || (strings.TrimSpace(req.Message) == "" && len(req.Images) == 0 && len(req.Attachments) == 0) {
+		http.Error(w, "message or an attachment is required", http.StatusBadRequest)
 		return
 	}
 
@@ -236,20 +240,34 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 	isNewConversation := convID == 0
 	if isNewConversation {
 		var err error
-		convID, err = store.CreateConversation(h.DB, defaultWorkspace, conversationTitle(req.Message))
+		title := conversationTitle(req.Message)
+		if strings.TrimSpace(req.Message) == "" && len(req.Attachments) > 0 {
+			title = conversationTitle("Attached: " + req.Attachments[0].Name)
+		} else if strings.TrimSpace(req.Message) == "" && len(req.Images) > 0 {
+			title = "Attached image"
+		}
+		convID, err = store.CreateConversation(h.DB, defaultWorkspace, title)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}
 
-	if _, err := store.SaveMessage(h.DB, defaultWorkspace, convID, "user", req.Message, req.Images); err != nil {
+	var allImages []string
+	allImages = append(allImages, req.Images...)
+	for _, att := range req.Attachments {
+		if att.DataURI != "" {
+			allImages = append(allImages, att.DataURI)
+		}
+	}
+
+	if _, err := store.SaveMessage(h.DB, defaultWorkspace, convID, "user", req.Message, allImages); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	ctx := r.Context()
-	messages := h.buildPrompt(ctx, convID, req.Message, req.ActiveFile)
+	messages := h.buildPrompt(ctx, convID, req.Message, req.ActiveFile, req.Attachments...)
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -334,7 +352,7 @@ func conversationTitle(message string) string {
 	return title
 }
 
-func (h *Handler) buildPrompt(ctx context.Context, conversationID int64, question string, activeFile string) []llm.Message {
+func (h *Handler) buildPrompt(ctx context.Context, conversationID int64, question string, activeFile string, fallbackAttachments ...llm.Attachment) []llm.Message {
 	messages := []llm.Message{{Role: "system", Content: systemPrompt}}
 	if activeFile != "" {
 		messages = append(messages, llm.Message{
@@ -352,12 +370,33 @@ func (h *Handler) buildPrompt(ctx context.Context, conversationID int64, questio
 		for _, m := range history[start:] {
 			msg := llm.Message{Role: m.Role, Content: m.Content}
 			for _, dataURI := range m.Images {
-				msg.Images = append(msg.Images, llm.Image{DataURI: dataURI})
+				mimeType, payload, ok := media.DataURIToMimeAndPayload(dataURI)
+				if ok {
+					attType := "image"
+					var extracted string
+					if media.IsPDF(mimeType) {
+						attType = "pdf"
+						if raw, err := base64.StdEncoding.DecodeString(payload); err == nil {
+							extracted, _ = media.ExtractPDFText(raw)
+						}
+					}
+					msg.Attachments = append(msg.Attachments, llm.Attachment{
+						Type:      attType,
+						MimeType:  mimeType,
+						DataURI:   dataURI,
+						Extracted: extracted,
+					})
+					if attType == "image" {
+						msg.Images = append(msg.Images, llm.Image{DataURI: dataURI})
+					}
+				} else {
+					msg.Images = append(msg.Images, llm.Image{DataURI: dataURI})
+				}
 			}
 			messages = append(messages, msg)
 		}
 	} else {
-		messages = append(messages, llm.Message{Role: "user", Content: question})
+		messages = append(messages, llm.Message{Role: "user", Content: question, Attachments: fallbackAttachments})
 	}
 
 	return messages
@@ -1023,4 +1062,109 @@ func (h *Handler) DeleteConversation(w http.ResponseWriter, r *http.Request) {
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// UploadFile handles POST /api/files/upload.
+// It accepts a multipart/form-data upload containing:
+//   - "file": the uploaded file bytes
+//   - "dest_folder" (optional): destination folder relative to the workspace root
+//
+// If dest_folder is specified, the file is saved into that folder (validated against AllowedRoots).
+// If dest_folder is omitted or empty, the file is staged into .fastllm/attachments/.
+// Returns a JSON response with path, name, mime_type, data_uri, and extracted text (for PDFs).
+func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if err := r.ParseMultipartForm(media.MaxAttachmentBytes); err != nil {
+		http.Error(w, fmt.Sprintf("invalid multipart form: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "missing 'file' in upload request", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	raw, err := io.ReadAll(file)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("read file error: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if len(raw) > media.MaxAttachmentBytes {
+		http.Error(w, fmt.Sprintf("file size exceeds limit of %d bytes", media.MaxAttachmentBytes), http.StatusBadRequest)
+		return
+	}
+
+	root := ""
+	if h.Files != nil && h.Files.Enabled() {
+		root = h.Files.GetRoot()
+	}
+	if root == "" && len(h.AllowedRoots) > 0 {
+		root = h.AllowedRoots[0]
+	}
+	if root == "" {
+		root, _ = os.Getwd()
+	}
+
+	destFolder := strings.TrimSpace(r.FormValue("dest_folder"))
+	var targetPath string
+	if destFolder != "" {
+		targetDir := destFolder
+		if !filepath.IsAbs(targetDir) {
+			targetDir = filepath.Join(root, targetDir)
+		}
+		if !withinAllowedRoots(targetDir, h.AllowedRoots) {
+			http.Error(w, fmt.Sprintf("forbidden: destination %q is outside allowed roots", targetDir), http.StatusForbidden)
+			return
+		}
+		if err := os.MkdirAll(targetDir, 0o755); err != nil {
+			http.Error(w, fmt.Sprintf("failed to create directory: %v", err), http.StatusInternalServerError)
+			return
+		}
+		targetPath = filepath.Join(targetDir, filepath.Base(header.Filename))
+		if err := os.WriteFile(targetPath, raw, 0o644); err != nil {
+			http.Error(w, fmt.Sprintf("failed to write file: %v", err), http.StatusInternalServerError)
+			return
+		}
+	} else {
+		stagedPath, err := media.StageAttachment(root, header.Filename, raw)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("failed to stage attachment: %v", err), http.StatusInternalServerError)
+			return
+		}
+		targetPath = stagedPath
+	}
+
+	mimeType, _ := media.DetectMime(raw, header.Filename)
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+
+	var extracted string
+	if media.IsPDF(mimeType) {
+		extracted, _ = media.ExtractPDFText(raw)
+	}
+
+	dataURI := media.BuildDataURI(mimeType, raw)
+
+	resp := struct {
+		Path      string `json:"path"`
+		Name      string `json:"name"`
+		MimeType  string `json:"mime_type"`
+		DataURI   string `json:"data_uri"`
+		Extracted string `json:"extracted,omitempty"`
+	}{
+		Path:      targetPath,
+		Name:      filepath.Base(targetPath),
+		MimeType:  mimeType,
+		DataURI:   dataURI,
+		Extracted: extracted,
+	}
+
+	writeJSON(w, resp)
 }

@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -255,5 +256,46 @@ func TestClientWithResponsesWireAPIAndHeaders(t *testing.T) {
 	}
 	if result.Message.Content != "pong" {
 		t.Errorf("expected content 'pong', got %q", result.Message.Content)
+	}
+}
+
+func TestMessageAttachmentJSONSerialization(t *testing.T) {
+	orig := Message{
+		Role:    "user",
+		Content: "Check this invoice",
+		Attachments: []Attachment{
+			{
+				Type:     "image",
+				MimeType: "image/png",
+				Name:     "screenshot.png",
+				DataURI:  "data:image/png;base64,aW1hZ2VkYXRh",
+			},
+			{
+				Type:      "pdf",
+				MimeType:  "application/pdf",
+				Name:      "invoice.pdf",
+				Extracted: "Total: $120.00",
+			},
+		},
+	}
+
+	marshaled, err := json.Marshal(orig)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+
+	var roundtrip Message
+	if err := json.Unmarshal(marshaled, &roundtrip); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+
+	if roundtrip.Role != orig.Role {
+		t.Errorf("role mismatch: got %q, want %q", roundtrip.Role, orig.Role)
+	}
+	if len(roundtrip.Attachments) != len(orig.Attachments) {
+		t.Errorf("attachments length mismatch: got %d, want %d", len(roundtrip.Attachments), len(orig.Attachments))
+	}
+	if roundtrip.Attachments[0].Name != "screenshot.png" {
+		t.Errorf("first attachment name mismatch: got %q", roundtrip.Attachments[0].Name)
 	}
 }

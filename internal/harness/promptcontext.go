@@ -163,8 +163,8 @@ func replayMessages(prior []InitialMessage) []llm.Message {
 	for _, m := range prior {
 		switch m.Role {
 		case "user":
-			if strings.TrimSpace(m.Content) != "" {
-				messages = append(messages, llm.Message{Role: m.Role, Content: m.Content})
+			if strings.TrimSpace(m.Content) != "" || len(m.Attachments) > 0 {
+				messages = append(messages, llm.Message{Role: m.Role, Content: m.Content, Attachments: m.Attachments})
 			}
 		case "assistant":
 			var kept []llm.ToolCall

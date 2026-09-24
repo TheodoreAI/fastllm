@@ -80,7 +80,13 @@ func (h *Handler) HarnessRun(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if convID > 0 {
-			_, _ = store.SaveMessage(h.DB, defaultWorkspace, convID, "user", req.Task, nil)
+			var images []string
+			for _, att := range req.Attachments {
+				if att.DataURI != "" {
+					images = append(images, att.DataURI)
+				}
+			}
+			_, _ = store.SaveMessage(h.DB, defaultWorkspace, convID, "user", req.Task, images)
 		}
 	}
 
@@ -211,7 +217,20 @@ func withinAllowedRoots(dir string, roots []string) bool {
 			return "", false
 		}
 		if real, err := filepath.EvalSymlinks(abs); err == nil {
-			abs = real
+			return real, true
+		}
+		curr := abs
+		var parts []string
+		for {
+			parent := filepath.Dir(curr)
+			if parent == curr {
+				break
+			}
+			parts = append([]string{filepath.Base(curr)}, parts...)
+			curr = parent
+			if real, err := filepath.EvalSymlinks(curr); err == nil {
+				return filepath.Join(append([]string{real}, parts...)...), true
+			}
 		}
 		return abs, true
 	}

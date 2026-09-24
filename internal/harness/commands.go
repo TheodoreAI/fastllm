@@ -94,6 +94,13 @@ var commandSections = []commandSection{
 		{"/search <query>", "Search the public web (DuckDuckGo / Brave)"},
 		{"/fetch <url>", "Fetch and read web page content converted to Markdown"},
 	}},
+	{"Files & Media", []commandRow{
+		{"/paste", "Paste image or document from system clipboard into chat"},
+		{"/attach <file>", "Attach an image or PDF to the next chat prompt"},
+		{"/detach", "Clear pending attachments for the next prompt"},
+		{"/files [path]", "Browse workspace files & folders, press 'a' to attach"},
+		{"/add <src> [dest]", "Copy an external file or directory into the workspace"},
+	}},
 	{"Image Generation", []commandRow{
 		{"/image <prompt>", "Generate an image and save it under generated-images/"},
 	}},

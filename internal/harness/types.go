@@ -57,6 +57,9 @@ type RunRequest struct {
 	// ConversationID optionally links the run to a persistent conversation thread in the database.
 	ConversationID int64 `json:"conversation_id,omitempty"`
 
+	// Attachments provides media (images, PDFs) attached to this task.
+	Attachments []llm.Attachment `json:"attachments,omitempty"`
+
 	// InitialMessages provides previous conversation turns for multi-turn context.
 	InitialMessages []InitialMessage `json:"initial_messages,omitempty"`
 
@@ -102,8 +105,9 @@ type RunRequest struct {
 
 // InitialMessage represents a prior conversation turn.
 type InitialMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role        string           `json:"role"`
+	Content     string           `json:"content"`
+	Attachments []llm.Attachment `json:"attachments,omitempty"`
 	// ToolCalls and ToolCallID carry prior tool use, so a replayed turn still
 	// shows the model which files it read and which commands it ran.
 	ToolCalls  []llm.ToolCall `json:"tool_calls,omitempty"`

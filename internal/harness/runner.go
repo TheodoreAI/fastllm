@@ -18,6 +18,7 @@ import (
 	"fastllm/internal/files"
 	"fastllm/internal/gitrepo"
 	"fastllm/internal/llm"
+	"fastllm/internal/media"
 )
 
 // LLMClient abstracts any LLM client (such as *llm.Router or *llm.Client)
@@ -307,7 +308,7 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 		{Role: "system", Content: systemPrompt},
 	}
 	messages = append(messages, replayMessages(req.InitialMessages)...)
-	messages = append(messages, llm.Message{Role: "user", Content: req.Task})
+	messages = append(messages, llm.Message{Role: "user", Content: req.Task, Attachments: req.Attachments})
 
 	sessionMetrics := &SessionMetrics{}
 
@@ -501,6 +502,16 @@ func (r *Runner) executeReadFile(fileReader *files.Reader, requestedPath string)
 	content, truncated, err := fileReader.Read(requestedPath)
 	if err != nil {
 		return "Error reading file: " + err.Error()
+	}
+	lower := strings.ToLower(requestedPath)
+	if strings.HasSuffix(lower, ".pdf") || strings.HasPrefix(content, "%PDF") {
+		text, err := media.ExtractPDFText([]byte(content))
+		if err == nil && strings.TrimSpace(text) != "" {
+			return text
+		}
+	}
+	if strings.HasSuffix(lower, ".png") || strings.HasSuffix(lower, ".jpg") || strings.HasSuffix(lower, ".jpeg") || strings.HasSuffix(lower, ".gif") || strings.HasSuffix(lower, ".webp") {
+		return fmt.Sprintf("[Image file: %s (%d bytes). To analyze this image visually, attach it in chat via /attach or paste it.]", requestedPath, len(content))
 	}
 	if truncated {
 		content += "\n\n[truncated to 64KB]"
