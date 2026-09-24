@@ -148,8 +148,26 @@ if an earlier version's grant on `C:\Users` is present.
 
 It does not isolate the workspace from the model: whatever a command prints is
 returned to the model, a legitimate channel no sandbox can close. It forwards no
-stdin, sets no memory limit, and exists only on Windows; other platforms
-register no isolated backend, so isolation requests there still fail.
+stdin and sets no memory limit.
+
+On macOS the isolated backend is Seatbelt (`internal/execution/seatbelt_*.go`),
+the kernel sandbox behind App Sandbox, driven by `/usr/bin/sandbox-exec`. Each
+command runs under a generated profile that denies by default. It may read only
+the system directories programs need (`/usr`, `/bin`, `/System`, `/Library`,
+Homebrew, `/private/etc`), the workspace, a private scratch folder, and the Go
+toolchain the workspace resolves. It may write only the workspace and the
+scratch folder, and it has no network. The user's home folder is unreadable, so
+`HOME`, `TMPDIR`, and `GOCACHE` point into the scratch folder. File metadata
+stays visible everywhere because nearly every tool stats paths. Paths reach the
+profile as `-D` parameters, never as profile text. Nothing is granted
+persistently, so there is nothing to revoke. `sandbox-exec` is deprecated by
+Apple but works on current macOS; `Available` runs a probe under a
+deny-by-default profile, and if it ever stops working, isolation is refused
+rather than downgraded. Its containment tests (`seatbelt_darwin_test.go`) run
+only on a Mac: `go test ./internal/execution -run Seatbelt -v`.
+
+Other platforms register no isolated backend, so isolation requests there still
+fail.
 
 ## Future backends
 

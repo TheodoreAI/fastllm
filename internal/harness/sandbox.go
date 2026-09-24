@@ -11,11 +11,22 @@ import (
 	"strings"
 )
 
-// sandboxFirstUseNotice tells the user what the sandbox does and why the
-// first sandboxed command may pause.
-const sandboxFirstUseNotice = "Sandbox on: commands run isolated from the rest of this machine, with no network, " +
-	"from a drive letter mapped to the workspace. The first command grants the sandbox access to this workspace " +
-	"and the Go module cache, which can take a minute once."
+// sandboxFirstUseNotice tells the user what the sandbox does on this
+// platform, and on Windows why the first sandboxed command may pause.
+var sandboxFirstUseNotice = sandboxNoticeFor(runtime.GOOS)
+
+func sandboxNoticeFor(goos string) string {
+	switch goos {
+	case "windows":
+		return "Sandbox on: commands run isolated from the rest of this machine, with no network, " +
+			"from a drive letter mapped to the workspace. The first command grants the sandbox access to this workspace " +
+			"and the Go module cache, which can take a minute once."
+	case "darwin":
+		return "Sandbox on: commands run under macOS Seatbelt with no network. They can write only the workspace " +
+			"and a private scratch folder, and cannot read your home folder; HOME points to that scratch folder."
+	}
+	return "Sandbox on: commands run isolated from the rest of this machine, with no network."
+}
 
 func errSandboxUnavailable() error {
 	return fmt.Errorf("sandbox is not available on %s: no isolated execution backend exists for this platform", runtime.GOOS)

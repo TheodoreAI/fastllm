@@ -103,3 +103,12 @@ func TestSandboxUnavailableErrorNamesThePlatform(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestSandboxNoticeNamesThePlatformsSandbox(t *testing.T) {
+	if !strings.Contains(sandboxNoticeFor("darwin"), "Seatbelt") || strings.Contains(sandboxNoticeFor("darwin"), "drive letter") {
+		t.Fatalf("macOS notice: %q", sandboxNoticeFor("darwin"))
+	}
+	if !strings.Contains(sandboxNoticeFor("windows"), "drive letter") {
+		t.Fatal("the Windows notice lost its drive-letter explanation")
+	}
+}
