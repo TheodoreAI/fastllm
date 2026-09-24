@@ -31,7 +31,7 @@ func (p *PermissionController) HandleCommand(args []string) string {
 			out.WriteString("No active capability grants for this session.")
 		} else {
 			for _, g := range active {
-				fmt.Fprintf(&out, "  %s  %s  %s (%s ago)\n", g.ID, g.Tool, g.Workspace, time.Since(g.GrantedAt).Truncate(time.Second))
+				fmt.Fprintf(&out, "  %s  %s  (%s ago)\n", g.ID, sanitizeUntrusted(g.Scope.Describe()), time.Since(g.GrantedAt).Truncate(time.Second))
 			}
 			out.WriteString("Use /permissions revoke <id|tool> or /permissions clear to revoke grants.")
 		}

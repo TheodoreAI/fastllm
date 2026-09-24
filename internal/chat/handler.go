@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fastllm/internal/execution"
+	"fastllm/internal/harness"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -183,6 +184,10 @@ type Handler struct {
 	Live          *LiveBroadcaster
 	// SelfHostedDefaults is the self-hosted endpoint resolved from user config at startup.
 	SelfHostedDefaults config.ProviderEndpointDefaults
+	// MaxMode caps the permission mode a harness run may request; empty
+	// means plan. AllowedRoots, when set, confines a run's working_dir.
+	MaxMode      harness.PermissionMode
+	AllowedRoots []string
 
 	liveConvMu       sync.Mutex
 	liveConvID       int64

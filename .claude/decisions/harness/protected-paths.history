@@ -1,0 +1,4 @@
+- decided_at: 2026-09-24T02:23:21+00:00
+  event: initial
+  value: Monitor invariant I8: model write tools never write inside .git (monitor + file layer on canonical path); writes to .fastllm/, rule files (candidateRuleFiles) and skills dirs (projectSkillSources) always Ask, labelled '<tool> (fastllm configuration)' so ordinary session grants do not cover them, refused when no one can be asked; harness git runs with -c core.fsmonitor=false and diffs with --no-ext-diff --no-textconv; hooks and filters left enabled
+  reason: Reproduced: edit mode wrote core.fsmonitor into .git/config and the TUI's background git status executed it, violating I4. Hooks/filters stay on because user commits and git-lfs need them and they are unplantable once .git is unwritable

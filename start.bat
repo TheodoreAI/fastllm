@@ -72,7 +72,7 @@ start "" /B "%APPDIR%fastllm.exe" > "%APPDIR%fastllm.log" 2>&1
 rem Wait for the server to come up, then report where it is.
 powershell -NoProfile -Command ^
     "for ($i=0; $i -lt 30; $i++) {" ^
-    "  if (Test-NetConnection -ComputerName localhost -Port 8080 -InformationLevel Quiet -WarningAction SilentlyContinue) { break };" ^
+    "  if (Test-NetConnection -ComputerName 127.0.0.1 -Port 8080 -InformationLevel Quiet -WarningAction SilentlyContinue) { break };" ^
     "  Start-Sleep -Milliseconds 300" ^
     "}"
 

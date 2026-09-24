@@ -15,6 +15,7 @@ import (
 	"fastllm/internal/chat"
 	"fastllm/internal/config"
 	"fastllm/internal/files"
+	"fastllm/internal/harness"
 	"fastllm/internal/llm"
 	"fastllm/internal/store"
 )
@@ -27,6 +28,13 @@ type Config struct {
 	LLMChatModel string
 	FilesRoot    string
 	FilesWrite   bool
+
+	// Control-plane limits (see guard.go). Token is loaded by the caller so
+	// reading the environment never touches the filesystem.
+	Token        string
+	MaxMode      harness.PermissionMode // highest mode a harness run may request
+	AllowedRoots []string               // directories a run's working_dir must be inside
+	AllowedHosts []string               // Host names accepted beyond loopback
 }
 
 func getenv(key, fallback string) string {
@@ -45,11 +53,27 @@ func ConfigFromEnv() (Config, error) {
 		LLMChatModel: getenv("LLM_CHAT_MODEL", "llama3.1"),
 		FilesRoot:    getenv("FASTLLM_FILES_ROOT", ""),
 		FilesWrite:   getenv("FASTLLM_FILES_WRITE", "") != "",
+		MaxMode:      harness.PermissionMode(getenv("FASTLLM_MAX_MODE", string(harness.PermissionEdit))),
+		AllowedRoots: splitList(os.Getenv("FASTLLM_ALLOWED_ROOTS"), string(os.PathListSeparator)),
+		AllowedHosts: splitList(os.Getenv("FASTLLM_ALLOWED_HOSTS"), ","),
 	}, nil
 }
 
-// Built holds the constructed mux, DB handle, and chat handler.
+// splitList splits a separator-joined environment value, dropping blanks.
+func splitList(value, sep string) []string {
+	var out []string
+	for _, part := range strings.Split(value, sep) {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+// Built holds the constructed mux, DB handle, and chat handler. HTTP is the
+// mux behind the control-plane guard; serve HTTP, never Mux directly.
 type Built struct {
+	HTTP    http.Handler
 	Mux     *http.ServeMux
 	DB      *sql.DB
 	Handler *chat.Handler
@@ -112,6 +136,16 @@ func Build(cfg Config) (*Built, error) {
 
 	handler := chat.New(db, llmRouter, fileReader)
 	handler.SelfHostedDefaults = selfHostedDefaults
+	handler.MaxMode = cfg.MaxMode
+	handler.AllowedRoots = cfg.AllowedRoots
+	if len(handler.AllowedRoots) == 0 {
+		// Default to the one directory the server already works in.
+		if root := fileReader.GetRoot(); root != "" {
+			handler.AllowedRoots = []string{root}
+		} else if cwd, err := os.Getwd(); err == nil {
+			handler.AllowedRoots = []string{cwd}
+		}
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/chat", handler.Chat)
@@ -143,7 +177,8 @@ func Build(cfg Config) (*Built, error) {
 	// learns where the UI went instead of seeing a bare error.
 	mux.HandleFunc("GET /", rootNotice)
 
-	return &Built{Mux: mux, DB: db, Handler: handler}, nil
+	guarded := Guard(mux, GuardConfig{Token: cfg.Token, AllowedHosts: cfg.AllowedHosts})
+	return &Built{HTTP: guarded, Mux: mux, DB: db, Handler: handler}, nil
 }
 
 // rootNotice explains that this server is headless and points at the API it

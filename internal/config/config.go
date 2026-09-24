@@ -176,7 +176,15 @@ func GlobalConfigPath() (string, error) {
 // LoadSettings searches candidate locations for a config file.
 // If found, it parses and returns it along with the path.
 // If not found, it creates the default ~/.fastllm/config.json and returns it.
+//
+// A project config is used only once the user has trusted it (trust.go);
+// until then it is skipped and the global config applies. Callers show the
+// skipped file with ReviewProjectConfig.
 func LoadSettings(workingDir string) (*Settings, string, error) {
+	project := map[string]bool{}
+	for _, p := range projectConfigPaths(workingDir) {
+		project[p] = true
+	}
 	for _, p := range CandidateConfigPaths(workingDir) {
 		data, err := os.ReadFile(p)
 		if errors.Is(err, os.ErrNotExist) {
@@ -184,6 +192,11 @@ func LoadSettings(workingDir string) (*Settings, string, error) {
 		}
 		if err != nil {
 			return DefaultSettings(), p, fmt.Errorf("read settings %q: %w", p, err)
+		}
+		if project[p] {
+			if trusted, _ := trustState(p, data); !trusted {
+				continue
+			}
 		}
 		var s Settings
 		if err := json.Unmarshal(data, &s); err != nil {
@@ -279,7 +292,29 @@ func SaveSettings(path string, s *Settings) ([]string, error) {
 	if err := writeFileAtomic(path, append(data, '\n'), 0o644); err != nil {
 		return nil, err
 	}
+	// The user asked fastllm to write this file, so its exact contents are
+	// theirs; a project config written here is trusted as written. The model
+	// cannot reach SaveSettings, and its own writes to .fastllm/ ask first.
+	if isProjectConfigPath(path) {
+		if store, err := loadTrustStore(); err == nil {
+			store[trustKey(path)] = digest(append(data, '\n'))
+			_ = saveTrustStore(store)
+		}
+	}
 	return relocated, nil
+}
+
+// isProjectConfigPath reports a .fastllm config file other than the global one.
+func isProjectConfigPath(path string) bool {
+	dir := filepath.Dir(path)
+	if filepath.Base(dir) == "config" {
+		dir = filepath.Dir(dir)
+	}
+	if filepath.Base(dir) != ".fastllm" {
+		return false
+	}
+	home, err := userHomeDir()
+	return err != nil || trustKey(filepath.Dir(dir)) != trustKey(home)
 }
 
 func writeFileAtomic(path string, data []byte, mode os.FileMode) (err error) {

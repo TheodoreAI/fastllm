@@ -158,4 +158,3 @@ func TestProcessManagerLogsAndKillAll(t *testing.T) {
 		t.Errorf("expected 0 active processes after KillAll, got %d", pm.ActiveCount())
 	}
 }
-

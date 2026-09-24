@@ -1,0 +1,4 @@
+- decided_at: 2026-09-24T02:28:37+00:00
+  event: initial
+  value: Model, tool and program text is sanitized in the formatters that take raw text (FormatMarkdownWidth, FormatToolResult, FormatToolCall, FormatTerminalBox, change rows, /ps) before styling: escapes and C0/C1 controls stripped, command output keeps SGR colour only, bidi/tag characters always shown as markers; FormatPermissionPrompt reveals every hidden character and warns (I7)
+  reason: Sanitizing at formatter entry covers live, replayed and legacy-REPL output in one place each without altering tool arguments used for logic; our own ANSI is added after, so it is never confused with untrusted escapes

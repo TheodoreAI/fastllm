@@ -8,9 +8,9 @@ import (
 
 func TestClassifyShellCommandTUIEditors(t *testing.T) {
 	cases := []struct {
-		input       string
-		wantBin     string
-		wantTarget  string
+		input      string
+		wantBin    string
+		wantTarget string
 	}{
 		{"nano main.go", "nano", "main.go"},
 		{"vim config.yaml", "vim", "config.yaml"},

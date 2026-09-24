@@ -123,7 +123,7 @@ touch "$APPDIR/.fastllm.launched"
 
 # Wait for the server to come up, then report where it is.
 for _ in $(seq 1 30); do
-    if command -v nc >/dev/null 2>&1 && nc -z localhost "$PORT" 2>/dev/null; then
+    if command -v nc >/dev/null 2>&1 && nc -z 127.0.0.1 "$PORT" 2>/dev/null; then
         break
     fi
     sleep 0.3

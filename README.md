@@ -108,6 +108,18 @@ model the table cannot recognize, or for a vLLM server started with a reduced
 reply and tool schemas. `/compact` collapses older turns on demand without
 waiting for that threshold.
 
+Settings come from `~/.fastllm/config.json`, or from a workspace's own
+`.fastllm/config.json` once you trust it. A workspace config ships with the
+repository, so whoever wrote the repository wrote it: an endpoint there
+receives your conversation, and an `api_key_file` there can send one of your
+own keys with it. Until you run `/trust`, fastllm ignores it, uses your global
+config, and shows what it would change. Trust is recorded by path and exact
+contents in `~/.fastllm/trusted-configs.json`, so any later edit (a pull, say)
+makes it untrusted again. `/untrust` reverses it. A config that fastllm itself
+writes for you, such as through `/models add`, is trusted as written.
+Headless runs never trust on their own; set `FASTLLM_TRUST_PROJECT_CONFIG=1`
+where the repository is yours.
+
 ```json
 {
   "id": "muse-glimmer",
@@ -145,11 +157,59 @@ so a prompt shapes behaviour but never grants anything.
   switches the mode and starts a turn that carries out the plan. The model
   itself has no way to change the mode.
 - **agent** asks before every mutating call: once, for the session, or deny.
+  "For the session" covers what was approved, not the whole tool. The prompt
+  says exactly what it grants:
+  - A command of the form `program subcommand …` grants that prefix, so
+    approving `go test ./...` also allows `go test -run X`.
+  - Any other command is granted only exactly as written. That includes
+    commands with shell syntax (`; & | $ ( ) < >`, backticks, newlines) and
+    commands run through an interpreter or wrapper (`bash`, `python`, `sudo`,
+    `env`, …).
+  - A file edit grants its directory and everything below it. A file at the
+    workspace root is granted alone.
   A child agent of an agent-mode run cannot ask, so it runs as plan.
 - **edit** applies file edits without asking but never starts a process. This
   includes fused `then_run` follow-ups, and a refused `then_run` also blocks its
   edit.
 - **full** allows everything the run's capabilities permit, without asking.
+
+Some paths are protected in every mode, because writing them changes the
+harness rather than the project:
+
+- **`.git/`** is never written by file tools. Git runs commands named in its
+  own files (`core.fsmonitor`, hooks, diff drivers), and the harness runs git in
+  the background, so a write there would let edit mode start a process. The
+  file layer refuses it again after resolving symlinks, case, and Windows short
+  names, and the harness's own git calls pass `-c core.fsmonitor=false`,
+  `--no-ext-diff`, and `--no-textconv` so config that is already present cannot
+  run either.
+- **fastllm configuration** (`.fastllm/`, rule files such as `AGENTS.md` and
+  `CLAUDE.md`, and skills directories) always asks, even in edit and full, under
+  its own label so a session grant for ordinary writes does not cover it. A run
+  that cannot ask is refused.
+
+Secrets get their own rule, because the web tools are a way out. Reading a
+credentials file (`.env` and `.env.*` other than templates such as
+`.env.example`, `*.pem`, `*.key`, SSH private keys, `.npmrc`, `.netrc`,
+`.git-credentials`, and anything under `.ssh/`, `.aws/`, `.kube/`, and similar)
+asks in every mode, judged by where the path really leads, so a symlink cannot
+disguise one. A run that cannot ask is refused. `search_files` never scans
+those files. Once one has been read, every `web_fetch` and `web_search` asks,
+in every mode, showing the full URL or query and naming what was read. Each
+approval covers only that exact request. This lasts as long as the secret can
+still be in the conversation: until `/new`, `/clear`, or a resume, and child
+agents share it with their parent. These rules cover the model's file and web
+tools; a shell command you have allowed can still read and send anything, which
+only the sandbox contains.
+
+Text from the model, tools, and the programs they run is treated as untrusted
+on screen too. Before the UI styles it, terminal escape sequences (cursor moves,
+clipboard writes, title changes) and control characters are removed; command
+output keeps only its colours. Bidi overrides and invisible tag characters,
+which make text read differently from what it is, are shown as `⟨U+202E⟩`
+markers. Approval prompts go further: every hidden or control character in the
+request, including a carriage return that would overwrite the start of a
+command, is spelled out, and a warning says the raw text is what will run.
 
 In the TUI, **Shift+Tab** cycles plan → agent → edit → full. The header badge
 shows the current mode. `/set permissions <mode>` works in both terminal modes.
@@ -188,6 +248,19 @@ names look sensitive, but does not isolate the process or protect credentials
 stored on disk. Direct user shell commands (`!cmd`, `$ cmd`, `/shell`) retain
 the user's authority.
 
+Every decision the monitor makes is appended to an audit log, one JSON object
+per line: the tool, the full effect (file bodies are sized, not copied), a
+SHA-256 of the arguments, whether it was allowed, and what decided it: the mode
+table, a capability, a protected path, no one to ask, or the user. For user
+decisions it also records how: approved once, approved for the session with the
+grant ID it created, covered by an existing grant, or denied. Terminal sessions
+log to `~/.fastllm/audit/<session-id>.jsonl`, `-task` runs to
+`task-<time>.jsonl`, and the API server to `server-<date>.jsonl`
+(`FASTLLM_AUDIT_DIR` moves them). Child agents log into their parent's file.
+`/audit [n]` shows the latest decisions in the TUI. The log sits outside every
+workspace, so file tools cannot touch it; it is append-only by convention, not
+cryptographically sealed.
+
 Both terminal UIs support `/permissions [list]`,
 `/permissions revoke <grant-id|tool>`, and `/permissions clear`. In `agent` mode,
 session approvals are tracked with IDs and workspace scope. Revocation makes
@@ -196,6 +269,31 @@ commands. Directory, session, and permission-mode changes clear grants. Grants
 are never persisted. Tool catalogs and dispatch checks enforce capability
 restrictions independently of interactive approvals.
 
+## Server security
+
+The API is the harness's control plane: a request chooses its own permission
+mode, working directory, and command access. The reference monitor cannot
+defend against a caller who is allowed to act as the user, so the server
+decides who that is:
+
+- It listens on `127.0.0.1` unless `FASTLLM_ADDR` says otherwise, and warns
+  when bound to a non-loopback address.
+- Every route except `GET /` requires the token from `~/.fastllm/server-token`
+  (created at 0600 on first start) as `Authorization: Bearer <token>` or
+  `x-api-key: <token>`. Point external tools that use `/v1/chat/completions`
+  or `/v1/messages` at the server with this token as their API key.
+- Requests with a body must be `application/json`; requests carrying an
+  `Origin` header, or a `Host` that is not loopback or listed in
+  `FASTLLM_ALLOWED_HOSTS`, are refused. Browser pages therefore cannot call
+  the API, including through DNS rebinding.
+- A harness run may not request a mode above `FASTLLM_MAX_MODE` (default
+  `edit`, which never starts processes), and its `working_dir` must lie inside
+  `FASTLLM_ALLOWED_ROOTS`.
+
+```
+curl -H "Authorization: Bearer $(cat ~/.fastllm/server-token)"      -H "Content-Type: application/json"      -d '{"task":"summarise README.md"}' http://127.0.0.1:8080/api/harness/run
+```
+
 ## Production build (single binary)
 
 ```
@@ -203,7 +301,8 @@ go build -o fastllm.exe ./cmd/server
 ```
 
 One binary does both jobs: run it with no arguments for the terminal UI, or
-with the `server` subcommand for the headless API on http://localhost:8080.
+with the `server` subcommand for the headless API on http://127.0.0.1:8080
+(token required; see [Server security](#server-security)).
 There is no browser UI. `build-all.sh` / `build-all.bat` wrap this.
 
 `cmd/server/rsrc_windows_*.syso` embed the app icon (`cmd/server/icon/fastllm.ico`)
@@ -238,7 +337,14 @@ See `start.bat` for the underlying logic. For interactive use, run
 
 | Var | Default | Purpose |
 |---|---|---|
-| `FASTLLM_ADDR` | `:8080` | HTTP listen address |
+| `FASTLLM_ADDR` | `127.0.0.1:8080` | HTTP listen address (loopback only by default) |
+| `FASTLLM_TOKEN` | (from `~/.fastllm/server-token`) | API token; overrides the generated file |
+| `FASTLLM_MAX_MODE` | `edit` | Highest `permission_mode` an API run may request |
+| `FASTLLM_ALLOWED_ROOTS` | files root, else server's cwd | `working_dir` must be inside one of these (path-list separated) |
+| `FASTLLM_ALLOWED_HOSTS` | (none) | Extra `Host` names accepted besides loopback, comma separated |
+| `FASTLLM_AUDIT_DIR` | `~/.fastllm/audit` | Where permission audit logs are written |
+| `FASTLLM_TRUST_PROJECT_CONFIG` | (unset) | `1` trusts every workspace `.fastllm` config (CI only) |
+| `FASTLLM_TRUST_STORE` | `~/.fastllm/trusted-configs.json` | Where workspace-config trust is recorded |
 | `FASTLLM_DB` | `fastllm.db` | SQLite file path |
 | `LLM_BASE_URL` | `http://localhost:11434/v1` | OpenAI-compatible API base |
 | `LLM_API_KEY` | (empty) | Bearer token, if required |

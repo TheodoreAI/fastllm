@@ -165,6 +165,9 @@ func localClient(client LLMClient) (*llm.Client, bool) {
 // Run executes an autonomous task to completion or until max turns are reached.
 func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (*RunResult, error) {
 	startTime := time.Now()
+	if req.Taint == nil {
+		req.Taint = NewSessionTaint()
+	}
 	networkPolicy, err := normalizeNetworkPolicy(req.NetworkPolicy)
 	if err != nil {
 		return nil, err
@@ -642,6 +645,10 @@ func (r *Runner) executeSearchFiles(ctx context.Context, root, pattern, requeste
 scan:
 	for _, f := range all {
 		if prefix != "" && prefix != "." && f != prefix && !strings.HasPrefix(f, prefix+"/") {
+			continue
+		}
+		// A search must not read what read_file would have to ask for (I10).
+		if isSecretPath(f) {
 			continue
 		}
 		fullPath := filepath.Join(root, f)

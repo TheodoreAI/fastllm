@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"fastllm/internal/llm"
 )
@@ -23,6 +24,13 @@ import (
 //	I5 delegation only narrows: a child of agent runs as plan.
 //	I6 a run's mode is fixed when it starts.
 //	I7 an Ask shows the full effect being approved.
+//	I8 the harness's own configuration is not model-writable: no mode writes
+//	   inside .git, and writes to fastllm settings, rule files, and skills
+//	   always ask (protected.go).
+//	I9 a session grant covers what was approved, not the tool: a command
+//	   prefix or exact command, a directory or file (grants.go).
+//	I10 reading a secret file always asks, and once one is read every web
+//	   request asks, for the rest of the conversation (secrets.go).
 
 // Decision is the monitor's verdict on one tool call.
 type Decision int
@@ -179,6 +187,12 @@ func authorize(req RunRequest, tool, args string) Decision {
 	if toolClasses[tool] == classWrite && fusedFollowUp(args) != nil {
 		d = min(d, decideTool(req, "run_command"))
 	}
+	switch writeProtection(req, tool, args) {
+	case protectGit:
+		d = Deny
+	case protectConfig:
+		d = min(d, Ask)
+	}
 	return d
 }
 
@@ -195,24 +209,136 @@ func fusedFollowUp(raw string) *FollowUpCommand {
 }
 
 // admit runs the whole decision for one call, including asking the user for
-// an Ask. A nil Authorize means nobody can be asked, so Ask becomes Deny.
-// It returns the reason for a refusal, phrased for the model.
+// an Ask, and records it in the run's audit log. A nil Authorize means nobody
+// can be asked, so Ask becomes Deny. It returns the reason for a refusal,
+// phrased for the model.
 func admit(req RunRequest, tool, args string) (bool, string) {
+	v := decide(req, tool, args)
+	req.Audit.Record(AuditRecord{
+		Time: time.Now().UTC(), AgentDepth: req.AgentDepth, Mode: effectiveMode(req),
+		Tool: tool, Summary: consentSummary(tool, args), ArgsSHA256: argsDigest(args),
+		Allowed: v.allowed, Layer: v.layer, Via: v.via,
+	})
+	return v.allowed, v.refusal
+}
+
+// verdict is one decision and the layer that made it, for the audit log.
+type verdict struct {
+	allowed bool
+	refusal string
+	layer   string
+	via     string
+}
+
+func refused(layer, message string) verdict {
+	return verdict{layer: layer, refusal: message}
+}
+
+func decide(req RunRequest, tool, args string) verdict {
 	if decideTool(req, tool) == Deny {
-		return false, fmt.Sprintf("Error: permission denied: %s is not available %s. Do not retry it; work within the tools you were given.", tool, denialSource(req, tool))
+		return refused(denialLayer(req, tool), fmt.Sprintf("Error: permission denied: %s is not available %s. Do not retry it; work within the tools you were given.", tool, denialSource(req, tool)))
 	}
 	followUp := fusedFollowUp(args)
 	if toolClasses[tool] == classWrite && followUp != nil && decideTool(req, "run_command") == Deny {
-		return false, fmt.Sprintf("Error: permission denied: fused then_run commands are not available %s. The file mutation was not attempted; retry without then_run.", denialSource(req, "run_command"))
+		return refused(denialLayer(req, "run_command"), fmt.Sprintf("Error: permission denied: fused then_run commands are not available %s. The file mutation was not attempted; retry without then_run.", denialSource(req, "run_command")))
 	}
-	if decideTool(req, tool) == Ask && !askUser(req, tool, consentSummary(tool, args)) {
-		return false, "Permission denied by user for " + tool + ". Do not retry this action unless the user explicitly asks."
+	decision, askAs, summary := decideTool(req, tool), tool, consentSummary(tool, args)
+	layer := "mode"
+	switch writeProtection(req, tool, args) {
+	case protectGit:
+		return refused("protected-git", "Error: permission denied: file tools never write inside .git in any mode, because git runs commands named in its own files. Do not retry; ask the user to make git changes themselves.")
+	case protectConfig:
+		// Settings, rules, and skills shape every later session, so even edit
+		// and full ask, under a label a session grant for ordinary writes
+		// does not cover.
+		decision = min(decision, Ask)
+		askAs = tool + " (fastllm configuration)"
+		summary += " — changes settings, rules, or skills that fastllm loads into future sessions"
+		layer = "protected-config"
+		if decision == Ask && req.Authorize == nil {
+			return refused("protected-config", "Error: permission denied: this path holds fastllm settings, rules, or skills, and changing it needs the user's approval, which this run cannot ask for. Do not retry.")
+		}
 	}
-	if toolClasses[tool] == classWrite && followUp != nil && decideTool(req, "run_command") == Ask &&
-		!askUser(req, "run_command", "command="+followUp.Command) {
-		return false, "Permission denied by user for the fused follow-up command. The file mutation was not attempted."
+	var scope *GrantScope
+	if secretPath, secret := readsSecret(req, tool, args); secret {
+		decision = min(decision, Ask)
+		askAs = tool + " (secret file)"
+		summary += " — a credentials file; reading it puts its contents in the conversation, and every web request after it will ask"
+		layer = "secret-file"
+		exact := GrantScope{Tool: askAs, Kind: scopeFile, Pattern: secretPath, Subject: secretPath}
+		scope = &exact
+		if req.Authorize == nil {
+			return refused("secret-file", "Error: permission denied: "+secretPath+" looks like a credentials file, and reading it needs the user's approval, which this run cannot ask for. Do not retry; work without it.")
+		}
 	}
-	return true, ""
+	if sources := req.Taint.Sources(); len(sources) > 0 && toolClasses[tool] == classNetwork {
+		decision = min(decision, Ask)
+		askAs = tool + " (after reading secrets)"
+		summary += " — this conversation has read " + strings.Join(sources, ", ") + "; this request could carry their contents out"
+		layer = "tainted-network"
+		exact := GrantScope{Tool: askAs, Kind: scopeExact, Pattern: summary, Subject: summary}
+		scope = &exact
+		if req.Authorize == nil {
+			return refused("tainted-network", "Error: permission denied: this conversation has read a credentials file, so web requests need the user's approval, which this run cannot ask for. Do not retry.")
+		}
+	}
+	var via string
+	if decision == Ask {
+		if req.Authorize == nil {
+			return refused("no-approver", "Permission denied by user for "+tool+". Do not retry this action unless the user explicitly asks.")
+		}
+		// Anything but the plain mode table asks in every mode.
+		always := layer != "mode"
+		layer = "user"
+		consentScope := scopeFor(req, askAs, tool, args)
+		if scope != nil {
+			consentScope = *scope
+		}
+		consent := ConsentRequest{Tool: askAs, Summary: summary, Scope: consentScope, Via: &via, Always: always}
+		if !askUser(req, consent) {
+			v := refused("user", "Permission denied by user for "+tool+". Do not retry this action unless the user explicitly asks.")
+			v.via = orDefault(via, "denied")
+			return v
+		}
+	}
+	if toolClasses[tool] == classWrite && followUp != nil && decideTool(req, "run_command") == Ask {
+		var followVia string
+		consent := ConsentRequest{Tool: "run_command", Summary: "command=" + followUp.Command, Scope: commandScope("run_command", followUp.Command), Via: &followVia}
+		if !askUser(req, consent) {
+			v := refused("user", "Permission denied by user for the fused follow-up command. The file mutation was not attempted.")
+			v.via = "then_run " + orDefault(followVia, "denied")
+			return v
+		}
+		layer, via = "user", strings.TrimSpace(via+"; then_run "+orDefault(followVia, "approved"))
+	}
+	if layer == "user" {
+		via = orDefault(via, "approved")
+	}
+	if secretPath, secret := readsSecret(req, tool, args); secret {
+		req.Taint.Mark(secretPath)
+	}
+	return verdict{allowed: true, layer: layer, via: via}
+}
+
+func orDefault(s, fallback string) string {
+	if strings.TrimSpace(s) == "" {
+		return fallback
+	}
+	return s
+}
+
+// denialLayer is denialSource's category, for the audit log.
+func denialLayer(req RunRequest, tool string) string {
+	switch source := denialSource(req, tool); {
+	case strings.HasPrefix(source, "in this harness"):
+		return "unknown-tool"
+	case strings.HasSuffix(source, " mode"):
+		return "mode"
+	case strings.Contains(source, "commands are turned off"):
+		return "commands-off"
+	default:
+		return "capability"
+	}
 }
 
 // denialSource names the layer that refused, so the model (and whoever reads
@@ -231,8 +357,8 @@ func denialSource(req RunRequest, tool string) string {
 	return "under this run's capability policy"
 }
 
-func askUser(req RunRequest, tool, summary string) bool {
-	return req.Authorize != nil && req.Authorize(tool, summary)
+func askUser(req RunRequest, consent ConsentRequest) bool {
+	return req.Authorize != nil && req.Authorize(consent)
 }
 
 // consentSummary states exactly what an approval would permit (I7). Commands

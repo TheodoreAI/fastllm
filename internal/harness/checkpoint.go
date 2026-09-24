@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"fastllm/internal/execution"
+	"fastllm/internal/gitrepo"
 	"fmt"
 	"strings"
 	"sync"
@@ -44,7 +45,7 @@ func (cm *CheckpointManager) git(ctx context.Context, args ...string) (string, e
 	if cm.scope != nil {
 		ctx = execution.WithScope(ctx, cm.scope)
 	}
-	result, err := execution.RunLocal(ctx, cm.workingDir, execution.LocalPolicy(), execution.Command{Executable: "git", Args: args})
+	result, err := execution.RunLocal(ctx, cm.workingDir, execution.LocalPolicy(), execution.Command{Executable: "git", Args: gitrepo.HardenedArgs(args...)})
 	if err != nil {
 		return "", err
 	}

@@ -306,7 +306,7 @@ func formatChangeRow(f fileChange, width int, selected bool) string {
 	}
 	counts := formatLineCounts(f.Added, f.Removed)
 	pathWidth := width - 3 - VisualLen(counts) - 1
-	path := truncatePathLeft(f.Path, pathWidth)
+	path := truncatePathLeft(sanitizeUntrusted(f.Path), pathWidth)
 	if selected {
 		path = ColorBrightWhite(StyleBold(path))
 	}

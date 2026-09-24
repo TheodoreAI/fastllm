@@ -1079,4 +1079,3 @@ func TestCtrlBBackgroundsRunningShellCommand(t *testing.T) {
 		t.Fatalf("history does not confirm backgrounding: %s", m.historyText.String())
 	}
 }
-

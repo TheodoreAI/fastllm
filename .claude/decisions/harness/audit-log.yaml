@@ -1,0 +1,3 @@
+value: admit = decide + AuditLog.Record: one JSONL record per monitor decision (time, depth, mode, tool, consentSummary, args SHA-256, allowed, layer, via) in ~/.fastllm/audit/<session>.jsonl (task-<time>, server-<date>; FASTLLM_AUDIT_DIR overrides); children share the parent's log; approvers report Via through ConsentRequest.Via; append via O_APPEND open-write-close; failures never affect the run; /audit [n] in the TUI
+reason: Kernel gap #7: there was no record of what the harness allowed or refused. Recording at admit, the single choke point, makes the log complete by construction; Via distinguishes a live approval from a session grant, which a bool return could not
+decided_at: 2026-09-24T02:49:01+00:00

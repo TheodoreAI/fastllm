@@ -112,6 +112,9 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 	var sessionMetrics SessionMetrics
 
 	fmt.Println(FormatWelcomeBanner(absWorkingDir, model, configPath, checkpointMgr.IsGitRepo(), len(discoveredRules), allowCmds))
+	if notice := untrustedConfigNotice(absWorkingDir, "Set FASTLLM_TRUST_PROJECT_CONFIG=1 to use it, or /trust it in the TUI."); notice != "" {
+		fmt.Println(notice)
+	}
 
 	fileReader := files.New(absWorkingDir, true)
 
@@ -149,6 +152,8 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 	permissions.SetWorkspace(absWorkingDir)
 	tools := interactiveTools(allowCmds, permissionMode, r.EnableObservations)
 	var activeSession *InteractiveSession
+	// taint follows the conversation: replaced whenever the messages are (I10).
+	taint := NewSessionTaint()
 	if sessionStoreErr == nil {
 		activeSession = sessionStore.New(absWorkingDir, model, runtimeSettings())
 	}
@@ -199,10 +204,14 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 		discoveredSkills = DiscoverWorkspaceSkills(absWorkingDir)
 		settings, configPath = newSettings, newConfigPath
 		permissions.SetWorkspace(absWorkingDir)
+		taint = NewSessionTaint()
 		sessionMessages = []llm.Message{
 			{Role: "system", Content: currentSystemPrompt()},
 		}
 		fmt.Println(FormatWelcomeBanner(absWorkingDir, model, configPath, checkpointMgr.IsGitRepo(), len(discoveredRules), allowCmds))
+		if notice := untrustedConfigNotice(absWorkingDir, "Set FASTLLM_TRUST_PROJECT_CONFIG=1 to use it, or /trust it in the TUI."); notice != "" {
+			fmt.Println(notice)
+		}
 		return nil
 	}
 
@@ -325,6 +334,7 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 			}
 			if line == "/c" || line == "/clear" {
 				ClearScreen()
+				taint = NewSessionTaint()
 				sessionMessages = []llm.Message{
 					{Role: "system", Content: currentSystemPrompt()},
 				}
@@ -391,10 +401,14 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 
 			case "/c", "/clear":
 				ClearScreen()
+				taint = NewSessionTaint()
 				sessionMessages = []llm.Message{
 					{Role: "system", Content: currentSystemPrompt()},
 				}
 				fmt.Println(FormatWelcomeBanner(absWorkingDir, model, configPath, checkpointMgr.IsGitRepo(), len(discoveredRules), allowCmds))
+				if notice := untrustedConfigNotice(absWorkingDir, "Set FASTLLM_TRUST_PROJECT_CONFIG=1 to use it, or /trust it in the TUI."); notice != "" {
+					fmt.Println(notice)
+				}
 				fmt.Println(ColorGreen("  " + SymCheck + " Conversation and screen cleared."))
 				saveSession()
 				continue
@@ -530,6 +544,7 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 					activeSession.ClosedAt = &now
 				}
 				saveSession()
+				taint = NewSessionTaint()
 				sessionMessages = []llm.Message{{Role: "system", Content: currentSystemPrompt()}}
 				sessionMetrics = SessionMetrics{}
 				if sessionStore != nil {
@@ -886,6 +901,8 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 			observationStore,
 			turnPrompt,
 			currentCompactionConfig(),
+			OpenAuditLog(auditNameFor(activeSession)),
+			taint,
 		)
 		sessionMessages[0].Content = baseSystemPrompt
 		saveSession()
@@ -933,6 +950,8 @@ func (r *Runner) runInteractiveTurn(
 	observationStore *ObservationStore,
 	prompt PromptContext,
 	compactionCfg CompactionConfig,
+	audit *AuditLog,
+	taint *SessionTaint,
 ) (proposedPlan string) {
 	owner := r.executions
 	if owner == nil {
@@ -944,7 +963,7 @@ func (r *Runner) runInteractiveTurn(
 		WorkingDir: absWorkingDir, Model: model, MaxTurns: maxTurns,
 		AllowCommands: allowCmds, CommandsConfigured: true, Sandbox: sandbox, CommandTimeout: cmdTimeout,
 		ThinkLevel: thinkLevel, PermissionMode: NormalizeMode(permissions.Mode),
-		Authorize: permissions.Authorize,
+		Authorize: permissions.Authorize, Audit: audit, Taint: taint,
 	}
 	opts, err := sandboxOptions(owner, execution.Options{Workspace: absWorkingDir, Policy: executionPolicy(turnReq, allowCmds), Timeout: cmdTimeout, MaxOutputBytes: 64 * 1024}, sandbox)
 	if err != nil {
