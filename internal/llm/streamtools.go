@@ -127,6 +127,9 @@ func (c *Client) StreamChatWithTools(
 	if model == "" {
 		model = c.ChatModel
 	}
+	if c.isResponsesAPI() {
+		return c.responsesClient().StreamChatWithTools(ctx, model, messages, tools, thinkLevel, onToken, onReasoning)
+	}
 	cr := chatRequest{
 		Model:         model,
 		Messages:      messages,
@@ -150,9 +153,7 @@ func (c *Client) StreamChatWithTools(
 		return ChatResult{}, false, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if c.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
-	}
+	c.applyHeaders(req)
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {

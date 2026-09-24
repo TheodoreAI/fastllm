@@ -209,3 +209,51 @@ func TestRouter_ListModels_CollapsesAliasesOntoConfiguredID(t *testing.T) {
 		t.Errorf("expected selfhosted:example-model, got %q", selfHosted[0].Name)
 	}
 }
+
+func TestClientWithResponsesWireAPIAndHeaders(t *testing.T) {
+	var gotPath string
+	var gotAuth string
+	var gotAPIKey string
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		gotAPIKey = r.Header.Get("api-key")
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"id": "resp_123",
+			"output": [
+				{
+					"type": "message",
+					"role": "assistant",
+					"content": [{"type": "output_text", "text": "pong"}]
+				}
+			]
+		}`))
+	}))
+	defer ts.Close()
+
+	client := New(ts.URL, "", "gpt-5.3-codex", "")
+	client.WireAPI = "responses"
+	client.Headers = map[string]string{
+		"api-key": "test-azure-key",
+	}
+
+	result, err := client.ChatWithUsage(context.Background(), "gpt-5.3-codex", []Message{{Role: "user", Content: "ping"}}, nil, "")
+	if err != nil {
+		t.Fatalf("ChatWithUsage failed: %v", err)
+	}
+	if gotPath != "/responses" {
+		t.Errorf("expected path /responses, got %q", gotPath)
+	}
+	if gotAPIKey != "test-azure-key" {
+		t.Errorf("expected api-key 'test-azure-key', got %q", gotAPIKey)
+	}
+	if gotAuth != "" {
+		t.Errorf("expected empty Authorization header, got %q", gotAuth)
+	}
+	if result.Message.Content != "pong" {
+		t.Errorf("expected content 'pong', got %q", result.Message.Content)
+	}
+}

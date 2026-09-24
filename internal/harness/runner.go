@@ -106,6 +106,8 @@ func (r *Runner) SwitchModel(endpoint *config.ModelEndpoint) error {
 	client.BaseURL = strings.TrimRight(strings.TrimSpace(endpoint.URL), "/")
 	client.APIKey = endpoint.ResolveAPIKey()
 	client.ChatModel = endpoint.ID
+	client.WireAPI = endpoint.WireAPI
+	client.Headers = endpoint.ResolveHeaders()
 	client.SendThink = config.ShouldSendThink(endpoint, client.BaseURL)
 	client.Temperature = nil
 	client.TopP = nil
