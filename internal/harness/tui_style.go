@@ -81,24 +81,29 @@ func applyStyle(code, s string) string {
 	return code + s + ansiReset
 }
 
+// The hue-named helpers below draw from the active theme (theme.go): ColorGray
+// is its muted role, ColorCyan its accent, and so on.
 func StyleBold(s string) string      { return applyStyle(ansiBold, s) }
 func StyleDim(s string) string       { return applyStyle(ansiDim, s) }
 func StyleItalic(s string) string    { return applyStyle(ansiItalic, s) }
 func StyleUnderline(s string) string { return applyStyle(ansiUnderline, s) }
-func ColorRed(s string) string       { return applyStyle(ansiBrightRed, s) }
-func ColorGreen(s string) string     { return applyStyle(ansiBrightGreen, s) }
-func ColorYellow(s string) string    { return applyStyle(ansiBrightYellow, s) }
-func ColorBlue(s string) string      { return applyStyle(ansiBrightBlue, s) }
-func ColorMagenta(s string) string   { return applyStyle(ansiBrightPurple, s) }
-func ColorCyan(s string) string      { return applyStyle(ansiBrightCyan, s) }
+func ColorRed(s string) string       { return applyStyle(themeSeqs[roleError], s) }
+func ColorGreen(s string) string     { return applyStyle(themeSeqs[roleOk], s) }
+func ColorYellow(s string) string    { return applyStyle(themeSeqs[roleWarn], s) }
+func ColorBlue(s string) string      { return applyStyle(themeSeqs[roleAccent2], s) }
+func ColorMagenta(s string) string   { return applyStyle(themeSeqs[rolePurple], s) }
+func ColorCyan(s string) string      { return applyStyle(themeSeqs[roleAccent], s) }
 
 // ColorInverse swaps foreground and background, which is how the inline
 // chooser marks the highlighted option without relying on a colour that may
 // not contrast against the user's terminal theme.
 func ColorInverse(s string) string     { return applyStyle(ansiInverse, s) }
-func ColorGray(s string) string        { return applyStyle(ansiGray, s) }
-func ColorWhite(s string) string       { return applyStyle(ansiWhite, s) }
-func ColorBrightWhite(s string) string { return applyStyle(ansiBrightWhite, s) }
+func ColorGray(s string) string        { return applyStyle(themeSeqs[roleMuted], s) }
+func ColorWhite(s string) string       { return applyStyle(themeSeqs[roleText], s) }
+func ColorBrightWhite(s string) string { return applyStyle(themeSeqs[roleValue], s) }
+
+// ColorBorder colours card frames and dividers, dimmer than label text.
+func ColorBorder(s string) string { return applyStyle(themeSeqs[roleFrame], s) }
 
 // StripANSI removes ANSI escape sequences to compute true visual length.
 func StripANSI(s string) string {
@@ -155,16 +160,16 @@ func FormatDivider(label string, width int) string {
 		width = 68
 	}
 	if label == "" {
-		return ColorGray(strings.Repeat(SymHLine, width))
+		return ColorBorder(strings.Repeat(SymHLine, width))
 	}
-	prefix := ColorGray(SymHLine + SymHLine + " ")
+	prefix := ColorBorder(SymHLine + SymHLine + " ")
 	suffix := " "
 	labelFormatted := ColorGray(label)
 	rem := width - 4 - VisualLen(label)
 	if rem < 2 {
 		rem = 2
 	}
-	return prefix + labelFormatted + ColorGray(suffix+strings.Repeat(SymHLine, rem))
+	return prefix + labelFormatted + ColorBorder(suffix+strings.Repeat(SymHLine, rem))
 }
 
 // FormatCard wraps an array of text lines in a modern rounded box.
@@ -181,7 +186,7 @@ func FormatCard(title string, lines []string, width int) string {
 	var b strings.Builder
 
 	// Top border
-	b.WriteString(ColorGray(SymCornerTL + SymHLine + " "))
+	b.WriteString(ColorBorder(SymCornerTL + SymHLine + " "))
 	b.WriteString(ColorBrightWhite(StyleBold(title)))
 	b.WriteString(" ")
 	titleVisLen := VisualLen(title)
@@ -189,7 +194,7 @@ func FormatCard(title string, lines []string, width int) string {
 	if topDashes < 2 {
 		topDashes = 2
 	}
-	b.WriteString(ColorGray(strings.Repeat(SymHLine, topDashes) + SymCornerTR + "\n"))
+	b.WriteString(ColorBorder(strings.Repeat(SymHLine, topDashes) + SymCornerTR + "\n"))
 
 	// Content lines
 	contentWidth := width - 6
@@ -199,14 +204,14 @@ func FormatCard(title string, lines []string, width int) string {
 		if padding < 0 {
 			padding = 0
 		}
-		b.WriteString(ColorGray(SymVLine) + "  ")
+		b.WriteString(ColorBorder(SymVLine) + "  ")
 		b.WriteString(line)
 		b.WriteString(strings.Repeat(" ", padding))
-		b.WriteString("  " + ColorGray(SymVLine) + "\n")
+		b.WriteString("  " + ColorBorder(SymVLine) + "\n")
 	}
 
 	// Bottom border
-	b.WriteString(ColorGray(SymCornerBL + strings.Repeat(SymHLine, width-2) + SymCornerBR))
+	b.WriteString(ColorBorder(SymCornerBL + strings.Repeat(SymHLine, width-2) + SymCornerBR))
 	return b.String()
 }
 
@@ -278,7 +283,7 @@ func FormatToolCall(toolName, argsSummary string) string {
 	}
 
 	summary := ColorWhite(argsSummary)
-	return fmt.Sprintf("\n  %s %s %s %s", ColorGray(SymCornerTL+SymHLine), badge, ColorGray("pending"), summary)
+	return fmt.Sprintf("\n  %s %s %s %s", ColorBorder(SymCornerTL+SymHLine), badge, ColorGray("pending"), summary)
 }
 
 func FormatToolState(toolName, state string, elapsed time.Duration) string {
@@ -286,7 +291,7 @@ func FormatToolState(toolName, state string, elapsed time.Duration) string {
 	if elapsed > 0 {
 		detail = fmt.Sprintf("%s in %s", state, elapsed.Round(time.Millisecond))
 	}
-	return fmt.Sprintf("  %s  %s %s", ColorGray(SymVLine), ColorCyan(toolName), ColorGray(detail))
+	return fmt.Sprintf("  %s  %s %s", ColorBorder(SymVLine), ColorCyan(toolName), ColorGray(detail))
 }
 
 // FormatToolResult renders the outcome of a tool execution with structured indentation.
@@ -317,7 +322,7 @@ func FormatToolResult(toolName, result string, maxPreviewLines int) string {
 		} else {
 			line = ColorGray(line)
 		}
-		b.WriteString(fmt.Sprintf("  %s  %s\n", ColorGray(SymVLine), line))
+		b.WriteString(fmt.Sprintf("  %s  %s\n", ColorBorder(SymVLine), line))
 	}
 
 	// Bottom line with status indicator
@@ -335,7 +340,7 @@ func FormatToolResult(toolName, result string, maxPreviewLines int) string {
 		statusText = ColorGray(fmt.Sprintf("%s completed", statusSym))
 	}
 
-	b.WriteString(fmt.Sprintf("  %s %s", ColorGray(SymCornerBL+SymHLine), statusText))
+	b.WriteString(fmt.Sprintf("  %s %s", ColorBorder(SymCornerBL+SymHLine), statusText))
 	return b.String()
 }
 
@@ -375,7 +380,7 @@ func FormatTerminalBox(opts TerminalBoxOptions) string {
 	}
 
 	// 1. Top border: ╭─ terminal ─────────────────────────╮
-	b.WriteString(ColorGray(SymCornerTL + SymHLine + " "))
+	b.WriteString(ColorBorder(SymCornerTL + SymHLine + " "))
 	b.WriteString(titleColor(StyleBold(title)))
 	b.WriteString(" ")
 	titleVisLen := VisualLen(title)
@@ -383,7 +388,7 @@ func FormatTerminalBox(opts TerminalBoxOptions) string {
 	if topDashes < 2 {
 		topDashes = 2
 	}
-	b.WriteString(ColorGray(strings.Repeat(SymHLine, topDashes) + SymCornerTR + "\n"))
+	b.WriteString(ColorBorder(strings.Repeat(SymHLine, topDashes) + SymCornerTR + "\n"))
 
 	// 2. Command Prompt line: │ ❯ command                 │
 	cmdText := strings.TrimSpace(opts.Command)
@@ -391,7 +396,7 @@ func FormatTerminalBox(opts TerminalBoxOptions) string {
 	b.WriteString(formatTerminalBoxLine(prompt, contentWidth) + "\n")
 
 	// 3. Divider: ├─────────────────────────────────────────┤
-	b.WriteString(ColorGray(SymTeeL + strings.Repeat(SymHLine, width-2) + SymTeeR + "\n"))
+	b.WriteString(ColorBorder(SymTeeL + strings.Repeat(SymHLine, width-2) + SymTeeR + "\n"))
 
 	// 4. Output lines
 	output := strings.TrimRight(opts.Output, "\r\n")
@@ -457,7 +462,7 @@ func FormatTerminalBox(opts TerminalBoxOptions) string {
 	if bottomDashes < 2 {
 		bottomDashes = 2
 	}
-	b.WriteString(ColorGray(SymCornerBL+SymHLine+" ") + footerContent + " " + ColorGray(strings.Repeat(SymHLine, bottomDashes)+SymCornerBR))
+	b.WriteString(ColorBorder(SymCornerBL+SymHLine+" ") + footerContent + " " + ColorBorder(strings.Repeat(SymHLine, bottomDashes)+SymCornerBR))
 
 	return b.String()
 }
@@ -469,7 +474,7 @@ func formatTerminalBoxLine(content string, contentWidth int) string {
 	if padding < 0 {
 		padding = 0
 	}
-	return ColorGray(SymVLine) + " " + clamped + strings.Repeat(" ", padding) + " " + ColorGray(SymVLine)
+	return ColorBorder(SymVLine) + " " + clamped + strings.Repeat(" ", padding) + " " + ColorBorder(SymVLine)
 }
 
 // FormatMarkdown renders Markdown structures with a default width of 76 characters.
@@ -670,6 +675,7 @@ func FormatHelp() string {
 		{"/help", "Display this command reference"},
 		{"/status", "Inspect session token usage, latency, cost, and jobs"},
 		{"/sessions", "Browse, filter, resume, rename, or delete sessions"},
+		{"/theme [name]", "Pick a colour theme (nord, zinc, terminal, ...)"},
 		{"/sessions list", "Print the saved sessions table"},
 		{"/resume [id|last]", "Resume a saved session (no id opens the menu)"},
 		{"/session [id]", "Show session details"},

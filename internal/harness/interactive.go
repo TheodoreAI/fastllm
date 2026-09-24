@@ -106,6 +106,7 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 	defer processMgr.KillAll()
 
 	initConsole()
+	LoadThemePreference()
 
 	var sessionMetrics SessionMetrics
 

@@ -2,3 +2,7 @@
   event: initial
   value: Native zero-overhead modern ANSI/Unicode styling engine with Windows VT support, rounded cards, colored diffs, and structured tool blocks
   reason: Zero new external dependencies, preserves fast streaming REPL responsiveness, provides clean monochrome/accent aesthetics matching web UI without emojis
+- decided_at: 2026-09-24T01:40:08+00:00
+  event: superseded-previous
+  value: Native ANSI/Unicode styling with Windows VT support, rounded cards, colored diffs, structured tool blocks, no emojis; all colours come from the active theme (see tui-theme), truecolour downsampled via termenv, 16-colour fallback when not a TTY
+  reason: Original zero-dependency styling kept; hue-named helpers now map to theme roles so call sites are unchanged
