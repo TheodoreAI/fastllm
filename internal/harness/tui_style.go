@@ -633,26 +633,24 @@ func FormatTurnSummary(tm TurnMetrics) string {
 	return "\n" + FormatDivider(label, 70)
 }
 
-// HighlightDiff applies ANSI syntax coloring to git diff text.
+// HighlightDiff applies ANSI syntax coloring and VS Code-style formatting to git diff text.
 func HighlightDiff(diffText string) string {
-	lines := strings.Split(diffText, "\n")
-	var out []string
-	for _, line := range lines {
-		if strings.HasPrefix(line, "diff --git") || strings.HasPrefix(line, "---") || strings.HasPrefix(line, "+++") {
-			out = append(out, ColorBrightWhite(StyleBold(line)))
-		} else if strings.HasPrefix(line, "@@") {
-			out = append(out, ColorCyan(line))
-		} else if strings.HasPrefix(line, "+") {
-			out = append(out, ColorGreen(line))
-		} else if strings.HasPrefix(line, "-") {
-			out = append(out, ColorRed(line))
-		} else if strings.HasPrefix(line, "index ") {
-			out = append(out, ColorGray(line))
-		} else {
-			out = append(out, line)
-		}
+	return HighlightDiffFile(diffText, "")
+}
+
+// HighlightDiffFile applies VS Code-style syntax coloring, gutter formatting, and intra-line
+// word-diff highlighting to git diff text for a specified file path.
+func HighlightDiffFile(diffText, filePath string) string {
+	if strings.TrimSpace(diffText) == "" {
+		return ""
 	}
-	return strings.Join(out, "\n")
+	opts := DefaultDiffOptions()
+	opts.FilePath = filePath
+	res := FormatVSCodeDiff(diffText, opts)
+	if res == "" {
+		return diffText
+	}
+	return res
 }
 
 // FormatHelp renders the styled slash command reference.

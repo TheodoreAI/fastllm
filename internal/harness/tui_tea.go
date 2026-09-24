@@ -233,9 +233,11 @@ type teaModel struct {
 	cancelShell        context.CancelFunc
 	shellExecuting     bool
 	currentShellProc   *BackgroundProcess
-	currentShellExec   execution.Process
-	shellBackgrounded  bool
-	eventChan          chan Event
+	currentShellExec    execution.Process
+	shellBackgrounded   bool
+	shellTracker        *ShellActivityTracker
+	lastAgentSubmitTime time.Time
+	eventChan           chan Event
 	permissionChan     chan teaPermissionRequestMsg
 	statusNotice       string
 	latestMetrics      *TurnMetrics
@@ -380,9 +382,11 @@ func newTeaModel(runner *Runner, req RunRequest) (*teaModel, error) {
 		settings:       settings,
 		input:          ta,
 		spinner:        sp,
-		promptHistory:  hist,
-		historyIdx:     -1,
-		maxTurns:       maxTurns,
+		promptHistory:       hist,
+		historyIdx:          -1,
+		shellTracker:        NewShellActivityTracker(10),
+		lastAgentSubmitTime: time.Now(),
+		maxTurns:            maxTurns,
 		commandTimeout: commandTimeout,
 		budget:         req.Budget,
 		thinkLevel:     req.ThinkLevel,
@@ -1132,6 +1136,9 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if cmdToRender == "" {
 				cmdToRender = "command"
 			}
+			if m.shellTracker != nil {
+				m.shellTracker.Record(cmdToRender, output, exitCode, msg.Duration)
+			}
 			terminalBox := FormatTerminalBox(TerminalBoxOptions{
 				Command:     cmdToRender,
 				Output:      output,
@@ -1441,14 +1448,34 @@ func (m *teaModel) handleShellSubmit(cmdStr string) tea.Cmd {
 		)
 	}
 
-	// Check for interactive terminal editor (nano, vim, less) or desktop GUI editor (notepad, code)
+	// Check for interactive terminal editor/CLI (nano, vim, gh auth login, git commit) or desktop GUI editor (notepad, code)
 	spec := ClassifyShellCommand(cmdStr, m.workingDir)
-	if spec.Kind == CmdKindTUIEditor && spec.Cmd != nil {
+	if (spec.Kind == CmdKindTUIEditor || spec.Kind == CmdKindInteractive) && spec.Cmd != nil {
 		started := time.Now()
+		// Ensure standard terminal environment variables for full TTY interactive CLI tools
+		env := os.Environ()
+		hasTerm := false
+		for _, e := range env {
+			if strings.HasPrefix(e, "TERM=") {
+				hasTerm = true
+				break
+			}
+		}
+		if !hasTerm {
+			env = append(env, "TERM=xterm-256color")
+		}
+		env = append(env, "COLORTERM=truecolor")
+		spec.Cmd.Env = env
+
 		return tea.ExecProcess(spec.Cmd, func(err error) tea.Msg {
-			output := fmt.Sprintf("Session finished for %s", spec.BinaryName)
-			if spec.TargetFile != "" {
-				output = fmt.Sprintf("Finished editing %s (%s)", filepath.Base(spec.TargetFile), spec.BinaryName)
+			var output string
+			if spec.Kind == CmdKindTUIEditor {
+				output = fmt.Sprintf("Session finished for %s", spec.BinaryName)
+				if spec.TargetFile != "" {
+					output = fmt.Sprintf("Finished editing %s (%s)", filepath.Base(spec.TargetFile), spec.BinaryName)
+				}
+			} else {
+				output = EnrichInteractiveOutcome(cmdStr, spec, m.workingDir, err)
 			}
 			return teaShellDoneMsg{
 				Command:      cmdStr,
@@ -2100,6 +2127,18 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 	// m.sessionMessages while Update may be appending to it.
 	priorMessages := m.initialMessages()
 
+	promptExtra := skillPrompt
+	if m.shellTracker != nil {
+		if recentShell := m.shellTracker.FormatRecentSince(m.lastAgentSubmitTime); recentShell != "" {
+			if promptExtra != "" {
+				promptExtra += "\n\n" + recentShell
+			} else {
+				promptExtra = recentShell
+			}
+		}
+		m.lastAgentSubmitTime = time.Now()
+	}
+
 	// Capture run settings before the worker starts; directory and runtime
 	// commands on the UI goroutine may change them while the model is running.
 	req := RunRequest{
@@ -2111,7 +2150,7 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 		Taint:              m.conversationTaint(),
 		Budget:             m.budget,
 		Journal:            m.writeJournal(),
-		PromptExtra:        skillPrompt,
+		PromptExtra:        promptExtra,
 		MaxTurns:           m.maxTurns,
 		CommandTimeout:     m.commandTimeout,
 		ThinkLevel:         m.thinkLevel,
@@ -2558,7 +2597,7 @@ func (m *teaModel) openDiffModal(fileIdx int) {
 		}
 	}
 
-	highlighted := HighlightDiff(diffText)
+	highlighted := HighlightDiffFile(diffText, f.Path)
 
 	width := m.width
 	if width < 1 {
@@ -2668,7 +2707,7 @@ func (m *teaModel) toggleDiffStaged() {
 				diffText = "No unstaged diff for this file. Press 'd' to toggle back."
 			}
 		}
-		m.diffViewport.SetContent(HighlightDiff(diffText))
+		m.diffViewport.SetContent(HighlightDiffFile(diffText, m.diffPath))
 		m.diffViewport.GotoTop()
 	}
 }
@@ -2760,8 +2799,13 @@ func (m *teaModel) renderDiffModal() string {
 		counter = fmt.Sprintf(" · File %d of %d", m.diffCursor+1, total)
 	}
 
+	langBadge := ""
+	if lang := DetectLanguage(m.diffPath); lang != "" {
+		langBadge = " " + styleHeaderPill.Render(strings.ToUpper(lang))
+	}
+
 	pathHeader := ColorBrightWhite(StyleBold(m.diffPath))
-	titleRow := fmt.Sprintf("%s  %s%s", badge, pathHeader, styleMuted.Render(counter))
+	titleRow := fmt.Sprintf("%s%s  %s%s", badge, langBadge, pathHeader, styleMuted.Render(counter))
 
 	var queueItems []string
 	for i, cf := range m.changes.files {
