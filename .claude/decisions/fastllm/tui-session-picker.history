@@ -1,0 +1,8 @@
+- decided_at: 2026-09-24T01:15:53+00:00
+  event: initial
+  value: Modal picker via /sessions and bare /resume (/sessions list keeps the table); current-dir sessions first, Tab toggles this-dir-only; typing filters; Ctrl+R inline rename, Ctrl+D delete with y/n confirm; refuses to open during a run
+  reason: Letters go to the filter so destructive actions need control keys; active-session rename goes through saveSession so autosave keeps it; mid-run switching would corrupt sessionMessages
+- decided_at: 2026-09-24T01:23:43+00:00
+  event: superseded-previous
+  value: Modal picker via /sessions and bare /resume (/sessions list keeps the table); current-dir sessions first, Tab toggles this-dir-only; typing filters; F2 (alias Ctrl+R) inline rename, Delete (alias Ctrl+D) delete with y/n confirm; control runes never enter the filter; refuses to open during a run
+  reason: User's Windows terminal delivered Ctrl+D as a rune event (appeared as a space in the filter), so primary actions moved to keys Bubble Tea maps by virtual-key code

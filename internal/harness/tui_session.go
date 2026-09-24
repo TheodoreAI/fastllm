@@ -143,6 +143,21 @@ func (m *teaModel) startNewSession() error {
 	return nil
 }
 
+// resumeSession closes the active session and switches the TUI to loaded,
+// re-rendering its transcript. /resume and the sessions menu share it.
+func (m *teaModel) resumeSession(loaded *InteractiveSession) tea.Cmd {
+	m.closeSession()
+	if err := m.loadSession(loaded); err != nil {
+		m.appendHistory(styleDiffDel.Render(fmt.Sprintf("Cannot resume session: %v\n\n", err)))
+		return nil
+	}
+	m.historyText.Reset()
+	m.appendHistory(m.formatWelcome())
+	m.appendSessionTranscript()
+	m.statusNotice = "Resumed " + loaded.Title
+	return m.clearStatusAfter(3 * time.Second)
+}
+
 func (m *teaModel) initialMessages() []InitialMessage {
 	// Tool calls and results travel too; replayMessages drops system messages
 	// and any unpaired tool traffic.
@@ -354,6 +369,10 @@ func (m *teaModel) handleSessionSlash(input string, parts []string, command stri
 			m.appendHistory(styleDiffDel.Render("Session persistence is unavailable.\n\n"))
 			return true, nil
 		}
+		if len(parts) < 2 || !strings.EqualFold(parts[1], "list") {
+			m.openSessionsModal()
+			return true, nil
+		}
 		sessions, err := m.sessionStore.List()
 		if err != nil {
 			m.appendHistory(styleDiffDel.Render(fmt.Sprintf("Cannot list sessions: %v\n\n", err)))
@@ -415,8 +434,12 @@ func (m *teaModel) handleSessionSlash(input string, parts []string, command stri
 		return true, nil
 
 	case "/resume":
-		if m.sessionStore == nil || len(parts) < 2 {
+		if m.sessionStore == nil {
 			m.appendHistory(styleMuted.Render("Usage: /resume <session-id|last>\n\n"))
+			return true, nil
+		}
+		if len(parts) < 2 {
+			m.openSessionsModal()
 			return true, nil
 		}
 		var loaded *InteractiveSession
@@ -426,19 +449,11 @@ func (m *teaModel) handleSessionSlash(input string, parts []string, command stri
 		} else {
 			loaded, err = m.sessionStore.Load(parts[1])
 		}
-		if err == nil {
-			m.closeSession()
-			err = m.loadSession(loaded)
-		}
 		if err != nil {
 			m.appendHistory(styleDiffDel.Render(fmt.Sprintf("Cannot resume session: %v\n\n", err)))
-		} else {
-			m.historyText.Reset()
-			m.appendHistory(m.formatWelcome())
-			m.appendSessionTranscript()
-			m.statusNotice = "Resumed " + loaded.Title
+			return true, nil
 		}
-		return true, m.clearStatusAfter(3 * time.Second)
+		return true, m.resumeSession(loaded)
 
 	case "/new":
 		if err := m.startNewSession(); err != nil {
