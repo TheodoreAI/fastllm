@@ -223,15 +223,17 @@ type teaModel struct {
 	pendingPermission *teaPermissionRequestMsg
 	// pendingPlan is a plan-mode run's submit_plan text awaiting the user's
 	// decision; planCursor indexes planApprovals.
-	pendingPlan  string
-	planCursor   int
-	skillsModal  bool
-	skillCursor  int
-	modelsModal  bool
-	modelCursor  int
-	changes      sessionChanges
-	gitWatchChan <-chan struct{}
-	gitWatchStop func()
+	pendingPlan string
+	planCursor  int
+	skillsModal bool
+	skillCursor int
+	modelsModal bool
+	modelCursor int
+	// sessionsModal is the open sessions menu; nil when closed.
+	sessionsModal *sessionsPicker
+	changes       sessionChanges
+	gitWatchChan  <-chan struct{}
+	gitWatchStop  func()
 
 	// Diff modal viewer state
 	diffModal          bool
@@ -555,6 +557,9 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.sessionsModal != nil {
+			return m, m.handleSessionsModalKey(msg)
+		}
 		if m.modelsModal {
 			switch msg.Type {
 			case tea.KeyEsc, tea.KeyCtrlC:
@@ -839,7 +844,7 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.diffViewport, vpCmd = m.diffViewport.Update(msg)
 			return m, vpCmd
 		}
-		if m.modelsModal || m.skillsModal {
+		if m.modelsModal || m.skillsModal || m.sessionsModal != nil {
 			return m, nil
 		}
 		if (msg.Button == tea.MouseButtonLeft || msg.Type == tea.MouseLeft) && msg.Action != tea.MouseActionRelease {
@@ -2698,6 +2703,9 @@ func (m *teaModel) View() string {
 	}
 	if m.modelsModal {
 		return m.renderModelsModal()
+	}
+	if m.sessionsModal != nil {
+		return m.renderSessionsModal()
 	}
 	if m.skillsModal {
 		return m.renderSkillsModal()

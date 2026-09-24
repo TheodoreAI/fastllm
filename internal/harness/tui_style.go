@@ -669,8 +669,9 @@ func FormatHelp() string {
 	renderSection("Session & Control", []cmdEntry{
 		{"/help", "Display this command reference"},
 		{"/status", "Inspect session token usage, latency, cost, and jobs"},
-		{"/sessions", "List saved interactive sessions"},
-		{"/resume <id>", "Resume a saved session"},
+		{"/sessions", "Browse, filter, resume, rename, or delete sessions"},
+		{"/sessions list", "Print the saved sessions table"},
+		{"/resume [id|last]", "Resume a saved session (no id opens the menu)"},
 		{"/session [id]", "Show session details"},
 		{"/rename <title>", "Rename the active session"},
 		{"/delete-session <id>", "Delete an inactive saved session"},
