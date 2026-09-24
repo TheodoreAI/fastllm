@@ -163,3 +163,44 @@ func TestGeminiResponseParsesFunctionCallParts(t *testing.T) {
 		t.Fatalf("got args %+v", callPart.FunctionCall.Args)
 	}
 }
+
+func TestToGeminiRequestWithAttachments(t *testing.T) {
+	messages := []Message{
+		{
+			Role:    "user",
+			Content: "Analyze these docs",
+			Attachments: []Attachment{
+				{
+					Type:     "image",
+					MimeType: "image/png",
+					Name:     "chart.png",
+					DataURI:  "data:image/png;base64,aW1nZGF0YQ==",
+				},
+				{
+					Type:     "pdf",
+					MimeType: "application/pdf",
+					Name:     "doc.pdf",
+					DataURI:  "data:application/pdf;base64,cGRmZGF0YQ==",
+				},
+			},
+		},
+	}
+
+	req := toGeminiRequest("gemini-flash-latest", messages, nil, "")
+	if len(req.Contents) != 1 {
+		t.Fatalf("expected 1 content, got %d", len(req.Contents))
+	}
+	parts := req.Contents[0].Parts
+	if len(parts) != 3 {
+		t.Fatalf("expected 3 parts (text + 2 inlineData), got %d", len(parts))
+	}
+	if parts[0].Text != "Analyze these docs" {
+		t.Errorf("expected text part first, got %q", parts[0].Text)
+	}
+	if parts[1].InlineData == nil || parts[1].InlineData.MimeType != "image/png" {
+		t.Errorf("expected image/png inlineData second, got %+v", parts[1].InlineData)
+	}
+	if parts[2].InlineData == nil || parts[2].InlineData.MimeType != "application/pdf" {
+		t.Errorf("expected application/pdf inlineData third, got %+v", parts[2].InlineData)
+	}
+}

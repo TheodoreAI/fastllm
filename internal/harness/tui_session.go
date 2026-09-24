@@ -178,7 +178,8 @@ func (m *teaModel) initialMessages() []InitialMessage {
 	for _, message := range m.sessionMessages {
 		messages = append(messages, InitialMessage{
 			Role: message.Role, Content: message.Content,
-			ToolCalls: message.ToolCalls, ToolCallID: message.ToolCallID,
+			Attachments: message.Attachments,
+			ToolCalls:   message.ToolCalls, ToolCallID: message.ToolCallID,
 		})
 	}
 	return messages

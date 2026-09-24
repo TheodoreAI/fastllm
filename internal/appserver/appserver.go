@@ -150,6 +150,7 @@ func Build(cfg Config) (*Built, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/chat", handler.Chat)
 	mux.HandleFunc("POST /api/harness/run", handler.HarnessRun)
+	mux.HandleFunc("POST /api/files/upload", handler.UploadFile)
 	mux.HandleFunc("GET /api/messages", handler.ListMessages)
 	mux.HandleFunc("GET /api/models", handler.ListModels)
 	mux.HandleFunc("GET /api/notes", handler.GetNotes)

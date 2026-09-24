@@ -220,27 +220,28 @@ type teaModel struct {
 	historyText strings.Builder
 
 	// Execution state
-	isExecuting       bool
-	hasResponseTurn   bool
-	stream            streamBuffer
-	streamHeaderShown bool
-	agentWorkStarted  bool
-	lastResponse      string
-	activeTurn        int
-	activeTool        string
-	activeArgs        string
-	cancelTurn        context.CancelFunc
-	cancelShell       context.CancelFunc
-	shellExecuting    bool
-	currentShellProc  *BackgroundProcess
-	currentShellExec  execution.Process
-	shellBackgrounded bool
-	eventChan         chan Event
-	permissionChan    chan teaPermissionRequestMsg
-	statusNotice      string
-	latestMetrics     *TurnMetrics
-	pendingPrompt     string
-	taskStarted       time.Time
+	isExecuting        bool
+	hasResponseTurn    bool
+	stream             streamBuffer
+	streamHeaderShown  bool
+	agentWorkStarted   bool
+	lastResponse       string
+	activeTurn         int
+	activeTool         string
+	activeArgs         string
+	cancelTurn         context.CancelFunc
+	cancelShell        context.CancelFunc
+	shellExecuting     bool
+	currentShellProc   *BackgroundProcess
+	currentShellExec   execution.Process
+	shellBackgrounded  bool
+	eventChan          chan Event
+	permissionChan     chan teaPermissionRequestMsg
+	statusNotice       string
+	latestMetrics      *TurnMetrics
+	pendingPrompt      string
+	pendingAttachments []llm.Attachment
+	taskStarted        time.Time
 
 	// Persistent conversation and runtime state.
 	sessionStore      *SessionStore
@@ -268,6 +269,8 @@ type teaModel struct {
 	sessionsModal *sessionsPicker
 	// themeModal is the open /theme picker; nil when closed.
 	themeModal *themePicker
+	// filesModal is the open /files browser modal; nil when closed.
+	filesModal *filesPicker
 	// suggest is the slash-command dropdown above the input box.
 	suggest suggestState
 	// budget limits each prompt's run (budget.go); saved with the session.
@@ -620,6 +623,9 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.themeModal != nil {
 			return m, m.handleThemeModalKey(msg)
 		}
+		if m.filesModal != nil {
+			return m, m.handleFilesModalKey(msg)
+		}
 		if m.modelsModal {
 			switch msg.Type {
 			case tea.KeyEsc, tea.KeyCtrlC:
@@ -803,11 +809,7 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(cmds...)
 
 		case tea.KeyCtrlV:
-			clipText, err := clipboard.ReadAll()
-			if err == nil && clipText != "" {
-				m.input.InsertString(clipText)
-				return m, nil
-			}
+			return m, m.handlePasteCommand()
 
 		case tea.KeyCtrlJ:
 			// Ctrl+J is universal terminal newline / linefeed
@@ -910,7 +912,7 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.diffViewport, vpCmd = m.diffViewport.Update(msg)
 			return m, vpCmd
 		}
-		if m.modelsModal || m.skillsModal || m.sessionsModal != nil || m.themeModal != nil {
+		if m.modelsModal || m.skillsModal || m.sessionsModal != nil || m.themeModal != nil || m.filesModal != nil {
 			return m, nil
 		}
 		if (msg.Button == tea.MouseButtonLeft || msg.Type == tea.MouseLeft) && msg.Action != tea.MouseActionRelease {
@@ -2012,6 +2014,33 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 			}
 			m.appendHistory(styleStatusNotice.Render(fmt.Sprintf("Working directory changed to %s (%d rules discovered)\n\n", m.workingDir, len(m.rules))))
 			return tea.Batch(m.clearStatusAfter(2*time.Second), m.refreshGitStatusCmd(), m.waitForGitWatch())
+
+		case "/paste":
+			m.appendHistory(styleUserPrompt.Render("❯ "+inputVal) + "\n")
+			return m.handlePasteCommand()
+
+		case "/attach":
+			m.appendHistory(styleUserPrompt.Render("❯ "+inputVal) + "\n")
+			return m.handleAttachCommand(parts)
+
+		case "/add":
+			m.appendHistory(styleUserPrompt.Render("❯ "+inputVal) + "\n")
+			return m.handleAddFileCommand(parts)
+
+		case "/detach":
+			m.appendHistory(styleUserPrompt.Render("❯ "+inputVal) + "\n")
+			m.pendingAttachments = nil
+			m.statusNotice = "Cleared pending attachments."
+			m.appendHistory(styleStatusNotice.Render("Cleared pending attachments.\n\n"))
+			return m.clearStatusAfter(2 * time.Second)
+
+		case "/files":
+			targetDir := ""
+			if len(parts) > 1 {
+				targetDir = strings.Join(parts[1:], " ")
+			}
+			m.openFilesModal(targetDir)
+			return nil
 		}
 	}
 
@@ -2033,7 +2062,19 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 		m.statusNotice = "An operation is already running — Esc cancels it."
 		return m.clearStatusAfter(3 * time.Second)
 	}
+	detectedPrompt, inlineAtts := m.detectInlineAttachments(inputVal)
+	allAttachments := append([]llm.Attachment(nil), m.pendingAttachments...)
+	allAttachments = append(allAttachments, inlineAtts...)
+	m.pendingAttachments = nil
+
 	m.appendHistory(formatSubmittedPrompt(inputVal))
+	if len(allAttachments) > 0 {
+		var names []string
+		for _, a := range allAttachments {
+			names = append(names, fmt.Sprintf("[%s %s]", a.Type, a.Name))
+		}
+		m.appendHistory(styleMuted.Render(fmt.Sprintf("  Attached: %s\n\n", strings.Join(names, ", "))))
+	}
 	if notice := m.compactSessionContext(); notice != "" {
 		m.appendHistory(styleMuted.Render("  "+notice) + "\n\n")
 	}
@@ -2062,7 +2103,8 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 	// Capture run settings before the worker starts; directory and runtime
 	// commands on the UI goroutine may change them while the model is running.
 	req := RunRequest{
-		Task:               inputVal,
+		Task:               detectedPrompt,
+		Attachments:        allAttachments,
 		WorkingDir:         m.workingDir,
 		Model:              m.modelName,
 		Audit:              OpenAuditLog(auditNameFor(m.activeSession)),
@@ -2802,6 +2844,9 @@ func (m *teaModel) View() string {
 	if m.skillsModal {
 		return m.renderSkillsModal()
 	}
+	if m.filesModal != nil {
+		return m.renderFilesModal()
+	}
 
 	var sb strings.Builder
 
@@ -2889,6 +2934,17 @@ func (m *teaModel) View() string {
 		borderCol = tuiColorYellow
 	}
 	inputContent := m.input.View()
+	if len(m.pendingAttachments) > 0 {
+		var pills []string
+		for _, att := range m.pendingAttachments {
+			icon := "📎"
+			if att.Type == "image" || strings.HasPrefix(att.MimeType, "image/") {
+				icon = "📷"
+			}
+			pills = append(pills, lipgloss.NewStyle().Foreground(tuiColorCyan).Bold(true).Render(fmt.Sprintf("[%s %s]", icon, att.Name)))
+		}
+		inputContent = styleMuted.Render("Attached: ") + strings.Join(pills, " ") + "\n" + inputContent
+	}
 	if m.pendingPermission != nil {
 		inputContent = FormatPermissionPrompt(m.pendingPermission.ToolName, m.pendingPermission.Summary) +
 			"\n" + FormatPermissionKeyLegend(m.pendingPermission.scope().Describe())

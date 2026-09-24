@@ -269,12 +269,24 @@ func toGeminiRequest(model string, messages []Message, tools []Tool, thinkLevel 
 			if m.Content != "" {
 				parts = append(parts, geminiPart{Text: m.Content})
 			}
-			for _, img := range m.Images {
-				mediaType, data, ok := splitDataURI(img.DataURI)
-				if !ok {
-					continue
+			for _, att := range m.Attachments {
+				if att.DataURI != "" {
+					mediaType, data, ok := splitDataURI(att.DataURI)
+					if ok {
+						parts = append(parts, geminiPart{InlineData: &geminiInlineData{MimeType: mediaType, Data: data}})
+					}
+				} else if att.Extracted != "" {
+					parts = append(parts, geminiPart{Text: fmt.Sprintf("\n\n<document name=%q type=\"pdf\">\n%s\n</document>\n", att.Name, att.Extracted)})
 				}
-				parts = append(parts, geminiPart{InlineData: &geminiInlineData{MimeType: mediaType, Data: data}})
+			}
+			if len(m.Attachments) == 0 {
+				for _, img := range m.Images {
+					mediaType, data, ok := splitDataURI(img.DataURI)
+					if !ok {
+						continue
+					}
+					parts = append(parts, geminiPart{InlineData: &geminiInlineData{MimeType: mediaType, Data: data}})
+				}
 			}
 			contents = append(contents, geminiContent{Role: "user", Parts: parts})
 		}

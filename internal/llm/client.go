@@ -17,18 +17,29 @@ import (
 )
 
 // Message is fastllm's provider-agnostic chat message. Content stays a
+// Attachment is a file or media attached to a message (image, PDF, etc.).
+type Attachment struct {
+	Type      string `json:"type"`                // "image", "pdf"
+	MimeType  string `json:"mime_type"`           // e.g. "image/png", "application/pdf"
+	Name      string `json:"name"`                // e.g. "invoice.pdf", "screenshot.png"
+	Path      string `json:"path,omitempty"`      // local disk path if saved/staged
+	DataURI   string `json:"data_uri"`            // data:<mime>;base64,<payload>
+	Extracted string `json:"extracted,omitempty"` // extracted text (e.g. for PDFs for text-only models)
+}
+
+// Message is fastllm's provider-agnostic chat message. Content stays a
 // plain string for every existing call site (system prompts, tool
-// results, loaded history) — Images is the only addition, and is empty
-// for the overwhelming majority of messages. MarshalJSON below is what
-// actually turns a message carrying images into the OpenAI-compatible
-// wire format's content-block array; every other field here is untouched
-// by that.
+// results, loaded history) — Images and Attachments carry multimodal data.
+// MarshalJSON and UnmarshalJSON provide transparent serialization for
+// both plain text and multimodal blocks across OpenAI, Anthropic, Gemini,
+// and saved sessions.
 type Message struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content"`
-	Images     []Image    `json:"-"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
+	Role        string       `json:"role"`
+	Content     string       `json:"content"`
+	Images      []Image      `json:"images,omitempty"`
+	Attachments []Attachment `json:"attachments,omitempty"`
+	ToolCalls   []ToolCall   `json:"tool_calls,omitempty"`
+	ToolCallID  string       `json:"tool_call_id,omitempty"`
 }
 
 // Image is one pasted/attached image, carried as a data URI end to end —
@@ -65,36 +76,120 @@ func splitDataURI(dataURI string) (mediaType, data string, ok bool) {
 }
 
 // MarshalJSON emits the OpenAI-compatible wire format: a plain content
-// string when there are no images (identical to this type's previous,
-// pre-image-support JSON shape — every non-image call site is
-// unaffected), or an array of {"type":"text"|"image_url",...} content
-// blocks when there are, per OpenAI's (and Ollama's, and NVIDIA Build's)
-// multimodal content-block convention. This only needs to exist once,
-// here, rather than in every caller that marshals a chatRequest, since
-// Go's encoding/json calls a type's own MarshalJSON automatically
-// wherever that type appears — including nested in []Message.
+// string when there are no images or attachments, or an array of
+// {"type":"text"|"image_url",...} content blocks when there are media attachments.
 func (m Message) MarshalJSON() ([]byte, error) {
 	type alias Message // avoids infinite recursion into this MarshalJSON
-	if len(m.Images) == 0 {
+	hasMedia := len(m.Images) > 0 || len(m.Attachments) > 0
+	if !hasMedia {
 		return json.Marshal(struct {
 			alias
 			Content string `json:"content"`
 		}{alias: alias(m), Content: m.Content})
 	}
-	blocks := make([]any, 0, len(m.Images)+1)
+
+	blocks := make([]any, 0, len(m.Images)+len(m.Attachments)+1)
 	if m.Content != "" {
 		blocks = append(blocks, map[string]string{"type": "text", "text": m.Content})
 	}
+
+	// Legacy or direct Images
+	seenURIs := make(map[string]bool)
 	for _, img := range m.Images {
-		blocks = append(blocks, map[string]any{
-			"type":      "image_url",
-			"image_url": map[string]string{"url": img.DataURI},
-		})
+		if img.DataURI != "" && !seenURIs[img.DataURI] {
+			seenURIs[img.DataURI] = true
+			blocks = append(blocks, map[string]any{
+				"type":      "image_url",
+				"image_url": map[string]string{"url": img.DataURI},
+			})
+		}
 	}
+
+	// Attachments
+	for _, att := range m.Attachments {
+		if att.Type == "pdf" || strings.HasSuffix(strings.ToLower(att.Name), ".pdf") || att.MimeType == "application/pdf" {
+			if att.Extracted != "" {
+				blocks = append(blocks, map[string]string{
+					"type": "text",
+					"text": fmt.Sprintf("\n\n<document name=%q type=\"pdf\">\n%s\n</document>\n", att.Name, att.Extracted),
+				})
+			}
+		} else if att.DataURI != "" && !seenURIs[att.DataURI] {
+			seenURIs[att.DataURI] = true
+			blocks = append(blocks, map[string]any{
+				"type":      "image_url",
+				"image_url": map[string]string{"url": att.DataURI},
+			})
+		}
+	}
+
 	return json.Marshal(struct {
 		alias
 		Content []any `json:"content"`
 	}{alias: alias(m), Content: blocks})
+}
+
+// UnmarshalJSON unmarshals a Message supporting both plain-string and
+// block-array content fields.
+func (m *Message) UnmarshalJSON(data []byte) error {
+	type messageDTO struct {
+		Role        string          `json:"role"`
+		Content     json.RawMessage `json:"content"`
+		Images      []Image         `json:"images,omitempty"`
+		Attachments []Attachment    `json:"attachments,omitempty"`
+		ToolCalls   []ToolCall      `json:"tool_calls,omitempty"`
+		ToolCallID  string          `json:"tool_call_id,omitempty"`
+	}
+	var dto messageDTO
+	if err := json.Unmarshal(data, &dto); err != nil {
+		return err
+	}
+	m.Role = dto.Role
+	m.Images = dto.Images
+	m.Attachments = dto.Attachments
+	m.ToolCalls = dto.ToolCalls
+	m.ToolCallID = dto.ToolCallID
+
+	if len(dto.Content) == 0 {
+		return nil
+	}
+
+	var s string
+	if err := json.Unmarshal(dto.Content, &s); err == nil {
+		m.Content = s
+		return nil
+	}
+
+	var blocks []map[string]any
+	if err := json.Unmarshal(dto.Content, &blocks); err == nil {
+		var textParts []string
+		for _, b := range blocks {
+			bType, _ := b["type"].(string)
+			switch bType {
+			case "text":
+				if txt, ok := b["text"].(string); ok && txt != "" {
+					textParts = append(textParts, txt)
+				}
+			case "image_url":
+				if iu, ok := b["image_url"].(map[string]any); ok {
+					if url, ok := iu["url"].(string); ok && url != "" {
+						m.Images = append(m.Images, Image{DataURI: url})
+						if len(dto.Attachments) == 0 {
+							m.Attachments = append(m.Attachments, Attachment{
+								Type:    "image",
+								DataURI: url,
+							})
+						}
+					}
+				}
+			}
+		}
+		m.Content = strings.Join(textParts, "\n")
+		return nil
+	}
+
+	m.Content = string(dto.Content)
+	return nil
 }
 
 // Tool describes one function the model may call, in OpenAI's tool schema.
