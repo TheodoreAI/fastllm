@@ -203,3 +203,62 @@ func TestThemeModalRenders(t *testing.T) {
 		}
 	}
 }
+
+func TestThemeModalWindowedScrolling(t *testing.T) {
+	isolateTheme(t)
+	// Constrained height: 16 rows cannot fit all 13 themes at 2 rows each
+	m := &teaModel{input: textarea.New(), width: 80, height: 16}
+	m.openThemeModal()
+
+	// Cursor at 0: should show down indicator, no up indicator
+	outTop := StripANSI(m.renderThemeModal())
+	if !strings.Contains(outTop, "▼") || !strings.Contains(outTop, "more below") {
+		t.Fatalf("top of list should show downward scroll indicator, got:\n%s", outTop)
+	}
+	if strings.Contains(outTop, "▲") || strings.Contains(outTop, "more above") {
+		t.Fatalf("top of list should NOT show upward scroll indicator, got:\n%s", outTop)
+	}
+
+	// Move cursor to bottom
+	m.handleThemeModalKey(tea.KeyMsg{Type: tea.KeyEnd})
+	outBottom := StripANSI(m.renderThemeModal())
+	if !strings.Contains(outBottom, "▲") || !strings.Contains(outBottom, "more above") {
+		t.Fatalf("bottom of list should show upward scroll indicator, got:\n%s", outBottom)
+	}
+	if strings.Contains(outBottom, "▼") || strings.Contains(outBottom, "more below") {
+		t.Fatalf("bottom of list should NOT show downward scroll indicator, got:\n%s", outBottom)
+	}
+}
+
+func TestAllNewThemesApplyProperly(t *testing.T) {
+	isolateTheme(t)
+	newThemes := []string{
+		"dracula",
+		"solarized-dark",
+		"monokai",
+		"rose-pine",
+		"one-dark",
+		"github-dark",
+		"synthwave",
+	}
+	for _, name := range newThemes {
+		th, ok := FindTheme(name)
+		if !ok {
+			t.Fatalf("theme %q not found in builtinThemes", name)
+		}
+		if err := ApplyTheme(name); err != nil {
+			t.Fatalf("failed to apply %q: %v", name, err)
+		}
+		if currentTheme.Name != name {
+			t.Fatalf("currentTheme = %q; want %q", currentTheme.Name, name)
+		}
+		if tuiColorCyan != lipgloss.Color(th.Accent) {
+			t.Fatalf("theme %q: accent color mismatch %s != %s", name, tuiColorCyan, th.Accent)
+		}
+		swatches := themeSwatches(th)
+		if !strings.Contains(swatches, "██") {
+			t.Fatalf("theme %q swatches invalid: %q", name, swatches)
+		}
+	}
+}
+

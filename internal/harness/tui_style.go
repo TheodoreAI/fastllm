@@ -238,30 +238,18 @@ func FormatWelcomeBanner(dir, model, configPath string, isGit bool, rulesCount i
 		rulesStatus = ColorGreen(fmt.Sprintf("%d discovered", rulesCount)) + " " + ColorGray("(AGENTS.md, etc.)")
 	}
 
-	cfgStr := configPath
-	if cfgStr == "" {
-		cfgStr = "(default ~/.fastllm/config.json)"
-	}
-
 	lines := []string{
 		"",
-		FormatKV("directory", dir, 12),
+		FormatKV("workspace", dir, 12),
 		FormatKV("model", model, 12),
-		FormatKV("config", cfgStr, 12),
 		FormatKV("git repo", gitStatus, 12),
 		FormatKV("rules", rulesStatus, 12),
 		FormatKV("commands", cmdStatus, 12),
-		FormatKV("build", ColorGray(BuildIdentity()), 12),
-	}
-	if exe := runningExecutable(); exe != "" {
-		lines = append(lines, FormatKV("binary", ColorGray(exe), 12))
-	}
-	lines = append(lines,
 		"",
-		ColorGray("Type ")+ColorCyan("/help")+ColorGray(" for slash commands or enter your prompt below."),
-	)
+		ColorGray("Type ") + ColorCyan("/help") + ColorGray(" for commands  "+SymDot+"  ") + ColorYellow("Tab") + ColorGray(" for shell mode"),
+	}
 
-	return FormatCard("fastllm "+SymDot+" autonomous agent repl", lines, 74)
+	return FormatCard("fastllm "+SymDot+" autonomous agent", lines, 72)
 }
 
 // FormatToolCall renders a structured tool invocation card header.
