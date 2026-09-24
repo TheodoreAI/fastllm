@@ -52,6 +52,11 @@ func TestLoadSettingsReportsMalformedHighestPriorityConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Untrusted, it is skipped rather than reported; once trusted, a broken
+	// file must be reported rather than silently replaced by defaults.
+	if _, err := TrustProjectConfig(workingDir); err != nil {
+		t.Fatal(err)
+	}
 	settings, loadedPath, err := LoadSettings(workingDir)
 	if err == nil {
 		t.Fatal("malformed config was silently ignored")

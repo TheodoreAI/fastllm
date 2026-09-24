@@ -24,8 +24,18 @@ import (
 // ErrNotARepo means root isn't inside a git working tree.
 var ErrNotARepo = errors.New("gitrepo: not a git repository")
 
+// HardenedArgs prefixes git arguments with settings that stop git from
+// running helper commands named in repository config during the harness's
+// own background calls. core.fsmonitor names a command git runs on every
+// status; nothing the harness does needs it. Hooks and filters stay enabled
+// because the user's commits and git-lfs rely on them, and model file tools
+// cannot write .git (files.ErrGitInternals), so neither can be planted.
+func HardenedArgs(args ...string) []string {
+	return append([]string{"-c", "core.fsmonitor=false"}, args...)
+}
+
 func run(ctx context.Context, root string, args ...string) (string, error) {
-	result, err := execution.RunLocal(ctx, root, execution.LocalPolicy(), execution.Command{Executable: "git", Args: args})
+	result, err := execution.RunLocal(ctx, root, execution.LocalPolicy(), execution.Command{Executable: "git", Args: HardenedArgs(args...)})
 	if err != nil {
 		return "", err
 	}
@@ -217,12 +227,12 @@ func GetRepoStatus(ctx context.Context, root string) (RepoStatus, error) {
 	}
 
 	// Diff numstats for unstaged changes
-	if numstatOut, err := run(ctx, root, "diff", "--numstat"); err == nil {
+	if numstatOut, err := run(ctx, root, "diff", "--numstat", "--no-ext-diff", "--no-textconv"); err == nil {
 		parseNumstat(numstatOut, fileMap, false)
 	}
 
 	// Diff numstats for staged changes
-	if numstatOut, err := run(ctx, root, "diff", "--cached", "--numstat"); err == nil {
+	if numstatOut, err := run(ctx, root, "diff", "--cached", "--numstat", "--no-ext-diff", "--no-textconv"); err == nil {
 		parseNumstat(numstatOut, fileMap, true)
 	}
 
@@ -288,7 +298,8 @@ func Diff(ctx context.Context, root, path string, staged bool) (string, error) {
 	if !IsRepo(ctx, root) {
 		return "", ErrNotARepo
 	}
-	args := []string{"diff", "--no-color"}
+	// External diff programs and textconv drivers are commands from config.
+	args := []string{"diff", "--no-color", "--no-ext-diff", "--no-textconv"}
 	if staged {
 		args = append(args, "--staged")
 	}
@@ -543,7 +554,7 @@ func Search(ctx context.Context, root, query string) ([]SearchMatch, error) {
 	// -n includes line numbers; -F treats query as a literal string,
 	// not a regex, so search input can't be used to inject grep/regex
 	// syntax the user didn't intend.
-	result, err := execution.RunLocal(ctx, root, execution.LocalPolicy(), execution.Command{Executable: "git", Args: []string{"grep", "-n", "-I", "-F", "--untracked", "-e", query}})
+	result, err := execution.RunLocal(ctx, root, execution.LocalPolicy(), execution.Command{Executable: "git", Args: HardenedArgs("grep", "-n", "-I", "-F", "--untracked", "-e", query)})
 	if err != nil {
 		return nil, err
 	}

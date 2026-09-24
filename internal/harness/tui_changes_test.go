@@ -589,8 +589,3 @@ func TestModelsModalNavigationAndSelection(t *testing.T) {
 		t.Fatal("expected /model to open modelsModal")
 	}
 }
-
-
-
-
-

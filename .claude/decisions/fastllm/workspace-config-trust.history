@@ -1,0 +1,4 @@
+- decided_at: 2026-09-24T02:43:00+00:00
+  event: initial
+  value: Project .fastllm/config.json is used only when trusted: TOFU keyed by canonical path + SHA-256 of exact bytes in ~/.fastllm/trusted-configs.json (FASTLLM_TRUST_STORE overrides the location); any edit revokes; untrusted configs are skipped by LoadSettings (global applies) and shown via ReviewProjectConfig with /trust and /untrust; SaveSettings trusts project configs it writes; FASTLLM_TRUST_PROJECT_CONFIG=1 opts headless runs in
+  reason: Kernel gap #3: a cloned repo's config replaced the global one, so it could point an endpoint at its own server and reuse the user's api_key_file to exfiltrate the key. Skipping inside LoadSettings made all five callers safe without changing its signature

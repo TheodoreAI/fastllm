@@ -46,11 +46,20 @@ func main() {
 
 func runServer(args []string) {
 
-	addr := getenv("FASTLLM_ADDR", ":8080")
+	// Loopback by default: the API can run commands, so reaching it from the
+	// network must be a deliberate choice (FASTLLM_ADDR=0.0.0.0:8080).
+	addr := getenv("FASTLLM_ADDR", "127.0.0.1:8080")
 
 	cfg, err := appserver.ConfigFromEnv()
 	if err != nil {
 		log.Fatalf("load config: %v", err)
+	}
+	tokenPath, err := appserver.DefaultTokenPath()
+	if err != nil {
+		log.Fatalf("locate server token: %v", err)
+	}
+	if cfg.Token, err = appserver.LoadOrCreateToken(tokenPath); err != nil {
+		log.Fatalf("load server token: %v", err)
 	}
 
 	built, err := appserver.Build(cfg)
@@ -59,10 +68,19 @@ func runServer(args []string) {
 	}
 	defer built.DB.Close()
 
-	server := &http.Server{Addr: addr, Handler: built.Mux}
+	server := &http.Server{Addr: addr, Handler: built.HTTP}
 	built.Mux.HandleFunc("POST /api/quit", quitHandler(server))
 
 	log.Printf("fastllm listening on %s (llm backend: %s)", addr, cfg.LLMBaseURL)
+	tokenSource := tokenPath
+	if os.Getenv("FASTLLM_TOKEN") != "" {
+		tokenSource = "FASTLLM_TOKEN"
+	}
+	log.Printf("requests need the token from %s (Authorization: Bearer <token>); runs are capped at %q mode, working_dir within %v",
+		tokenSource, cfg.MaxMode, built.Handler.AllowedRoots)
+	if !appserver.IsLoopbackAddr(addr) {
+		log.Printf("WARNING: %s accepts connections from other machines. Anyone with the token can run tasks here; set FASTLLM_ALLOWED_HOSTS to the names clients will use.", addr)
+	}
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}

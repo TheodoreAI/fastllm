@@ -66,8 +66,14 @@ type RunRequest struct {
 	AgentInbox     <-chan string  `json:"-"`
 	PermissionMode PermissionMode `json:"permission_mode,omitempty"`
 	// Authorize answers the monitor's Ask decisions (agent mode) by asking the
-	// user. Nil means nobody can be asked, and every Ask is denied.
-	Authorize func(toolName, summary string) bool `json:"-"`
+	// user, or by a session grant whose scope covers the request. Nil means
+	// nobody can be asked, and every Ask is denied.
+	Authorize func(ConsentRequest) bool `json:"-"`
+	// Audit receives every monitor decision in this run and its children.
+	Audit *AuditLog `json:"-"`
+	// Taint records secret files this conversation has read (I10). Share one
+	// across turns of a session; nil gets a fresh one per run.
+	Taint *SessionTaint `json:"-"`
 
 	// StreamTokens makes the run emit EventTokenDelta as assistant text arrives,
 	// instead of only the finished answer at turn end. Opt-in: a token-rate event

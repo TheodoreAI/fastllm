@@ -14,7 +14,7 @@ func TestPermissionControllerOnlyAsksInAgentMode(t *testing.T) {
 		if mode == "" {
 			controller.Mode = ""
 		}
-		if controller.Authorize("run_command", "command=go test") {
+		if controller.Authorize(toolConsent("run_command", "command=go test")) {
 			t.Fatalf("controller in mode %q approved without the monitor", mode)
 		}
 	}
@@ -23,13 +23,13 @@ func TestPermissionControllerOnlyAsksInAgentMode(t *testing.T) {
 func TestPermissionControllerAskAndSessionGrant(t *testing.T) {
 	scanner := bufio.NewScanner(strings.NewReader("a\n"))
 	controller := NewPermissionController(PermissionAgent, scanner)
-	if !controller.Authorize("write_file", "path=x") {
+	if !controller.Authorize(toolConsent("write_file", "path=x")) {
 		t.Fatal("session grant was rejected")
 	}
-	if !controller.Authorize("write_file", "path=y") {
+	if !controller.Authorize(toolConsent("write_file", "path=y")) {
 		t.Fatal("remembered session grant was not applied")
 	}
-	if controller.Authorize("run_command", "command=bad") {
+	if controller.Authorize(toolConsent("run_command", "command=bad")) {
 		t.Fatal("EOF should deny an ungranted permission")
 	}
 }
@@ -91,10 +91,10 @@ func TestInteractiveToolsPlanOffersNothingMutating(t *testing.T) {
 
 func TestFusedMutationRequiresIndependentCommandApproval(t *testing.T) {
 	controller := NewPermissionController(PermissionAgent, bufio.NewScanner(strings.NewReader("y\nn\n")))
-	if !controller.Authorize("edit_file", "path=main.go") {
+	if !controller.Authorize(toolConsent("edit_file", "path=main.go")) {
 		t.Fatal("mutation approval was rejected")
 	}
-	if controller.Authorize("run_command", "command=go test ./...") {
+	if controller.Authorize(toolConsent("run_command", "command=go test ./...")) {
 		t.Fatal("follow-up command should require and respect its own denial")
 	}
 }
@@ -102,14 +102,14 @@ func TestFusedMutationRequiresIndependentCommandApproval(t *testing.T) {
 func TestPermissionControllerClearGrants(t *testing.T) {
 	scanner := bufio.NewScanner(strings.NewReader("a\n"))
 	controller := NewPermissionController(PermissionAgent, scanner)
-	if !controller.Authorize("write_file", "path=x") {
+	if !controller.Authorize(toolConsent("write_file", "path=x")) {
 		t.Fatal("session grant was rejected")
 	}
-	if !controller.Authorize("write_file", "path=y") {
+	if !controller.Authorize(toolConsent("write_file", "path=y")) {
 		t.Fatal("session grant should be cached")
 	}
 	controller.ClearGrants()
-	if controller.Authorize("write_file", "path=z") {
+	if controller.Authorize(toolConsent("write_file", "path=z")) {
 		t.Fatal("grant should be cleared, but write_file was allowed without input")
 	}
 }
@@ -183,10 +183,10 @@ func TestPermissionControllerWorkspaceSeparation(t *testing.T) {
 func TestPermissionControllerRevocationPromptsAgain(t *testing.T) {
 	scanner := bufio.NewScanner(strings.NewReader("a\ny\n"))
 	controller := NewPermissionController(PermissionAgent, scanner)
-	if !controller.Authorize("write_file", "path=a.txt") {
+	if !controller.Authorize(toolConsent("write_file", "path=a.txt")) {
 		t.Fatal("initial grant failed")
 	}
-	if !controller.Authorize("write_file", "path=b.txt") {
+	if !controller.Authorize(toolConsent("write_file", "path=b.txt")) {
 		t.Fatal("cached grant failed")
 	}
 
@@ -199,10 +199,16 @@ func TestPermissionControllerRevocationPromptsAgain(t *testing.T) {
 		t.Fatal("expected grant to be revoked")
 	}
 
-	if !controller.Authorize("write_file", "path=c.txt") {
+	if !controller.Authorize(toolConsent("write_file", "path=c.txt")) {
 		t.Fatal("subsequent authorization after revocation should prompt and succeed with 'y'")
 	}
-	if controller.Authorize("write_file", "path=d.txt") {
+	if controller.Authorize(toolConsent("write_file", "path=d.txt")) {
 		t.Fatal("expected EOF to deny once single-use permission expired")
 	}
+}
+
+// toolConsent asks for a tool-wide grant, which is what these controller
+// mechanics tests exercise; scoped grants are tested in grants_test.go.
+func toolConsent(tool, summary string) ConsentRequest {
+	return ConsentRequest{Tool: tool, Summary: summary, Scope: GrantScope{Tool: tool, Kind: scopeTool}}
 }

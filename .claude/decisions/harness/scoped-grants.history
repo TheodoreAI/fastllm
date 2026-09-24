@@ -1,0 +1,4 @@
+- decided_at: 2026-09-24T02:35:26+00:00
+  event: initial
+  value: Monitor invariant I9: Authorize takes a ConsentRequest{Tool, Summary, Scope}; session grants cover a GrantScope, not a tool: 'program subcommand' commands grant that prefix, everything else (shell syntax incl. newline, interpreters/wrappers) is exact-only; writes grant the file's directory tree, root-level files alone; other tools stay tool-wide
+  reason: Kernel gap #4: HasGrant matched tool names, so approving 'go test' for the session approved 'curl | sh'. Structured consent replaced summary-string parsing; a test caught newline-collapsing normalization letting 'go test\ncurl evil' match a go test grant

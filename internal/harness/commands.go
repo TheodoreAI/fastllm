@@ -42,6 +42,8 @@ var commandSections = []commandSection{
 		{"/compact", "Collapse older turns into a checkpoint without waiting for the budget"},
 		{"/copy, /yank", "Copy last response to OS clipboard (/copy all for full log)"},
 		{"/dir <path>", "Switch active working directory and reload workspace rules"},
+		{"/trust", "Use this workspace's .fastllm config after reviewing it"},
+		{"/untrust", "Stop using this workspace's .fastllm config"},
 		{"/exit, /quit", "Exit the interactive session"},
 	}},
 	{"Runtime Settings", []commandRow{
@@ -56,6 +58,7 @@ var commandSections = []commandSection{
 		{"/permissions [list]", "List active session capability grants"},
 		{"/permissions revoke <id>", "Revoke a capability grant by ID or tool name"},
 		{"/permissions clear", "Revoke all active session capability grants"},
+		{"/audit [n]", "Show the last n permission decisions for this session"},
 	}},
 	{"Shell & Execution", []commandRow{
 		{"/shell, /sh", "Toggle interactive Shell Mode (run host terminal commands)"},

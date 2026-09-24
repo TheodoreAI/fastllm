@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -32,6 +33,11 @@ const MaxWriteBytes = 32 * 1024
 const MaxEditorReadBytes = 5 * 1024 * 1024
 
 var ErrOutsideRoot = errors.New("path is outside the allowed directory")
+
+// ErrGitInternals refuses writes inside a .git directory. Git executes
+// commands named in its own files (core.fsmonitor, hooks, diff drivers), and
+// the harness runs git itself, so a write there is a way to start a process.
+var ErrGitInternals = errors.New("path is inside a .git directory, which file tools never modify")
 
 // Reader resolves paths against a fixed root and reads/writes files from
 // within it. The zero value (empty root) means the feature is disabled —
@@ -157,6 +163,9 @@ func (r *Reader) ResolveForWrite(requested string) (string, error) {
 		if _, err := confirmWithinRoot(root, resolved); err != nil {
 			return "", err
 		}
+		if err := refuseGitInternals(root, resolved); err != nil {
+			return "", err
+		}
 		return joined, nil
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return "", err
@@ -188,7 +197,34 @@ func (r *Reader) ResolveForWrite(requested string) (string, error) {
 	if _, err := confirmWithinRoot(root, resolvedDir); err != nil {
 		return "", err
 	}
+	rest, err := filepath.Rel(dir, joined)
+	if err != nil {
+		return "", err
+	}
+	if err := refuseGitInternals(root, filepath.Join(resolvedDir, rest)); err != nil {
+		return "", err
+	}
 	return joined, nil
+}
+
+// refuseGitInternals checks a canonical path, after symlinks and (on
+// Windows) short names like GIT~1 are resolved, for a .git component. Case is
+// ignored because NTFS and APFS match .GIT to .git.
+func refuseGitInternals(root, canonical string) error {
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(realRoot, canonical)
+	if err != nil {
+		return err
+	}
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		if strings.EqualFold(part, ".git") {
+			return ErrGitInternals
+		}
+	}
+	return nil
 }
 
 func resolveWithinRoot(root, requested string) (string, error) {

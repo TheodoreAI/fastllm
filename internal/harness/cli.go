@@ -190,6 +190,7 @@ func RunCLI(args []string) int {
 
 	req := RunRequest{
 		Task:           task,
+		Audit:          OpenAuditLog("task-" + time.Now().UTC().Format("20060102-150405")),
 		WorkingDir:     workDir,
 		Model:          model,
 		SystemPrompt:   *systemFlag,

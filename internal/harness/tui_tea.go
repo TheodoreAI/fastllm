@@ -154,12 +154,28 @@ type teaStatusClearMsg struct{}
 type teaPermissionRequestMsg struct {
 	ToolName  string
 	Summary   string
+	Scope     GrantScope // what "for this session" would grant
 	Workspace string
 	Reply     chan permissionDecision
 }
+
+// scope is the request's grant scope. A request built without one (older
+// callers, tests) grants only its own tool label.
+func (msg teaPermissionRequestMsg) scope() GrantScope {
+	if msg.Scope.Tool == "" {
+		return GrantScope{Tool: msg.ToolName, Kind: scopeTool}
+	}
+	return msg.Scope
+}
+
+func (msg teaPermissionRequestMsg) consent() ConsentRequest {
+	return ConsentRequest{Tool: msg.ToolName, Summary: msg.Summary, Scope: msg.scope()}
+}
+
 type permissionDecision struct {
 	Allow        bool
 	GrantSession bool
+	Via          string // how it was decided, for the audit log
 }
 type teaShellDoneMsg struct {
 	Command      string
@@ -253,7 +269,10 @@ type teaModel struct {
 	// themeModal is the open /theme picker; nil when closed.
 	themeModal *themePicker
 	// suggest is the slash-command dropdown above the input box.
-	suggest      suggestState
+	suggest suggestState
+	// taint records secret files this conversation has read (I10); it lives
+	// as long as the messages that may hold them.
+	taint        *SessionTaint
 	changes      sessionChanges
 	gitWatchChan <-chan struct{}
 	gitWatchStop func()
@@ -385,6 +404,9 @@ func (m *teaModel) formatWelcome() string {
 		len(m.rules),
 		m.allowCommands,
 	)
+	if notice := untrustedConfigNotice(m.workingDir, "Run /trust to use it."); notice != "" {
+		banner += "\n\n" + notice
+	}
 	return banner + "\n\n"
 }
 
@@ -1059,8 +1081,8 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Workspace != "" && msg.Workspace != m.workingDir {
 			msg.Reply <- permissionDecision{Allow: false}
 			cmds = append(cmds, m.waitForNextEvent())
-		} else if m.permissionController().HasGrant(msg.ToolName) {
-			msg.Reply <- permissionDecision{Allow: true}
+		} else if g := m.permissionController().CoveringGrant(msg.consent()); g != nil {
+			msg.Reply <- permissionDecision{Allow: true, Via: g.ID}
 			cmds = append(cmds, m.waitForNextEvent())
 		} else {
 			m.pendingPermission = &msg
@@ -1251,10 +1273,14 @@ func (m *teaModel) resolvePermission(allow, grant bool) {
 	if request == nil {
 		return
 	}
-	if allow && grant {
-		m.permissionController().Grant(request.ToolName)
+	via := "denied"
+	switch {
+	case allow && grant:
+		via = "approved for session (" + m.permissionController().GrantScoped(request.scope()).ID + ")"
+	case allow:
+		via = "approved once"
 	}
-	request.Reply <- permissionDecision{Allow: allow, GrantSession: grant}
+	request.Reply <- permissionDecision{Allow: allow, GrantSession: grant, Via: via}
 	m.pendingPermission = nil
 	m.statusNotice = ""
 	m.input.Focus()
@@ -1606,6 +1632,9 @@ func (m *teaModel) changeWorkingDirectory(path string) error {
 	m.rules = DiscoverWorkspaceRules(newDir)
 	m.skills = DiscoverWorkspaceSkills(newDir)
 	m.settings, m.configPath = settings, configPath
+	if notice := untrustedConfigNotice(newDir, "Run /trust to use it."); notice != "" {
+		m.appendHistory(notice + "\n\n")
+	}
 	m.statusNotice = "Directory changed to " + filepath.Base(newDir)
 	m.updatePromptAndPlaceholder()
 	_ = m.saveSession()
@@ -1644,6 +1673,14 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 		case "/theme", "/themes":
 			return m.handleThemeSlash(parts)
 
+		case "/trust", "/untrust":
+			return m.handleTrustSlash(cmd)
+
+		case "/audit":
+			m.appendHistory(styleUserPrompt.Render("❯ "+inputVal) + "\n")
+			m.appendHistory(m.formatAuditTail(parts) + "\n\n")
+			return nil
+
 		case "/help":
 			m.appendHistory(styleUserPrompt.Render("❯ /help") + "\n")
 			m.appendHistory(FormatHelp() + "\n\n")
@@ -1651,6 +1688,7 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 
 		case "/c", "/clear":
 			m.sessionMessages = nil
+			m.taint = nil
 			m.lastResponse = ""
 			_ = m.saveSession()
 			m.historyText.Reset()
@@ -2022,6 +2060,8 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 		Task:               inputVal,
 		WorkingDir:         m.workingDir,
 		Model:              m.modelName,
+		Audit:              OpenAuditLog(auditNameFor(m.activeSession)),
+		Taint:              m.conversationTaint(),
 		PromptExtra:        skillPrompt,
 		MaxTurns:           m.maxTurns,
 		CommandTimeout:     m.commandTimeout,
@@ -2040,9 +2080,9 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 		// The monitor calls this only for its Ask decisions, which exist only in
 		// agent mode; every other mode decides without asking.
 		{
-			req.Authorize = func(toolName, summary string) bool {
+			req.Authorize = func(consent ConsentRequest) bool {
 				reply := make(chan permissionDecision, 1)
-				request := teaPermissionRequestMsg{ToolName: toolName, Summary: summary, Workspace: req.WorkingDir, Reply: reply}
+				request := teaPermissionRequestMsg{ToolName: consent.Tool, Summary: consent.Summary, Scope: consent.Scope, Workspace: req.WorkingDir, Reply: reply}
 				select {
 				case permissionChan <- request:
 				case <-ctx.Done():
@@ -2050,6 +2090,7 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 				}
 				select {
 				case decision := <-reply:
+					consent.note(decision.Via)
 					return decision.Allow
 				case <-ctx.Done():
 					return false
@@ -2843,7 +2884,7 @@ func (m *teaModel) View() string {
 	inputContent := m.input.View()
 	if m.pendingPermission != nil {
 		inputContent = FormatPermissionPrompt(m.pendingPermission.ToolName, m.pendingPermission.Summary) +
-			"\n" + FormatPermissionKeyLegend()
+			"\n" + FormatPermissionKeyLegend(m.pendingPermission.scope().Describe())
 		borderCol = tuiColorYellow
 	} else if m.pendingPlan != "" && !m.isExecuting {
 		inputContent = m.renderPlanApproval()

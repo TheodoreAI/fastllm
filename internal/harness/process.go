@@ -274,7 +274,7 @@ func (pm *ProcessManager) FormatProcessTable() string {
 			status = fmt.Sprintf("EXIT %d", p.ExitCode)
 		}
 		duration := time.Since(p.StartTime).Round(time.Second)
-		cmdSummary := p.Command
+		cmdSummary := sanitizeUntrusted(p.Command)
 		if len(cmdSummary) > 35 {
 			cmdSummary = cmdSummary[:32] + "..."
 		}

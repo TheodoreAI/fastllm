@@ -25,8 +25,21 @@ const (
 	PermissionFull PermissionMode = "full"
 )
 
-// permissionCycle is the Shift+Tab order.
+// permissionCycle is the Shift+Tab order, which is also least to most
+// authority: a headless agent run cannot ask, so it sits below edit.
 var permissionCycle = []PermissionMode{PermissionPlan, PermissionAgent, PermissionEdit, PermissionFull}
+
+// ModeRank orders modes by authority, plan lowest. An unknown mode ranks as
+// plan, matching NormalizeMode's fail-closed default.
+func ModeRank(mode PermissionMode) int {
+	mode = NormalizeMode(mode)
+	for i, m := range permissionCycle {
+		if m == mode {
+			return i
+		}
+	}
+	return 0
+}
 
 // ParsePermissionMode accepts the four mode names and the legacy names that
 // older sessions and API callers still send.
@@ -80,21 +93,23 @@ func (m PermissionMode) Label() string {
 	}
 }
 
+// CapabilityGrant is one "for this session" approval. It covers its Scope in
+// the workspace it was granted in, until revoked or the session changes (I9).
 type CapabilityGrant struct {
-	ID        string    `json:"id"`
-	Tool      string    `json:"tool"`
-	Workspace string    `json:"workspace,omitempty"`
-	GrantedAt time.Time `json:"granted_at"`
-	Revoked   bool      `json:"revoked"`
+	ID        string     `json:"id"`
+	Tool      string     `json:"tool"`
+	Scope     GrantScope `json:"scope"`
+	Workspace string     `json:"workspace,omitempty"`
+	GrantedAt time.Time  `json:"granted_at"`
+	Revoked   bool       `json:"revoked"`
 }
 
 type PermissionController struct {
-	Mode          PermissionMode
-	SessionGrants map[string]bool
-	Grants        []*CapabilityGrant
-	Input         interactiveInput
-	Workspace     string
-	nextGrantID   int
+	Mode        PermissionMode
+	Grants      []*CapabilityGrant
+	Input       interactiveInput
+	Workspace   string
+	nextGrantID int
 }
 
 func NewPermissionController(mode PermissionMode, source any) *PermissionController {
@@ -109,10 +124,9 @@ func NewPermissionController(mode PermissionMode, source any) *PermissionControl
 		input = &scannerInput{scanner: value}
 	}
 	return &PermissionController{
-		Mode:          mode,
-		SessionGrants: make(map[string]bool),
-		Grants:        make([]*CapabilityGrant, 0),
-		Input:         input,
+		Mode:   mode,
+		Grants: make([]*CapabilityGrant, 0),
+		Input:  input,
 	}
 }
 
@@ -133,46 +147,54 @@ func (p *PermissionController) ClearGrants() {
 	for _, g := range p.Grants {
 		g.Revoked = true
 	}
-	p.SessionGrants = make(map[string]bool)
 }
 
+// Grant records a session grant for every call of a tool. Scoped grants,
+// which is what approvals make, go through GrantScoped.
 func (p *PermissionController) Grant(toolName string) *CapabilityGrant {
+	return p.GrantScoped(GrantScope{Tool: toolName, Kind: scopeTool})
+}
+
+// GrantScoped records a session grant covering scope.
+func (p *PermissionController) GrantScoped(scope GrantScope) *CapabilityGrant {
 	if p == nil {
 		return nil
 	}
 	p.nextGrantID++
+	scope.Subject = ""
 	grant := &CapabilityGrant{
 		ID:        fmt.Sprintf("grant-%d", p.nextGrantID),
-		Tool:      toolName,
+		Tool:      scope.Tool,
+		Scope:     scope,
 		Workspace: p.Workspace,
 		GrantedAt: time.Now(),
-		Revoked:   false,
 	}
 	p.Grants = append(p.Grants, grant)
-	if p.SessionGrants == nil {
-		p.SessionGrants = make(map[string]bool)
-	}
-	p.SessionGrants[toolName] = true
 	return grant
 }
 
-func (p *PermissionController) HasGrant(toolName string) bool {
-	if p == nil {
-		return false
-	}
-	if p.SessionGrants != nil && p.SessionGrants[toolName] {
-		if len(p.Grants) > 0 {
-			for _, g := range p.Grants {
-				if !g.Revoked && g.Tool == toolName {
-					if g.Workspace == "" || p.Workspace == "" || g.Workspace == p.Workspace {
-						return true
-					}
-				}
-			}
-			delete(p.SessionGrants, toolName)
-			return false
+// Covers reports whether an active grant in this workspace permits request.
+func (p *PermissionController) Covers(request ConsentRequest) bool {
+	return p.CoveringGrant(request) != nil
+}
+
+// CoveringGrant returns the active grant that permits request, if any.
+func (p *PermissionController) CoveringGrant(request ConsentRequest) *CapabilityGrant {
+	for _, g := range p.ActiveGrants() {
+		if g.Scope.Covers(request.Scope) {
+			return g
 		}
-		return true
+	}
+	return nil
+}
+
+// HasGrant reports whether any active grant exists for a tool label, whatever
+// its scope. It is for display and tests; authorization uses Covers.
+func (p *PermissionController) HasGrant(toolName string) bool {
+	for _, g := range p.ActiveGrants() {
+		if g.Tool == toolName {
+			return true
+		}
 	}
 	return false
 }
@@ -192,7 +214,6 @@ func (p *PermissionController) RevokeGrant(target string) int {
 			count++
 		}
 	}
-	p.syncSessionGrants()
 	return count
 }
 
@@ -211,49 +232,40 @@ func (p *PermissionController) ActiveGrants() []*CapabilityGrant {
 	return active
 }
 
-func (p *PermissionController) syncSessionGrants() {
-	if p == nil {
-		return
-	}
-	activeTools := make(map[string]bool)
-	for _, g := range p.Grants {
-		if !g.Revoked {
-			if g.Workspace == "" || p.Workspace == "" || g.Workspace == p.Workspace {
-				activeTools[g.Tool] = true
-			}
-		}
-	}
-	p.SessionGrants = activeTools
-}
-
 // Authorize is the interactive half of an Ask decision from the monitor: it
 // consults session grants, then prompts. It decides nothing about which tools
 // need asking; the monitor calls it only for calls the mode table marks Ask.
-func (p *PermissionController) Authorize(toolName, summary string) bool {
-	if p == nil || NormalizeMode(p.Mode) != PermissionAgent {
+func (p *PermissionController) Authorize(request ConsentRequest) bool {
+	// Outside agent mode the monitor asks only for the always-ask classes;
+	// anything else arriving here is refused rather than approved.
+	if p == nil || (NormalizeMode(p.Mode) != PermissionAgent && !request.Always) {
 		return false
 	}
-	if p.HasGrant(toolName) {
+	if g := p.CoveringGrant(request); g != nil {
+		request.note(g.ID)
 		return true
 	}
 
-	fmt.Println(FormatPermissionPrompt(toolName, summary))
+	fmt.Println(FormatPermissionPrompt(request.Tool, request.Summary))
+	session := "Yes, and allow " + request.Scope.Describe() + " this session"
 
 	// Preferred path: an inline menu where enter accepts the highlighted option.
 	// Deny is highlighted first so an accidental enter is never destructive.
 	choices := []Choice{
 		{Key: 'n', Label: "No", Value: "n"},
 		{Key: 'y', Label: "Yes, once", Value: "y"},
-		{Key: 'a', Label: "Yes, all this session", Value: "a"},
+		{Key: 'a', Label: session, Value: "a"},
 	}
 	if answer, ok := Choose(ColorYellow("Allow?"), choices, 0); ok {
 		switch answer {
 		case "y":
+			request.note("approved once")
 			return true
 		case "a":
-			p.Grant(toolName)
+			request.note("approved for session (" + p.GrantScoped(request.Scope).ID + ")")
 			return true
 		}
+		request.note("denied")
 		return false
 	}
 
@@ -263,18 +275,20 @@ func (p *PermissionController) Authorize(toolName, summary string) bool {
 			fmt.Println()
 			return false
 		}
-		answer, err := p.Input.ReadLine(ColorYellow("  Allow? [y] once  [a] this tool for session  [n] deny: "))
+		answer, err := p.Input.ReadLine(ColorYellow("  Allow? [y] once  [a] " + request.Scope.Describe() + " for session  [n] deny: "))
 		if err != nil {
 			fmt.Println()
 			return false
 		}
 		switch strings.ToLower(strings.TrimSpace(answer)) {
 		case "y", "yes":
+			request.note("approved once")
 			return true
 		case "a", "always", "session":
-			p.Grant(toolName)
+			request.note("approved for session (" + p.GrantScoped(request.Scope).ID + ")")
 			return true
 		case "n", "no", "deny", "":
+			request.note("denied")
 			return false
 		default:
 			fmt.Println(ColorGray("  Enter y, a, or n."))

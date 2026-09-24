@@ -229,6 +229,9 @@ func (m *AgentManager) Spawn(parent RunRequest, task, requestedDir, model string
 		ThinkLevel: parent.ThinkLevel, AgentDepth: parent.AgentDepth + 1,
 		AgentInbox: record.inbox, PermissionMode: parent.PermissionMode,
 		Capabilities: opt.Capabilities, NetworkPolicy: opt.NetworkPolicy,
+		Audit: parent.Audit,
+		// A child's result returns to the parent, so they share one taint.
+		Taint: parent.Taint,
 	}
 	go m.run(ctx, record, childReq)
 	return id, nil

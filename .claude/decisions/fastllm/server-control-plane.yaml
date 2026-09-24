@@ -1,0 +1,3 @@
+value: Headless API binds 127.0.0.1 by default; every route but GET / needs the ~/.fastllm/server-token bearer token (FASTLLM_TOKEN overrides); Origin headers and non-loopback Host refused; bodies must be JSON; harness runs capped by FASTLLM_MAX_MODE (default edit) and FASTLLM_ALLOWED_ROOTS
+reason: Kernel gap #1: the request body chose permission_mode/allow_commands/working_dir on an unauthenticated all-interfaces port, so any LAN host or web page could run commands; the monitor cannot protect against a caller allowed to be the user
+decided_at: 2026-09-24T02:14:22+00:00

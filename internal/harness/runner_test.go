@@ -52,7 +52,8 @@ func TestRunnerInteractiveAuthorizationCanDenyMutation(t *testing.T) {
 	var askedName, askedSummary string
 	result, err := runner.Run(context.Background(), RunRequest{
 		Task: "try a write", WorkingDir: tmpDir, Model: "test-model", PermissionMode: PermissionAgent,
-		Authorize: func(name, summary string) bool {
+		Authorize: func(c ConsentRequest) bool {
+			name, summary := c.Tool, c.Summary
 			askedName, askedSummary = name, summary
 			return false
 		},
@@ -92,7 +93,8 @@ func TestRunnerInteractiveAuthorizationDeniesFusedFollowUp(t *testing.T) {
 	var authorizedCalls []string
 	result, err := runner.Run(context.Background(), RunRequest{
 		Task: "try a fused write", WorkingDir: tmpDir, Model: "test-model", PermissionMode: PermissionAgent,
-		Authorize: func(name, summary string) bool {
+		Authorize: func(c ConsentRequest) bool {
+			name, summary := c.Tool, c.Summary
 			authorizedCalls = append(authorizedCalls, name+":"+summary)
 			if name == "run_command" {
 				return false

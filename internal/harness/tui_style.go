@@ -282,7 +282,7 @@ func FormatToolCall(toolName, argsSummary string) string {
 		badge = ColorWhite("[" + toolName + "]")
 	}
 
-	summary := ColorWhite(argsSummary)
+	summary := ColorWhite(sanitizeUntrusted(argsSummary))
 	return fmt.Sprintf("\n  %s %s %s %s", ColorBorder(SymCornerTL+SymHLine), badge, ColorGray("pending"), summary)
 }
 
@@ -296,6 +296,7 @@ func FormatToolState(toolName, state string, elapsed time.Duration) string {
 
 // FormatToolResult renders the outcome of a tool execution with structured indentation.
 func FormatToolResult(toolName, result string, maxPreviewLines int) string {
+	result = sanitizeUntrusted(result)
 	if maxPreviewLines <= 0 {
 		maxPreviewLines = 3
 	}
@@ -359,6 +360,8 @@ type TerminalBoxOptions struct {
 
 // FormatTerminalBox renders a command execution inside a styled terminal box frame.
 func FormatTerminalBox(opts TerminalBoxOptions) string {
+	opts.Command = sanitizeUntrusted(opts.Command)
+	opts.Output = sanitizeOutput(opts.Output)
 	width := opts.Width
 	if width <= 0 {
 		width = 76
@@ -484,6 +487,7 @@ func FormatMarkdown(markdown string) string {
 
 // FormatMarkdownWidth renders Markdown structures wrapped cleanly to the specified terminal width.
 func FormatMarkdownWidth(markdown string, width int) string {
+	markdown = sanitizeUntrusted(markdown)
 	if width <= 0 {
 		width = 76
 	}
@@ -693,6 +697,8 @@ func FormatRuntimeCard(settings InteractiveRuntime, sessionID string) string {
 func FormatPermissionPrompt(toolName, summary string) string {
 	// The request is shown whole, wrapped rather than truncated: an approval is
 	// only informed if every part of what it permits is visible.
+	// Anything that would not print as itself is spelled out instead (I7).
+	summary, hidden := revealHidden(summary)
 	lines := []string{"", FormatKV("tool", toolName, 10)}
 	for i, chunk := range wrapRunes(summary, 58) {
 		if i == 0 {
@@ -700,6 +706,11 @@ func FormatPermissionPrompt(toolName, summary string) string {
 		} else {
 			lines = append(lines, FormatKV("", chunk, 10))
 		}
+	}
+	if hidden {
+		lines = append(lines, "", ColorYellow("! This request contains hidden or control characters, shown"),
+			ColorYellow("  as ⟨…⟩ above. Approving runs the raw text, not what a"),
+			ColorYellow("  terminal would display. Deny unless you expected them."))
 	}
 	lines = append(lines, "")
 	return FormatCard("Permission Required", lines, 74)
@@ -874,12 +885,13 @@ func FormatLegacyConversationsTable(conversations []LegacyConversation, imported
 // putting the legend inside the shared card would double it up there. Deny is
 // listed last but bound to enter/esc, so a reflexive keypress is never the
 // destructive one.
-func FormatPermissionKeyLegend() string {
+// FormatPermissionKeyLegend names exactly what [a] grants for the session.
+func FormatPermissionKeyLegend(sessionScope string) string {
 	return "  " + ColorYellow("Allow?") + "  " +
 		ColorGreen("[y]") + " once   " +
-		ColorGreen("[a]") + " all this session   " +
 		ColorRed("[n]") + " deny   " +
-		ColorGray("(enter or esc denies)")
+		ColorGray("(enter or esc denies)") + "\n  " +
+		ColorGreen("[a]") + " yes, and allow " + sanitizeUntrusted(sessionScope) + " this session"
 }
 
 // FormatUntrackedAsDiff formats new or untracked file content as a unified diff with additions.

@@ -82,6 +82,7 @@ func (m *teaModel) loadSession(session *InteractiveSession) error {
 	m.sandbox = session.Runtime.Sandbox
 	m.sessionMessages = append([]llm.Message(nil), session.Messages...)
 	m.sessionMetrics = session.Metrics
+	m.taint = nil
 	// Tool calls are not persisted with a session, so a resumed session starts
 	// with an empty changes list rather than inheriting the previous one's.
 	m.changes.Reset()
@@ -132,6 +133,7 @@ func (m *teaModel) startNewSession() error {
 	}
 	m.sessionMessages = nil
 	m.sessionMetrics = SessionMetrics{}
+	m.taint = nil
 	m.changes.Reset()
 	m.latestMetrics = nil
 	m.lastResponse = ""
@@ -156,6 +158,15 @@ func (m *teaModel) resumeSession(loaded *InteractiveSession) tea.Cmd {
 	m.appendSessionTranscript()
 	m.statusNotice = "Resumed " + loaded.Title
 	return m.clearStatusAfter(3 * time.Second)
+}
+
+// conversationTaint is the session's taint, created on first use and dropped
+// whenever the conversation is replaced (/new, /clear, resume).
+func (m *teaModel) conversationTaint() *SessionTaint {
+	if m.taint == nil {
+		m.taint = NewSessionTaint()
+	}
+	return m.taint
 }
 
 func (m *teaModel) initialMessages() []InitialMessage {

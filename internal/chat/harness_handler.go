@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -45,12 +46,24 @@ func (h *Handler) HarnessRun(w http.ResponseWriter, r *http.Request) {
 		req.PermissionMode = mode
 	}
 
+	// The request chooses its own authority, so the server caps it: a caller
+	// holding the token still cannot exceed what the operator allowed.
+	if harness.ModeRank(req.PermissionMode) > harness.ModeRank(h.MaxMode) {
+		http.Error(w, fmt.Sprintf("forbidden: permission_mode %q exceeds this server's maximum %q (FASTLLM_MAX_MODE)",
+			harness.NormalizeMode(req.PermissionMode), harness.NormalizeMode(h.MaxMode)), http.StatusForbidden)
+		return
+	}
+
 	if req.WorkingDir == "" {
 		if root := h.Files.GetRoot(); root != "" {
 			req.WorkingDir = root
 		} else {
 			req.WorkingDir, _ = os.Getwd()
 		}
+	}
+	if !withinAllowedRoots(req.WorkingDir, h.AllowedRoots) {
+		http.Error(w, fmt.Sprintf("forbidden: working_dir %q is outside this server's allowed roots (FASTLLM_ALLOWED_ROOTS)", req.WorkingDir), http.StatusForbidden)
+		return
 	}
 
 	if req.Model == "" && h.LLM != nil {
@@ -70,6 +83,9 @@ func (h *Handler) HarnessRun(w http.ResponseWriter, r *http.Request) {
 			_, _ = store.SaveMessage(h.DB, defaultWorkspace, convID, "user", req.Task, nil)
 		}
 	}
+
+	// Headless runs share one log per day; each record carries its own time.
+	req.Audit = harness.OpenAuditLog("server-" + time.Now().UTC().Format("20060102"))
 
 	runner := harness.NewRunner(h.LLM, req.WorkingDir, req.Model)
 	defer runner.Close()
@@ -181,4 +197,37 @@ func (h *Handler) HarnessRun(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnprocessableEntity)
 	}
 	_ = json.NewEncoder(w).Encode(res)
+}
+
+// withinAllowedRoots reports whether dir, with symlinks resolved, lies inside
+// one of roots. No roots means no restriction (the server always sets some).
+func withinAllowedRoots(dir string, roots []string) bool {
+	if len(roots) == 0 {
+		return true
+	}
+	resolve := func(p string) (string, bool) {
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			return "", false
+		}
+		if real, err := filepath.EvalSymlinks(abs); err == nil {
+			abs = real
+		}
+		return abs, true
+	}
+	target, ok := resolve(dir)
+	if !ok {
+		return false
+	}
+	for _, root := range roots {
+		base, ok := resolve(root)
+		if !ok {
+			continue
+		}
+		rel, err := filepath.Rel(base, target)
+		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel) {
+			return true
+		}
+	}
+	return false
 }
