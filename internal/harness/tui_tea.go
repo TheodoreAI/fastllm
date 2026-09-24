@@ -251,7 +251,9 @@ type teaModel struct {
 	// sessionsModal is the open sessions menu; nil when closed.
 	sessionsModal *sessionsPicker
 	// themeModal is the open /theme picker; nil when closed.
-	themeModal   *themePicker
+	themeModal *themePicker
+	// suggest is the slash-command dropdown above the input box.
+	suggest      suggestState
 	changes      sessionChanges
 	gitWatchChan <-chan struct{}
 	gitWatchStop func()
@@ -487,6 +489,11 @@ func (m *teaModel) Init() tea.Cmd {
 // Update implements tea.Model
 func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
+	// Keys can change the input on any of the many return paths below, so the
+	// dropdown catches up once, after the key has been fully handled.
+	if _, isKey := msg.(tea.KeyMsg); isKey {
+		defer m.refreshSuggestions()
+	}
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -711,6 +718,12 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Paste {
 			m.input.InsertString(string(msg.Runes))
 			return m, nil
+		}
+
+		// While the slash-command dropdown shows, it owns ↑/↓, Tab, Enter and
+		// Esc; every other key falls through to the input as usual.
+		if handled, cmd := m.handleSuggestKey(msg); handled {
+			return m, cmd
 		}
 
 		switch msg.Type {
@@ -1205,7 +1218,7 @@ func (m *teaModel) resizeViewport() {
 	// wider than the viewport and wraps, so an over-wide line costs a row of
 	// slack instead of pushing the frame past the bottom of the terminal.
 	const headerRows, statusRows, boxBorderRows, spareRow = 2, 1, 2, 1
-	vpHeight := m.height - headerRows - statusRows - boxBorderRows - spareRow - m.input.Height()
+	vpHeight := m.height - headerRows - statusRows - boxBorderRows - spareRow - m.input.Height() - m.suggestionRows()
 	if vpHeight < 3 {
 		vpHeight = 3
 	}
@@ -2815,6 +2828,12 @@ func (m *teaModel) View() string {
 	}
 	sb.WriteString(conversation + "\n")
 
+	// Slash-command suggestions sit directly above the input box; the
+	// viewport already gave up these rows in resizeViewport.
+	if dropdown := m.renderSuggestions(); dropdown != "" {
+		sb.WriteString(dropdown + "\n")
+	}
+
 	// 3. Bottom Input Box with Rounded Border
 	var borderCol lipgloss.Color = tuiColorBorder
 	if m.mode == modeShell {
@@ -2852,6 +2871,8 @@ func (m *teaModel) View() string {
 	} else if m.shellExecuting {
 		hints = "Ctrl+B: Background  •  Esc: Cancel  •  Ctrl+C: Cancel"
 		shortHints = "Ctrl+B: Bg  •  Esc: Cancel"
+	} else if suggestHints, ok := m.suggestionHints(); ok {
+		hints, shortHints = suggestHints, suggestHints
 	}
 	used, budget := m.contextUsage()
 	gauge := formatContextGauge(used, budget, 8)

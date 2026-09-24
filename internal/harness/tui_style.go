@@ -655,97 +655,15 @@ func HighlightDiff(diffText string) string {
 func FormatHelp() string {
 	var b strings.Builder
 	b.WriteString("\n" + ColorBrightWhite(StyleBold("fastllm Slash Commands")) + "\n\n")
-
-	type cmdEntry struct {
-		cmd  string
-		desc string
-	}
-
-	renderSection := func(title string, entries []cmdEntry) {
-		b.WriteString(ColorCyan(StyleBold(SymBullet+" "+title)) + "\n")
-		for _, e := range entries {
-			cmdStyled := ColorBrightWhite(PadRight("  "+e.cmd, 26))
-			descStyled := ColorGray(e.desc)
+	for _, section := range commandSections {
+		b.WriteString(ColorCyan(StyleBold(SymBullet+" "+section.Title)) + "\n")
+		for _, row := range section.Rows {
+			cmdStyled := ColorBrightWhite(PadRight("  "+row.Usage, 26))
+			descStyled := ColorGray(row.Desc)
 			b.WriteString(cmdStyled + descStyled + "\n")
 		}
 		b.WriteString("\n")
 	}
-
-	renderSection("Session & Control", []cmdEntry{
-		{"/help", "Display this command reference"},
-		{"/status", "Inspect session token usage, latency, cost, and jobs"},
-		{"/sessions", "Browse, filter, resume, rename, or delete sessions"},
-		{"/theme [name]", "Pick a colour theme (nord, zinc, terminal, ...)"},
-		{"/sessions list", "Print the saved sessions table"},
-		{"/resume [id|last]", "Resume a saved session (no id opens the menu)"},
-		{"/session [id]", "Show session details"},
-		{"/rename <title>", "Rename the active session"},
-		{"/delete-session <id>", "Delete an inactive saved session"},
-		{"/new", "Save the current session and start a new one"},
-		{"/conversations", "List conversations in the legacy web database"},
-		{"/import <id|all>", "Import legacy web conversations as sessions"},
-		{"/c, /clear", "Clear conversation context and declutter UI screen"},
-		{"/cls", "Clear terminal screen without resetting context"},
-		{"/compact", "Collapse older turns into a checkpoint without waiting for the budget"},
-		{"/copy, /yank", "Copy last response to OS clipboard (/copy all for full log)"},
-		{"/dir <path>", "Switch active working directory and reload workspace rules"},
-		{"/exit, /quit", "Exit the interactive session"},
-	})
-
-	renderSection("Runtime Settings", []cmdEntry{
-		{"/set", "Show current session runtime settings"},
-		{"/set turns <1-100>", "Set maximum agent tool turns per prompt"},
-		{"/set timeout <sec>", "Set command timeout (1-3600 seconds)"},
-		{"/set think <level>", "Set off, low, medium, or high reasoning"},
-		{"/set commands <on|off>", "Enable or disable command/process tools"},
-		{"/set sandbox <on|off>", "Run commands isolated from this machine, with no network"},
-		{"/set permissions <mode>", "Set plan, agent, edit, or full (Shift+Tab cycles in the TUI)"},
-		{"/set output <mode>", "Set compact or expanded tool results"},
-		{"/permissions [list]", "List active session capability grants"},
-		{"/permissions revoke <id>", "Revoke a capability grant by ID or tool name"},
-		{"/permissions clear", "Revoke all active session capability grants"},
-	})
-
-	renderSection("Shell & Execution", []cmdEntry{
-		{"/shell, /sh", "Toggle interactive Shell Mode (run host terminal commands)"},
-		{"/sh <cmd>", "Execute a shell command in working dir (e.g. /sh ls -la)"},
-		{"/edit <file>", "Open file in editor ($EDITOR, or nano/notepad)"},
-		{"!<cmd>, $ <cmd>", "Execute command immediately (e.g. !git status, !go test)"},
-	})
-
-	renderSection("Models & Endpoints", []cmdEntry{
-		{"/models, /model", "Open interactive model selector modal (Alt+M)"},
-		{"/model <name>", "Switch active model (e.g. /model llama3.1)"},
-		{"/models add <id> <url>", "Register a new inference endpoint in config.json"},
-	})
-
-	renderSection("Git & Checkpoints", []cmdEntry{
-		{"/changes [file]", "Inspect changed files list & per-file diff modal (Alt+C / Ctrl+O)"},
-		{"/diff [file]", "Syntax-highlighted diff of uncommitted changes (or inspect file)"},
-		{"/discard [file|all]", "Discard uncommitted edits for a file or all files ('x' in diff modal)"},
-		{"/undo", "Rollback working directory to pre-turn git checkpoint"},
-		{"/rules", "Inspect discovered workspace instruction files"},
-		{"/skills [list|name] [task]", "List, inspect, or run an installed skill"},
-	})
-
-	renderSection("Background Processes & Servers", []cmdEntry{
-		{"<cmd> &", "Launch dev server in background in Shell Mode (e.g. npm run dev &)"},
-		{"/bg <cmd>", "Launch command in background (or 'bg <cmd>' in Shell Mode)"},
-		{"/logs <id> [lines]", "View recent logs of a background process (or 'logs <id>')"},
-		{"/ps", "List running background processes & uptime (or 'ps')"},
-		{"/kill <id|all>", "Terminate background process or all processes (e.g. /kill all)"},
-		{"Ctrl+B", "Background an already-running shell command without killing it"},
-	})
-
-	renderSection("Web Tools", []cmdEntry{
-		{"/search <query>", "Search the public web (DuckDuckGo / Brave)"},
-		{"/fetch <url>", "Fetch and read web page content converted to Markdown"},
-	})
-
-	renderSection("Image Generation", []cmdEntry{
-		{"/image <prompt>", "Generate an image and save it under generated-images/"},
-	})
-
 	return b.String()
 }
 
