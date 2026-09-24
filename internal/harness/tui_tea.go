@@ -32,83 +32,102 @@ const (
 	modeShell
 )
 
-// Lip Gloss Palette (matching FastLLM Zinc/Cyan dark aesthetic, zero emojis)
+// Palette. ApplyTheme (theme.go) assigns every colour from the active theme;
+// nothing here is a literal so a theme switch reaches all of the chrome.
 var (
-	tuiColorCyan   = lipgloss.Color("#06B6D4") // Cyan 500
-	tuiColorBlue   = lipgloss.Color("#38BDF8") // Sky 400
-	tuiColorGreen  = lipgloss.Color("#10B981") // Emerald 500
-	tuiColorYellow = lipgloss.Color("#F59E0B") // Amber 500
-	tuiColorRed    = lipgloss.Color("#EF4444") // Red 500
-	tuiColorPurple = lipgloss.Color("#A855F7") // Violet 500
-	tuiColorMuted  = lipgloss.Color("#71717A") // Zinc 500
-	tuiColorDarkBg = lipgloss.Color("#09090B") // Zinc 950
-	tuiColorCardBg = lipgloss.Color("#18181B") // Zinc 900
-	tuiColorBorder = lipgloss.Color("#27272A") // Zinc 800
-	tuiColorTrack  = lipgloss.Color("#3F3F46") // Zinc 700 (gauge track)
-	tuiColorWhite  = lipgloss.Color("#FAFAFA") // Zinc 50
+	tuiColorCyan    lipgloss.Color
+	tuiColorBlue    lipgloss.Color
+	tuiColorGreen   lipgloss.Color
+	tuiColorYellow  lipgloss.Color
+	tuiColorRed     lipgloss.Color
+	tuiColorPurple  lipgloss.Color
+	tuiColorMuted   lipgloss.Color
+	tuiColorDarkBg  lipgloss.Color
+	tuiColorCardBg  lipgloss.Color
+	tuiColorBorder  lipgloss.Color
+	tuiColorTrack   lipgloss.Color
+	tuiColorWhite   lipgloss.Color
+	tuiColorBrandFg lipgloss.Color
 )
 
-// Lip Gloss Styles
+// Lip Gloss Styles, rebuilt by buildStyles whenever the theme changes.
 var (
+	styleBrand        lipgloss.Style
+	styleHeaderPill   lipgloss.Style
+	styleAgentBadge   lipgloss.Style
+	styleShellBadge   lipgloss.Style
+	styleHeaderBox    lipgloss.Style
+	styleCard         lipgloss.Style
+	styleUserPrompt   lipgloss.Style
+	styleAssistant    lipgloss.Style
+	styleMuted        lipgloss.Style
+	styleStatusBar    lipgloss.Style
+	styleStatusNotice lipgloss.Style
+	styleDiffAdd      lipgloss.Style
+	styleDiffDel      lipgloss.Style
+	styleDiffHdr      lipgloss.Style
+)
+
+func buildStyles() {
 	styleBrand = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("#000000")).
-			Background(tuiColorCyan).
-			Padding(0, 1)
+		Bold(true).
+		Foreground(tuiColorBrandFg).
+		Background(tuiColorCyan).
+		Padding(0, 1)
 
 	styleHeaderPill = lipgloss.NewStyle().
-			Foreground(tuiColorMuted).
-			Background(tuiColorCardBg).
-			Padding(0, 1)
+		Foreground(tuiColorMuted).
+		Background(tuiColorCardBg).
+		Padding(0, 1)
 
 	styleAgentBadge = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(tuiColorCyan).
-			Background(tuiColorCardBg).
-			Padding(0, 1)
+		Bold(true).
+		Foreground(tuiColorCyan).
+		Background(tuiColorCardBg).
+		Padding(0, 1)
 
 	styleShellBadge = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(tuiColorYellow).
-			Background(tuiColorCardBg).
-			Padding(0, 1)
+		Bold(true).
+		Foreground(tuiColorYellow).
+		Background(tuiColorCardBg).
+		Padding(0, 1)
 
 	styleHeaderBox = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(tuiColorBorder).
-			Padding(0, 1).
-			MarginBottom(0)
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(tuiColorBorder).
+		Padding(0, 1).
+		MarginBottom(0)
 
 	styleCard = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(tuiColorBorder).
-			Background(tuiColorCardBg).
-			Padding(0, 1).
-			MarginBottom(1)
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(tuiColorBorder).
+		Background(tuiColorCardBg).
+		Padding(0, 1).
+		MarginBottom(1)
 
 	styleUserPrompt = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(tuiColorWhite)
+		Bold(true).
+		Foreground(tuiColorWhite)
 
 	styleAssistant = lipgloss.NewStyle().
-			Foreground(tuiColorWhite)
+		Foreground(tuiColorWhite)
 
 	styleMuted = lipgloss.NewStyle().
-			Foreground(tuiColorMuted)
+		Foreground(tuiColorMuted)
 
 	styleStatusBar = lipgloss.NewStyle().
-			Background(tuiColorCardBg).
-			Foreground(tuiColorMuted).
-			Padding(0, 1)
+		Background(tuiColorCardBg).
+		Foreground(tuiColorMuted).
+		Padding(0, 1)
 
 	styleStatusNotice = lipgloss.NewStyle().
-				Foreground(tuiColorGreen).
-				Bold(true)
+		Foreground(tuiColorGreen).
+		Bold(true)
 
 	styleDiffAdd = lipgloss.NewStyle().Foreground(tuiColorGreen)
 	styleDiffDel = lipgloss.NewStyle().Foreground(tuiColorRed)
 	styleDiffHdr = lipgloss.NewStyle().Foreground(tuiColorCyan).Bold(true)
-)
+}
 
 func tuiToolBadge(name string) string {
 	var c lipgloss.Color
@@ -231,9 +250,11 @@ type teaModel struct {
 	modelCursor int
 	// sessionsModal is the open sessions menu; nil when closed.
 	sessionsModal *sessionsPicker
-	changes       sessionChanges
-	gitWatchChan  <-chan struct{}
-	gitWatchStop  func()
+	// themeModal is the open /theme picker; nil when closed.
+	themeModal   *themePicker
+	changes      sessionChanges
+	gitWatchChan <-chan struct{}
+	gitWatchStop func()
 
 	// Diff modal viewer state
 	diffModal          bool
@@ -560,6 +581,9 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.sessionsModal != nil {
 			return m, m.handleSessionsModalKey(msg)
 		}
+		if m.themeModal != nil {
+			return m, m.handleThemeModalKey(msg)
+		}
 		if m.modelsModal {
 			switch msg.Type {
 			case tea.KeyEsc, tea.KeyCtrlC:
@@ -844,7 +868,7 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.diffViewport, vpCmd = m.diffViewport.Update(msg)
 			return m, vpCmd
 		}
-		if m.modelsModal || m.skillsModal || m.sessionsModal != nil {
+		if m.modelsModal || m.skillsModal || m.sessionsModal != nil || m.themeModal != nil {
 			return m, nil
 		}
 		if (msg.Button == tea.MouseButtonLeft || msg.Type == tea.MouseLeft) && msg.Action != tea.MouseActionRelease {
@@ -1602,6 +1626,9 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 		case "/exit", "/quit":
 			m.closeSession()
 			return tea.Quit
+
+		case "/theme", "/themes":
+			return m.handleThemeSlash(parts)
 
 		case "/help":
 			m.appendHistory(styleUserPrompt.Render("❯ /help") + "\n")
@@ -2707,6 +2734,9 @@ func (m *teaModel) View() string {
 	if m.sessionsModal != nil {
 		return m.renderSessionsModal()
 	}
+	if m.themeModal != nil {
+		return m.renderThemeModal()
+	}
 	if m.skillsModal {
 		return m.renderSkillsModal()
 	}
@@ -2848,6 +2878,7 @@ var teaModelProg *tea.Program
 // RunBubbleTea launches the full-screen Bubble Tea TUI
 func (r *Runner) RunBubbleTea(req RunRequest) error {
 	initConsole()
+	LoadThemePreference()
 
 	model, err := newTeaModel(r, req)
 	if err != nil {

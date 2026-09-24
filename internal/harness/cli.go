@@ -29,6 +29,7 @@ func getenv(key, fallback string) string {
 // Returns the exit code (0 for success, 1 for failure).
 func RunCLI(args []string) int {
 	initConsole()
+	LoadThemePreference()
 
 	fs := flag.NewFlagSet("harness", flag.ContinueOnError)
 

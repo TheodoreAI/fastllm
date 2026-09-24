@@ -1,0 +1,3 @@
+value: Theme registry in internal/harness/theme.go (nord default; zinc, terminal, tokyo-night, catppuccin, gruvbox); /theme picker with live preview; choice saved to ~/.fastllm/preferences.json, not config.json
+reason: User wanted new colours without layout changes; one palette now drives both the lipgloss chrome and the ANSI text helpers; config.json can be per-project and is rewritten wholesale, so UI prefs live apart
+decided_at: 2026-09-24T01:40:08+00:00
