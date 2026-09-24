@@ -1,0 +1,4 @@
+- decided_at: 2026-09-24T01:53:57+00:00
+  event: initial
+  value: Slash-command dropdown above the input box, driven by commandSections in commands.go (single source for /help, suggestions and legacy completion); prefix-then-substring matching; stage-2 argument values; Tab completes, smart Enter runs unless a <required> arg is missing; destructive commands (/undo /clear /exit /discard /delete-session /kill and aliases) only complete from the list
+  reason: User chose dropdown + smart Enter + argument values; the destructive guard stops a half-typed prefix like /u from rolling back work; one table ends the drift between help and completion

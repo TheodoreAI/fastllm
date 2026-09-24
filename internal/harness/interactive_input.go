@@ -107,7 +107,8 @@ func inputComplete(line []rune) bool {
 	return quote == 0 && braces <= 0 && brackets <= 0 && parens <= 0 && !strings.HasSuffix(text, "\\")
 }
 
-var slashCommands = []string{"/clear", "/cls", "/compact", "/delete-session", "/diff", "/dir", "/exit", "/fetch", "/help", "/image", "/kill", "/model", "/models", "/new", "/permissions", "/ps", "/quit", "/rename", "/resume", "/rules", "/search", "/session", "/sessions", "/set", "/shell", "/skills", "/status", "/undo"}
+// slashCommands is derived from commandSections so completion never drifts from /help.
+var slashCommands = slashCommandNames()
 
 func interactiveCompletions(line string, cursor int, cwd string, models, sessions []string) []string {
 	if cursor < 0 || cursor > len(line) {
