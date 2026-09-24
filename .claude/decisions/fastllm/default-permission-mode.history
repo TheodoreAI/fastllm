@@ -1,0 +1,4 @@
+- decided_at: 2026-09-24T02:02:40+00:00
+  event: initial
+  value: TUI and legacy REPL start in plan mode unless -mode is given; unset modes (old sessions, bare PermissionController, /import) also default to plan; resumed sessions keep their saved mode
+  reason: User asked for plan as the default; matches the capability-policy rule that an empty mode fails closed to plan
