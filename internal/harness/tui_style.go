@@ -821,19 +821,6 @@ func FormatModelsTable(models []config.ModelEndpoint, activeModel, configPath st
 	return FormatCard("Configured Model Endpoints", lines, 80)
 }
 
-// formatCharCount renders a character count compactly. Context sizes run to six
-// digits, which are hard to compare at a glance mid-session.
-func formatCharCount(chars int) string {
-	switch {
-	case chars >= 1_000_000:
-		return fmt.Sprintf("%.1fM chars", float64(chars)/1_000_000)
-	case chars >= 1_000:
-		return fmt.Sprintf("%.0fk chars", float64(chars)/1_000)
-	default:
-		return fmt.Sprintf("%d chars", chars)
-	}
-}
-
 // FormatLegacyConversationsTable renders the conversations still held in the
 // legacy web database, marking the ones already pulled into the session store.
 func FormatLegacyConversationsTable(conversations []LegacyConversation, imported map[string]bool) string {

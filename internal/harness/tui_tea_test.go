@@ -1087,3 +1087,26 @@ func TestCtrlBBackgroundsRunningShellCommand(t *testing.T) {
 		t.Fatalf("history does not confirm backgrounding: %s", m.historyText.String())
 	}
 }
+
+// A command typed after a run appeared pushed right: the "Completed in N
+// turn(s)" line is rendered with its blank lines inside the style, lipgloss
+// pads them to the line's width, and the next append continued on that row.
+func TestHistoryDoesNotIndentAfterAPaddedBlock(t *testing.T) {
+	completed := styleMuted.Render(fmt.Sprintf("─ Completed in %d turn(s) (%.1fs) ─\n\n", 9, 123.9))
+	if lines := strings.Split(StripANSI(completed), "\n"); strings.TrimSpace(lines[len(lines)-1]) != "" || lines[len(lines)-1] == "" {
+		t.Skip("lipgloss no longer pads trailing blank lines; the guard is moot")
+	}
+	m := &teaModel{}
+	m.appendHistory(completed)
+	m.appendHistory(styleUserPrompt.Render("❯ /compact") + "\n")
+	for _, line := range strings.Split(StripANSI(m.historyText.String()), "\n") {
+		if strings.Contains(line, "/compact") && !strings.HasPrefix(line, "❯") {
+			t.Fatalf("the command is indented: %q", line)
+		}
+	}
+	// Padding on lines before the last is invisible and must be left alone.
+	block := "top\n" + styleMuted.Render("wide line here\nx") + "\n"
+	if trimPaddedTail(block) != block {
+		t.Fatal("a chunk ending in a newline was changed")
+	}
+}
