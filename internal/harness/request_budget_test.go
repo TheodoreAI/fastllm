@@ -144,3 +144,26 @@ func TestBroadSearchOverMinifiedFilesFitsA16kModel(t *testing.T) {
 		t.Fatalf("the request after the search is %d characters, over the %d budget", messageCharacterCount(secondRequest), limit)
 	}
 }
+
+// The gauge starts from an estimate and switches to the figure a run reports;
+// the two must agree, or the gauge jumps after the first turn.
+func TestOverheadEstimateMatchesWhatARunSends(t *testing.T) {
+	workspace := t.TempDir()
+	mock := &mockLLM{turns: []func([]llm.Message) (llm.Message, error){
+		func([]llm.Message) (llm.Message, error) { return llm.Message{Role: "assistant", Content: "done"}, nil },
+	}}
+	runner := NewRunner(mock, workspace, "test-model")
+	defer runner.Close()
+	req := RunRequest{WorkingDir: workspace, Model: "test-model", AllowCommands: true, CommandsConfigured: true, PermissionMode: PermissionEdit}
+	estimate := runner.EstimateRequestOverheadChars(req)
+
+	run := req
+	run.Task = "say done"
+	result, err := runner.Run(context.Background(), run, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.RequestOverheadChars == 0 || estimate != result.RequestOverheadChars {
+		t.Fatalf("estimate %d, run reported %d", estimate, result.RequestOverheadChars)
+	}
+}

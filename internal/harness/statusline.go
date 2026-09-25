@@ -20,13 +20,15 @@ type StatusLine struct {
 	Model          string
 	PermissionMode PermissionMode
 	ShellMode      bool
-	ContextChars   int
-	ContextBudget  int
-	Turns          int
-	TotalTokens    int
-	Cost           float64
-	WorkingDir     string
-	Branch         string
+	// ContextTokens estimates the next request (transcript, system prompt and
+	// tool schemas) against ContextWindow, the model's window, both in tokens.
+	ContextTokens int
+	ContextWindow int
+	Turns         int
+	TotalTokens   int
+	Cost          float64
+	WorkingDir    string
+	Branch        string
 }
 
 // FormatStatusLine renders the always-visible session summary.
@@ -48,10 +50,10 @@ func FormatStatusLine(s StatusLine) string {
 		parts = append(parts, colorForMode(s.PermissionMode)(strings.ToLower(s.PermissionMode.Label())))
 	}
 
-	if s.ContextBudget > 0 {
-		pct := s.ContextChars * 100 / s.ContextBudget
-		usage := fmt.Sprintf("ctx %s/%s (%d%%)",
-			compactCount(s.ContextChars), compactCount(s.ContextBudget), pct)
+	if s.ContextWindow > 0 {
+		pct := s.ContextTokens * 100 / s.ContextWindow
+		usage := fmt.Sprintf("ctx %s/%s tok (%d%%)",
+			compactCount(s.ContextTokens), compactCount(s.ContextWindow), pct)
 		switch {
 		case pct >= 90:
 			parts = append(parts, ColorYellow(usage))

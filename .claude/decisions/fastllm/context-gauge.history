@@ -1,0 +1,4 @@
+- decided_at: 2026-09-25T04:05:50+00:00
+  event: initial
+  value: The TUI gauge and line-mode status line show the next request in tokens against the model's window ('ctx 12k/16k tok'): transcript plus the system prompt and tool schemas, converted at the compaction gate's 3.3 chars/token. The overhead comes from RunResult.RequestOverheadChars after a run, or Runner.EstimateRequestOverheadChars (the same prompt/tool builders Run uses) when the directory, model, commands, mode or sandbox changed. TUI between-turn compaction subtracts the same overhead.
+  reason: The gauge showed '20k/47k' for a 16k model: characters, unlabelled, against the transcript-only budget, and it omitted ~23k chars of system prompt and tool schemas that the Run gate now counts, so it read 42% when the real request was ~79% of the window. The earlier rule (count sessionMessages only) matched the old gate and was right then; it had to follow the gate when that changed.

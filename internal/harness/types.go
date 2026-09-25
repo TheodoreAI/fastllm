@@ -147,6 +147,9 @@ type RunResult struct {
 	ProposedPlan string `json:"proposed_plan,omitempty"`
 	// PermissionMode is the mode the run was actually evaluated under.
 	PermissionMode PermissionMode `json:"permission_mode,omitempty"`
+	// RequestOverheadChars is what the run sent with every request besides the
+	// transcript: the system prompt and the tool schemas, in characters.
+	RequestOverheadChars int `json:"request_overhead_chars,omitempty"`
 	// Transcript is the conversation after the run, without the system prompt:
 	// replayed history, the task, tool calls and results (as compacted during
 	// the run), and the final answer. A multi-turn caller replays it next turn.

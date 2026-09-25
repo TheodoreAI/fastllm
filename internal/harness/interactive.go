@@ -298,12 +298,14 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 			Model:          model,
 			PermissionMode: permissionMode,
 			ShellMode:      shellMode,
-			ContextChars:   messageCharacterCount(sessionMessages),
-			ContextBudget:  currentCompactionConfig().MaxTotalChars,
-			Turns:          sessionMetrics.TotalTurns,
-			TotalTokens:    sessionMetrics.TotalTokens,
-			Cost:           sessionMetrics.TotalCost,
-			WorkingDir:     absWorkingDir,
+			// sessionMessages holds the system prompt already; the tool schemas
+			// go with every request too.
+			ContextTokens: (messageCharacterCount(sessionMessages) + toolSchemaChars(tools)) * 10 / budgetCharsPerTokenTenths,
+			ContextWindow: ResolveContextWindow(settings, model),
+			Turns:         sessionMetrics.TotalTurns,
+			TotalTokens:   sessionMetrics.TotalTokens,
+			Cost:          sessionMetrics.TotalCost,
+			WorkingDir:    absWorkingDir,
 			// Re-read each prompt: /dir can move the session to another repo.
 			Branch: currentBranch(absWorkingDir),
 		})
