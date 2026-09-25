@@ -109,6 +109,7 @@ func TestSupportsToolsAllowlist(t *testing.T) {
 		{"gemma4:12b", true},
 		{"gemma4:latest", true},
 		{"gpt-oss:20b", true},
+		{"ornith-1.5:9b-fastllm", true},
 		{"qwen2.5-coder:7b", false}, // advertises "tools" capability but doesn't reliably use tool_calls
 		{"llama3.2:latest", false},
 		{"", false},

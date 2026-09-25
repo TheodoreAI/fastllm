@@ -693,6 +693,8 @@ func containsString(list []string, s string) bool {
 var toolCapableModelPrefixes = []string{
 	"gemma4",
 	"gpt-oss",
+	// Verified with a complete five-turn glob/read/edit/read harness run.
+	"ornith-1.5",
 	"qwen3.5",
 }
 
