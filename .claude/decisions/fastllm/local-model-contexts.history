@@ -1,0 +1,4 @@
+- decided_at: 2026-09-25T03:36:50+00:00
+  event: initial
+  value: Every local Ollama model used by fastllm gets a -fastllm alias pinning num_ctx, with the same number as its config context_window: the largest context that stays fully on the 8 GB GPU, and at least 16K. ornith-1.5:9b-fastllm 16384, qwen3.5:9b-fastllm 16384, qwen2.5-coder:7b-fastllm 24576.
+  reason: Ollama serves unpinned models at 4096 on this machine and ignores context options on its OpenAI endpoint, while fastllm's fixed prompt is ~4.5K tokens. Measured via /api/ps: qwen3.5:9b 16K 81% GPU (32K 73%, 64K 63%); qwen2.5-coder:7b 24K 100% GPU (32K 92%). All three accepted a full fastllm request and made structured tool calls.

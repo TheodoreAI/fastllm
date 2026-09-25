@@ -55,13 +55,18 @@ func TestLookupKnownContextWindowPrefersLongestMatch(t *testing.T) {
 }
 
 func TestContextBudgetReservesHeadroom(t *testing.T) {
-	// 75% of the window, converted at chars/token -- the rest absorbs the reply,
-	// tool schemas, and the approximation error in counting tokens as chars/4.
-	if got, want := contextBudgetChars(128000), 128000*4*75/100; got != want {
+	// The window less a reply reserve, converted at 3.3 characters per token.
+	if got, want := contextBudgetChars(128000), (128000-8192)*33/10; got != want {
 		t.Fatalf("budget for 128k window = %d, want %d", got, want)
 	}
-	if got := contextBudgetChars(128000); got >= 128000*charsPerToken {
-		t.Fatalf("budget %d leaves no headroom inside the window", got)
+	// Measured on Ornith 1.5 (16k): the 12 tool schemas were 5839 JSON
+	// characters and 1732 tokens, and dense content ran 3.3 to 3.4 characters
+	// per token. A transcript filling the budget left after those schemas, at
+	// the dense end, plus the schemas and the reply reserve, must fit.
+	const window, schemaChars, schemaTokens = 16384, 5839, 1732
+	transcriptTokens := float64(contextBudgetChars(window)-schemaChars) / 3.3
+	if used := transcriptTokens + schemaTokens + float64(replyReserveTokens(window)); used > window {
+		t.Fatalf("a full 16k request needs %.0f tokens, more than the %d window", used, window)
 	}
 	// A tiny or unset window must not produce a budget that compacts every turn.
 	if got := contextBudgetChars(0); got < 8000 {

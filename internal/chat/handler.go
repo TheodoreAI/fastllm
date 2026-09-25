@@ -804,7 +804,7 @@ scan:
 			lineNum++
 			line := scanner.Text()
 			if re.MatchString(line) {
-				matches = append(matches, fmt.Sprintf("%s:%d: %s", rel, lineNum, strings.TrimSpace(line)))
+				matches = append(matches, fmt.Sprintf("%s:%d: %s", rel, lineNum, files.ClipMatch(line, re)))
 				if len(matches) >= searchFilesMaxMatches {
 					f.Close()
 					break scan
