@@ -1,0 +1,4 @@
+- decided_at: 2026-09-25T02:29:15+00:00
+  event: initial
+  value: Use the Ollama alias ornith-1.5:9b-fastllm with num_ctx 8192, explicit 8192 context in config, and a verified ornith-1.5 local-tool allowlist entry; keep muse-glimmer as the default pending broader comparison.
+  reason: The stock tag defaults to 4096 and rejected fastllm first-turn prompt at 4458 tokens. The 8K alias fit with 85% GPU/15% CPU and completed a five-turn glob/read/edit/read coding run with structured tool calls; changing the default from one small task would be premature.
