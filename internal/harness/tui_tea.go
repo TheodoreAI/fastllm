@@ -220,27 +220,30 @@ type teaModel struct {
 	historyText strings.Builder
 
 	// Execution state
-	isExecuting        bool
-	hasResponseTurn    bool
-	stream             streamBuffer
-	streamHeaderShown  bool
-	agentWorkStarted   bool
-	lastResponse       string
-	activeTurn         int
-	activeTool         string
-	activeArgs         string
-	cancelTurn         context.CancelFunc
-	cancelShell        context.CancelFunc
-	shellExecuting     bool
-	currentShellProc   *BackgroundProcess
+	isExecuting         bool
+	hasResponseTurn     bool
+	stream              streamBuffer
+	streamHeaderShown   bool
+	agentWorkStarted    bool
+	lastResponse        string
+	activeTurn          int
+	activeTool          string
+	activeArgs          string
+	cancelTurn          context.CancelFunc
+	cancelShell         context.CancelFunc
+	shellExecuting      bool
+	currentShellProc    *BackgroundProcess
 	currentShellExec    execution.Process
 	shellBackgrounded   bool
 	shellTracker        *ShellActivityTracker
 	lastAgentSubmitTime time.Time
 	eventChan           chan Event
-	permissionChan     chan teaPermissionRequestMsg
-	statusNotice       string
-	latestMetrics      *TurnMetrics
+	permissionChan      chan teaPermissionRequestMsg
+	statusNotice        string
+	latestMetrics       *TurnMetrics
+	// overhead caches what every request carries besides the transcript (the
+	// system prompt and tool schemas) and the settings it was measured under.
+	overhead           requestOverhead
 	pendingPrompt      string
 	pendingAttachments []llm.Attachment
 	taskStarted        time.Time
@@ -370,30 +373,30 @@ func newTeaModel(runner *Runner, req RunRequest) (*teaModel, error) {
 	hist := loadPromptHistory()
 
 	m := &teaModel{
-		runner:         runner,
-		workingDir:     absWorkingDir,
-		modelName:      modelName,
-		mode:           modeAgent,
-		configPath:     configPath,
-		checkpointMgr:  checkpointMgr,
-		processMgr:     processMgr,
-		rules:          rules,
-		skills:         skills,
-		settings:       settings,
-		input:          ta,
-		spinner:        sp,
+		runner:              runner,
+		workingDir:          absWorkingDir,
+		modelName:           modelName,
+		mode:                modeAgent,
+		configPath:          configPath,
+		checkpointMgr:       checkpointMgr,
+		processMgr:          processMgr,
+		rules:               rules,
+		skills:              skills,
+		settings:            settings,
+		input:               ta,
+		spinner:             sp,
 		promptHistory:       hist,
 		historyIdx:          -1,
 		shellTracker:        NewShellActivityTracker(10),
 		lastAgentSubmitTime: time.Now(),
 		maxTurns:            maxTurns,
-		commandTimeout: commandTimeout,
-		budget:         req.Budget,
-		thinkLevel:     req.ThinkLevel,
-		allowCommands:  req.AllowCommands,
-		sandbox:        req.Sandbox,
-		permissionMode: permissionMode,
-		permissionChan: make(chan teaPermissionRequestMsg),
+		commandTimeout:      commandTimeout,
+		budget:              req.Budget,
+		thinkLevel:          req.ThinkLevel,
+		allowCommands:       req.AllowCommands,
+		sandbox:             req.Sandbox,
+		permissionMode:      permissionMode,
+		permissionChan:      make(chan teaPermissionRequestMsg),
 	}
 	if err := m.initializeSession(req.ResumeSession); err != nil {
 		m.statusNotice = "Session recovery failed: " + err.Error()
@@ -1076,6 +1079,8 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					response = ev.Result.FinalResponse
 				}
 				transcript = ev.Result.Transcript
+				// The exact figure from the run replaces the estimate.
+				m.overhead = requestOverhead{chars: ev.Result.RequestOverheadChars, key: m.overheadKey()}
 			}
 			m.recordCompletedPrompt(response, transcript)
 			if m.pendingPlan != "" {
@@ -2310,14 +2315,39 @@ func (m *teaModel) compactionConfig() CompactionConfig {
 	return CompactionConfigForModel(m.settings, m.modelName)
 }
 
-// contextUsage reports progress toward automatic compaction. The numerator must
-// stay exactly what OnlineCompactMessages measures -- sessionMessages alone.
-// The system prompt is built inside Runner.Run and is never an element of
-// sessionMessages, so counting it here (or the unsent draft) inflated the gauge
-// by the whole prompt: ~18% of budget in a repo with a large skill catalog,
-// enough to show red while compaction was still far from firing.
+// contextUsage estimates the next request, in tokens, against the model's
+// window. A request is the transcript plus the system prompt and tool schemas
+// sent with every one; the compaction gate in Runner.Run counts all three, so
+// the gauge does too, converted at the gate's rate. Compaction fires when the
+// estimate reaches the window less the reply reserve, near 87%. The unsent
+// draft is not counted: it is not part of any request until submitted.
 func (m *teaModel) contextUsage() (int, int) {
-	return messageCharacterCount(m.sessionMessages), m.compactionConfig().MaxTotalChars
+	chars := messageCharacterCount(m.sessionMessages) + m.requestOverheadChars()
+	return chars * 10 / budgetCharsPerTokenTenths, ResolveContextWindow(m.settings, m.modelName)
+}
+
+type requestOverhead struct {
+	chars int
+	key   string
+}
+
+// overheadKey names the settings that change the system prompt or the tools.
+func (m *teaModel) overheadKey() string {
+	return fmt.Sprintf("%s|%s|%t|%s|%t", m.workingDir, m.modelName, m.allowCommands, m.permissionMode, m.sandbox)
+}
+
+// requestOverheadChars returns the system prompt and tool schemas a request
+// carries: the exact figure from the last run, or an estimate once the
+// directory, model, commands, mode, or sandbox setting has changed since.
+func (m *teaModel) requestOverheadChars() int {
+	key := m.overheadKey()
+	if m.overhead.key != key && m.runner != nil {
+		m.overhead = requestOverhead{key: key, chars: m.runner.EstimateRequestOverheadChars(RunRequest{
+			WorkingDir: m.workingDir, Model: m.modelName, AllowCommands: m.allowCommands,
+			CommandsConfigured: true, Sandbox: m.sandbox, PermissionMode: m.permissionMode,
+		})}
+	}
+	return m.overhead.chars
 }
 
 func formatContextGauge(used, budget, barWidth int) string {
@@ -2357,7 +2387,7 @@ func formatContextGauge(used, budget, barWidth int) string {
 		styleMuted.Render("ctx"),
 		meter,
 		stylePct.Render(fmt.Sprintf("%d%%", percent)),
-		styleMuted.Render(fmt.Sprintf(" · %s/%s", compactCount(used), compactCount(budget))),
+		styleMuted.Render(fmt.Sprintf(" · %s/%s tok", compactCount(used), compactCount(budget))),
 	)
 }
 

@@ -55,6 +55,48 @@ type Runner struct {
 	executions    *execution.Manager
 }
 
+// systemPromptFor assembles the system prompt a run of req sends; Run and
+// EstimateRequestOverheadChars share it so the estimate cannot drift.
+func (r *Runner) systemPromptFor(req RunRequest, workingDir, model, sandboxNote string) string {
+	contextWindow := r.contextWindow
+	if contextWindow <= 0 {
+		contextWindow = lookupKnownContextWindow(model)
+	}
+	return BuildSystemPrompt(PromptContext{
+		Base:        req.SystemPrompt,
+		Skills:      DiscoverWorkspaceSkills(workingDir),
+		Rules:       DiscoverWorkspaceRules(workingDir),
+		Environment: CollectEnvironment(workingDir, model, contextWindow),
+		TurnExtra:   req.PromptExtra,
+		Sandbox:     sandboxNote,
+		Mode:        modePrompt(req),
+	})
+}
+
+// toolsFor lists the tools a run of req offers: exactly what the monitor would
+// not deny.
+func (r *Runner) toolsFor(req RunRequest) []llm.Tool {
+	return toolsForRequest(req, toolAvailability{
+		observations: r.EnableObservations,
+		delegation:   len(r.agents.Tools(req.AgentDepth)) > 0,
+	})
+}
+
+// EstimateRequestOverheadChars is what a run of req would send with every
+// request besides the transcript: its system prompt and tool schemas. It is
+// for display before a run reports the exact figure in RunResult.
+func (r *Runner) EstimateRequestOverheadChars(req RunRequest) int {
+	workingDir := req.WorkingDir
+	if workingDir == "" {
+		workingDir = r.DefaultWorkingDir
+	}
+	model := req.Model
+	if model == "" {
+		model = r.DefaultModel
+	}
+	return len(r.systemPromptFor(req, workingDir, model, "")) + toolSchemaChars(r.toolsFor(req))
+}
+
 // compactionConfig returns the runner's budget, preferring a window-derived one.
 func (r *Runner) compactionConfig() CompactionConfig {
 	cfg := DefaultCompactionConfig()
@@ -260,19 +302,7 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 
 	// The one place the system prompt is assembled; callers contribute only the
 	// base override and per-turn extras.
-	contextWindow := r.contextWindow
-	if contextWindow <= 0 {
-		contextWindow = lookupKnownContextWindow(model)
-	}
-	systemPrompt := BuildSystemPrompt(PromptContext{
-		Base:        req.SystemPrompt,
-		Skills:      DiscoverWorkspaceSkills(absWorkingDir),
-		Rules:       DiscoverWorkspaceRules(absWorkingDir),
-		Environment: CollectEnvironment(absWorkingDir, model, contextWindow),
-		TurnExtra:   req.PromptExtra,
-		Sandbox:     sandboxPromptNote(scope),
-		Mode:        modePrompt(req),
-	})
+	systemPrompt := r.systemPromptFor(req, absWorkingDir, model, sandboxPromptNote(scope))
 
 	// A top-level run is one undo group; child agents write into their
 	// parent's group, since /undo reverts the prompt as a whole.
@@ -299,10 +329,7 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 	fileReader := files.New(absWorkingDir, policy.write)
 
 	// Available tools: exactly what the monitor would not deny.
-	tools := toolsForRequest(req, toolAvailability{
-		observations: r.EnableObservations,
-		delegation:   len(r.agents.Tools(req.AgentDepth)) > 0,
-	})
+	tools := r.toolsFor(req)
 
 	messages := []llm.Message{
 		{Role: "system", Content: systemPrompt},
@@ -319,7 +346,8 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 		History:    make([]TurnRecord, 0, maxTurns),
 		Metrics:    sessionMetrics,
 		// The mode the run was actually evaluated under, after fail-closed normalization.
-		PermissionMode: req.PermissionMode,
+		PermissionMode:       req.PermissionMode,
+		RequestOverheadChars: len(systemPrompt) + toolSchemaChars(tools),
 	}
 
 	var taskFinished bool

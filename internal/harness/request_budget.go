@@ -20,15 +20,23 @@ func requestBudget(cfg CompactionConfig, tools []llm.Tool) CompactionConfig {
 	if len(tools) == 0 {
 		return cfg
 	}
-	schema, err := json.Marshal(tools)
-	if err != nil {
-		return cfg
-	}
-	cfg.MaxTotalChars -= len(schema)
+	cfg.MaxTotalChars -= toolSchemaChars(tools)
 	if cfg.MaxTotalChars < minTranscriptBudget {
 		cfg.MaxTotalChars = minTranscriptBudget
 	}
 	return cfg
+}
+
+// toolSchemaChars is the size of the tool schemas as sent, in characters.
+func toolSchemaChars(tools []llm.Tool) int {
+	if len(tools) == 0 {
+		return 0
+	}
+	schema, err := json.Marshal(tools)
+	if err != nil {
+		return 0
+	}
+	return len(schema)
 }
 
 // minToolResultChars is the least a tool result is cut to, however small the

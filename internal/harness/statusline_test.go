@@ -24,15 +24,15 @@ func TestStatusLineShowsTheSessionAtAGlance(t *testing.T) {
 	got := stripANSI(FormatStatusLine(StatusLine{
 		Model:          "glm-5.3",
 		PermissionMode: PermissionAgent,
-		ContextChars:   24_000,
-		ContextBudget:  60_000,
+		ContextTokens:  6_400,
+		ContextWindow:  16_384,
 		Turns:          5,
 		TotalTokens:    12_400,
 		Cost:           0.42,
 		WorkingDir:     "/projects/fastllm",
 		Branch:         "main",
 	}))
-	for _, want := range []string{"glm-5.3", "agent", "ctx 24k/60k (40%)", "5 turns", "12k tok", "$0.42", "/projects/fastllm", "main"} {
+	for _, want := range []string{"glm-5.3", "agent", "ctx 6.4k/16k tok (39%)", "5 turns", "12k tok", "$0.42", "/projects/fastllm", "main"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("status line missing %q:\n%s", want, got)
 		}

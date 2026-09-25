@@ -194,6 +194,12 @@ func (m *teaModel) compactSessionContext() string {
 	if cfg.MaxTotalChars <= 0 {
 		return ""
 	}
+	// Measure as the run's gate does: the system prompt and tool schemas are
+	// sent with every request, so they come out of the transcript's budget.
+	cfg.MaxTotalChars -= m.requestOverheadChars()
+	if cfg.MaxTotalChars < minTranscriptBudget {
+		cfg.MaxTotalChars = minTranscriptBudget
+	}
 	before := messageCharacterCount(m.sessionMessages)
 
 	compacted, didCompact := OnlineCompactMessages(m.sessionMessages, cfg)

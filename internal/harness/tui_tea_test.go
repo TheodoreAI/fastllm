@@ -690,8 +690,8 @@ func TestFrameSizeIsStableAcrossWidthsAndHeaderStates(t *testing.T) {
 }
 
 func TestContextGaugeUsesCompactionBudget(t *testing.T) {
-	plain := StripANSI(formatContextGauge(45_000, 60_000, 8))
-	if !strings.Contains(plain, "ctx") || !strings.Contains(plain, "45k/60k") || !strings.Contains(plain, "▰") || !strings.Contains(plain, "▱") {
+	plain := StripANSI(formatContextGauge(12_000, 16_384, 8))
+	if !strings.Contains(plain, "ctx") || !strings.Contains(plain, "12k/16k tok") || !strings.Contains(plain, "▰") || !strings.Contains(plain, "▱") {
 		t.Fatalf("context gauge = %q", plain)
 	}
 	if got := StripANSI(formatContextGauge(75_000, 60_000, 0)); got != "ctx 100%" {
@@ -916,11 +916,12 @@ func TestInputBoxGrowsAndKeepsTypedTextVisible(t *testing.T) {
 	}
 }
 
-// The gauge must measure exactly what OnlineCompactMessages measures. Counting the
-// system prompt (which travels as RunRequest.SystemPrompt, never as a sessionMessages
-// element) or the unsent draft made the bar read ~18% on an empty session in a repo
-// with a large skill catalog, so it could show red while compaction was far from firing.
-func TestContextUsageTracksCompactionInput(t *testing.T) {
+// The gauge measures the next request as the compaction gate in Runner.Run does:
+// the transcript plus the system prompt and tool schemas sent with every request,
+// in tokens at the gate's rate, against the model's window. The unsent draft is
+// not part of any request. (It once counted sessionMessages alone, which was right
+// while compaction did; the gate now counts the fixed overhead, so the gauge must.)
+func TestContextUsageMeasuresTheNextRequest(t *testing.T) {
 	ta := textarea.New()
 	ta.SetValue("an unsent draft that must not count toward the gauge")
 	m := &teaModel{
@@ -929,34 +930,41 @@ func TestContextUsageTracksCompactionInput(t *testing.T) {
 			{Role: "user", Content: strings.Repeat("u", 1200)},
 			{Role: "assistant", Content: strings.Repeat("a", 800)},
 		},
+		settings: &config.Settings{Models: []config.ModelEndpoint{
+			{ID: "small", ContextWindow: 16384},
+			{ID: "big", ContextWindow: 200000},
+		}},
+		modelName: "small",
+	}
+	// A run reported its exact overhead for the current settings.
+	m.overhead = requestOverhead{chars: 23_000, key: m.overheadKey()}
+
+	used, window := m.contextUsage()
+	if want := (messageCharacterCount(m.sessionMessages) + 23_000) * 10 / budgetCharsPerTokenTenths; used != want {
+		t.Fatalf("gauge = %d tokens, want %d (transcript plus overhead, not the draft)", used, want)
+	}
+	if window != 16384 {
+		t.Fatalf("gauge denominator = %d, want the model's 16384-token window", window)
 	}
 
-	used, budget := m.contextUsage()
-	if want := messageCharacterCount(m.sessionMessages); used != want {
-		t.Fatalf("gauge numerator = %d, want %d (sessionMessages only)", used, want)
-	}
-	if want := m.compactionConfig().MaxTotalChars; budget != want {
-		t.Fatalf("gauge budget = %d, want this model's compaction budget %d", budget, want)
-	}
-
-	// An empty session reads zero no matter how large the system prompt grows.
+	// An empty session still carries the system prompt and tools.
 	m.sessionMessages = nil
-	if used, _ := m.contextUsage(); used != 0 {
-		t.Fatalf("empty session gauge = %d, want 0", used)
+	if used, _ := m.contextUsage(); used != 23_000*10/budgetCharsPerTokenTenths {
+		t.Fatalf("empty session gauge = %d, want the fixed overhead alone", used)
 	}
 
-	// The denominator follows /model: a 200k-window model must not be gauged
-	// against the window of whatever model the session started on.
-	m.settings = &config.Settings{Models: []config.ModelEndpoint{
-		{ID: "small", ContextWindow: 8192},
-		{ID: "big", ContextWindow: 200000},
-	}}
-	m.modelName = "small"
-	_, smallBudget := m.contextUsage()
+	// The denominator follows /model.
 	m.modelName = "big"
-	_, bigBudget := m.contextUsage()
-	if bigBudget <= smallBudget {
-		t.Fatalf("gauge budget did not follow the model switch: small=%d big=%d", smallBudget, bigBudget)
+	m.overhead.key = m.overheadKey() // keep the reported figure; no runner to re-estimate
+	if _, window := m.contextUsage(); window != 200000 {
+		t.Fatalf("gauge denominator after /model = %d, want 200000", window)
+	}
+
+	// Compaction starts inside the window: when the gauge nears 100% of the
+	// window less the reply reserve, not after the window is already full.
+	full := contextBudgetChars(16384)
+	if tokens := full * 10 / budgetCharsPerTokenTenths; tokens > 16384-replyReserveTokens(16384) {
+		t.Fatalf("the compaction point, %d tokens, leaves less than the reply reserve free", tokens)
 	}
 }
 
