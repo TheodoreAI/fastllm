@@ -132,11 +132,15 @@ func TestCompactionKeepsLatestRequestAndEmitsNoSystemMessage(t *testing.T) {
 	}
 	messages = append(messages, llm.Message{Role: "assistant", Content: "still working"})
 
-	compacted, ok := OnlineCompactMessages(messages, CompactionConfig{MaxTotalChars: 1500, KeepRecentMessages: 1, MaxToolOutputChars: 100})
+	// 800 characters is too little for clearing older tool output alone to fit,
+	// so the checkpoint stage runs; at 1500 the receipts alone would fit.
+	compacted, ok := OnlineCompactMessages(messages, CompactionConfig{MaxTotalChars: 800, KeepRecentMessages: 1, MaxToolOutputChars: 100})
 	if !ok {
 		t.Fatal("expected compaction")
 	}
-	if compacted[0].Content != "opening request" {
+	// The summary may follow the task's text (when the cut falls before an
+	// assistant message); the task itself must be intact.
+	if !strings.HasPrefix(compacted[0].Content, "opening request") || withoutConversationSummary(compacted[0].Content) != "opening request" {
 		t.Fatalf("opening request was not preserved: %#v", compacted[0])
 	}
 	for _, message := range compacted {
@@ -144,16 +148,22 @@ func TestCompactionKeepsLatestRequestAndEmitsNoSystemMessage(t *testing.T) {
 			t.Fatalf("compaction emitted a system message: %#v", message)
 		}
 	}
-	if !isConversationSummary(compacted[1]) || !strings.Contains(compacted[1].Content, strings.TrimSpace(latest)) {
-		t.Fatalf("summary does not carry the latest request verbatim:\n%s", compacted[1].Content)
+	if summaryMessage(compacted) < 0 || !strings.Contains(transcriptText(compacted), strings.TrimSpace(latest)) {
+		t.Fatalf("the latest request was not kept verbatim:\n%s", transcriptText(compacted))
 	}
+	assertAlternates(t, compacted)
 
-	// A second compaction carries the first summary forward instead of losing it.
+	// A second compaction carries the first summary forward instead of losing it,
+	// and replaces it rather than adding a second one.
 	again := append(append([]llm.Message(nil), compacted...), messages[3:]...)
-	recompacted, ok := OnlineCompactMessages(again, CompactionConfig{MaxTotalChars: 1500, KeepRecentMessages: 1, MaxToolOutputChars: 100})
-	if !ok || !strings.Contains(recompacted[1].Content, "Earlier checkpoint:") {
+	recompacted, ok := OnlineCompactMessages(again, CompactionConfig{MaxTotalChars: 800, KeepRecentMessages: 1, MaxToolOutputChars: 100})
+	if !ok || !strings.Contains(transcriptText(recompacted), "Earlier checkpoint:") {
 		t.Fatalf("recompaction dropped the earlier summary: %#v", recompacted)
 	}
+	if n := strings.Count(transcriptText(recompacted), conversationSummaryOpen); n != 1 {
+		t.Fatalf("recompaction left %d summaries:\n%s", n, transcriptText(recompacted))
+	}
+	assertAlternates(t, recompacted)
 }
 
 func TestRulesListOutermostFirstAndTruncateLargeFiles(t *testing.T) {

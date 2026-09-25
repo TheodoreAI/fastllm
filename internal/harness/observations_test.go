@@ -88,11 +88,14 @@ func TestOnlineCompactionCreatesStructuredCheckpoint(t *testing.T) {
 	if !ok || len(compacted) >= len(messages) {
 		t.Fatalf("compaction did not collapse trajectory: %d -> %d", len(messages), len(compacted))
 	}
-	// The summary is folded into the next user message rather than sent as a
-	// mid-conversation system message.
-	if !isConversationSummary(compacted[2]) || !strings.Contains(compacted[2].Content, "run_command") || !strings.HasSuffix(compacted[2].Content, "continue") {
-		t.Fatalf("bad checkpoint: %+v", compacted[2])
+	// The summary is folded into a user message -- the next one, or the task when
+	// the cut falls before an assistant message -- never sent as a system message
+	// or as a user message of its own.
+	summary := summaryMessage(compacted)
+	if summary < 0 || !strings.Contains(compacted[summary].Content, "run_command") {
+		t.Fatalf("bad checkpoint: %+v", compacted)
 	}
+	assertAlternates(t, compacted)
 }
 
 func TestVerificationCommandMatching(t *testing.T) {
@@ -246,5 +249,26 @@ func TestReceiptIsSubstantiallySmallerThanSource(t *testing.T) {
 	receipt := receiptFor(t, output)
 	if len(receipt) > len(output)/8 {
 		t.Fatalf("receipt is %d bytes for %d bytes of output; reduction is too weak", len(receipt), len(output))
+	}
+}
+
+// summaryMessage is the index of the message carrying a compaction summary, or -1.
+func summaryMessage(messages []llm.Message) int {
+	for i, message := range messages {
+		if message.Role == "user" && strings.Contains(message.Content, conversationSummaryOpen) {
+			return i
+		}
+	}
+	return -1
+}
+
+// assertAlternates fails if two user messages are adjacent, which
+// strict-alternation chat templates reject.
+func assertAlternates(t *testing.T, messages []llm.Message) {
+	t.Helper()
+	for i := 1; i < len(messages); i++ {
+		if messages[i].Role == "user" && messages[i-1].Role == "user" {
+			t.Fatalf("messages %d and %d are both user messages", i-1, i)
+		}
 	}
 }
