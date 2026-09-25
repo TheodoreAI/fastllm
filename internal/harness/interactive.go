@@ -992,6 +992,9 @@ func (r *Runner) runInteractiveTurn(
 	processMgr.processes = make(map[string]trackedProcess)
 	processMgr.mu.Unlock()
 	var planBoundary bool
+	// The budget the transcript must fit, net of the tool schemas every request
+	// also carries.
+	compactionCfg = requestBudget(compactionCfg, tools)
 	for turn := 1; turn <= maxTurns; turn++ {
 		if ctx.Err() != nil {
 			fmt.Println("Turn canceled.")
@@ -1003,6 +1006,11 @@ func (r *Runner) runInteractiveTurn(
 
 		var compacted bool
 		*sessionMessages, compacted = OnlineCompactMessages(*sessionMessages, cfg)
+		// Compaction leaves the current turn whole; if it alone is too large,
+		// shorten its tool results rather than send a request the model rejects.
+		var shrunk bool
+		*sessionMessages, shrunk = shrinkToolResults(*sessionMessages, compactionCfg.MaxTotalChars)
+		compacted = compacted || shrunk
 		planBoundary = false
 
 		// Report either the compaction or the approach to it, never both: warning
@@ -1119,7 +1127,7 @@ func (r *Runner) runInteractiveTurn(
 
 			*sessionMessages = append(*sessionMessages, llm.Message{
 				Role:       "tool",
-				Content:    outcome.ModelView,
+				Content:    boundToolResult(outcome.ModelView, toolResultLimit(compactionCfg)),
 				ToolCallID: call.ID,
 			})
 		}

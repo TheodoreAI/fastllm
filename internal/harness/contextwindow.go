@@ -12,18 +12,29 @@ import (
 // overflows the window and fails the request outright.
 const DefaultContextWindowTokens = 32768
 
-// contextUtilization is the share of the window the transcript may occupy before
-// compaction runs. The remainder absorbs what the transcript measurement does not
-// see: the reply the model is about to generate (max_tokens is 4k-8k on a typical
-// endpoint), tool schemas sent with every request, and the error in approximating
-// tokens as chars/4 -- an approximation that understates code and JSON, the two
-// things an agent transcript is mostly made of.
-const contextUtilization = 75
+// budgetCharsPerTokenTenths converts the token window into the character
+// budget compaction measures against, in tenths of a character per token.
+// Measured on a local 9B model (Ornith 1.5): prose ran 4.35 characters per
+// token, Go source 3.65, and JSON tool schemas 3.37. An agent transcript is
+// mostly code and JSON, so converting at 3.3 keeps it inside the window even
+// at the dense end; the old 4.0 let a transcript reach the window with the
+// estimate still claiming room.
+const budgetCharsPerTokenTenths = 33
 
-// charsPerToken matches countApproxTokens. Compaction budgets are measured in
-// characters, so the token window is converted once, here, rather than at each
-// call site inventing its own ratio.
-const charsPerToken = 4
+// replyReserveTokens is the part of the window kept free for the model's reply,
+// including any reasoning it does first: an eighth of the window, between 1k
+// and 8k tokens. A flat percentage cannot do this: on a 16k local model the old
+// 25% headroom was about 4k tokens, and the tool schemas alone took 1.7k of it.
+func replyReserveTokens(windowTokens int) int {
+	reserve := windowTokens / 8
+	if reserve < 1024 {
+		reserve = 1024
+	}
+	if reserve > 8192 {
+		reserve = 8192
+	}
+	return reserve
+}
 
 // knownContextWindows maps a model identifier substring to its window in tokens.
 // Keys are matched case-insensitively against the model ID as a substring, so
@@ -112,13 +123,15 @@ func CompactionConfigForModel(settings *config.Settings, modelID string) Compact
 	return cfg
 }
 
-// contextBudgetChars converts a token window into the character budget compaction
-// measures against, reserving headroom for the reply and tool schemas.
+// contextBudgetChars converts a token window into the character budget for
+// the transcript, the system prompt included, after reserving room for the
+// reply. Tool schemas are sent with every request too; they depend on the
+// request, so requestBudget subtracts them where the tools are known.
 func contextBudgetChars(windowTokens int) int {
 	if windowTokens <= 0 {
 		windowTokens = DefaultContextWindowTokens
 	}
-	chars := windowTokens * charsPerToken * contextUtilization / 100
+	chars := (windowTokens - replyReserveTokens(windowTokens)) * budgetCharsPerTokenTenths / 10
 	// Never drop below a floor that can still hold a system prompt plus a few
 	// turns; a tiny window otherwise yields a budget that compacts every turn.
 	if chars < 8000 {

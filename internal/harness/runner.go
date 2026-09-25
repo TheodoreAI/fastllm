@@ -324,6 +324,9 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 
 	var taskFinished bool
 	var planBoundary bool
+	// The budget the transcript must fit, net of the tool schemas every request
+	// also carries.
+	budget := requestBudget(r.compactionConfig(), tools)
 
 	for turn := 1; turn <= maxTurns; turn++ {
 		if why := req.meter.exhausted(); why != "" {
@@ -335,8 +338,11 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 		emit(Event{Type: EventTurnStart, Turn: turn})
 
 		// Compact context window if messages exceed budget
-		compactionConfig := planBoundaryCompactionConfig(r.compactionConfig(), messageCharacterCount(messages), planBoundary)
+		compactionConfig := planBoundaryCompactionConfig(budget, messageCharacterCount(messages), planBoundary)
 		messages, _ = OnlineCompactMessages(messages, compactionConfig)
+		// Compaction leaves the current turn whole; if it alone is too large,
+		// shorten its tool results rather than send a request the model rejects.
+		messages, _ = shrinkToolResults(messages, budget.MaxTotalChars)
 		planBoundary = false
 
 		turnStart := time.Now()
@@ -455,7 +461,7 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 
 			messages = append(messages, llm.Message{
 				Role:       "tool",
-				Content:    outcome.ModelView,
+				Content:    boundToolResult(outcome.ModelView, toolResultLimit(budget)),
 				ToolCallID: call.ID,
 			})
 		}
@@ -699,7 +705,7 @@ scan:
 			lineNum++
 			line := scanner.Text()
 			if re.MatchString(line) {
-				matches = append(matches, fmt.Sprintf("%s:%d: %s", f, lineNum, strings.TrimSpace(line)))
+				matches = append(matches, fmt.Sprintf("%s:%d: %s", f, lineNum, files.ClipMatch(line, re)))
 				if len(matches) >= maxMatches {
 					file.Close()
 					break scan
