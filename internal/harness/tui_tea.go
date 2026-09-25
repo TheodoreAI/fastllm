@@ -1056,6 +1056,9 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case EventPlanProposed:
 			m.pendingPlan = ev.Response
 
+		case EventNotice:
+			m.appendHistory(styleStatusNotice.Render(ev.Response) + "\n\n")
+
 		case EventTaskFinished:
 			m.isExecuting = false
 			m.activeTool = ""
@@ -1081,6 +1084,9 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				transcript = ev.Result.Transcript
 				// The exact figure from the run replaces the estimate.
 				m.overhead = requestOverhead{chars: ev.Result.RequestOverheadChars, key: m.overheadKey()}
+				if ev.Result.LearnedContextWindow > 0 {
+					m.adoptContextWindow(ev.Result.LearnedContextWindow)
+				}
 			}
 			m.recordCompletedPrompt(response, transcript)
 			if m.pendingPlan != "" {
@@ -1092,6 +1098,23 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Listen for next event
 		if m.eventChan != nil {
 			cmds = append(cmds, m.waitForNextEvent())
+		}
+
+	case contextDetectedMsg:
+		lines, changed, err := applyContextWindows(m.settings, m.configPath, msg.results, msg.missing)
+		for _, line := range lines {
+			m.appendHistory(styleMuted.Render("  "+line) + "\n")
+		}
+		if err != nil {
+			m.appendHistory(styleDiffDel.Render(err.Error()) + "\n")
+		}
+		m.appendHistory("\n")
+		if changed {
+			// The active model's budget follows at once; SwitchModel declines
+			// while child agents run, and the next switch picks it up.
+			if endpoint := m.settings.FindModel(m.modelName); endpoint != nil && m.runner != nil {
+				_ = m.runner.SwitchModel(endpoint)
+			}
 		}
 
 	case teaPermissionRequestMsg:
@@ -1977,6 +2000,16 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 			return nil
 
 		case "/model", "/models":
+			if len(parts) > 1 && strings.EqualFold(parts[1], "detect") {
+				m.appendHistory(styleUserPrompt.Render("❯ "+inputVal) + "\n")
+				m.appendHistory(styleMuted.Render("Asking each provider for its model's context window...") + "\n")
+				// Probing is network work, so it runs off the UI goroutine on
+				// copies; the result is applied to settings back on it.
+				targets, missing := contextProbeTargets(m.settings, parts[2:])
+				return func() tea.Msg {
+					return contextDetectedMsg{results: probeContextWindows(targets), missing: missing}
+				}
+			}
 			if len(parts) > 1 && parts[1] != "list" {
 				m.appendHistory(styleUserPrompt.Render("❯ "+inputVal) + "\n")
 				matched := m.settings.FindModel(parts[1])
@@ -2324,6 +2357,21 @@ func (m *teaModel) compactionConfig() CompactionConfig {
 func (m *teaModel) contextUsage() (int, int) {
 	chars := messageCharacterCount(m.sessionMessages) + m.requestOverheadChars()
 	return chars * 10 / budgetCharsPerTokenTenths, ResolveContextWindow(m.settings, m.modelName)
+}
+
+// adoptContextWindow holds a window a provider stated for the rest of the
+// session: the gauge and between-turn compaction read it from settings, and
+// the runner's budget follows through SwitchModel, which declines while child
+// agents run (a later run then recovers again). /models detect saves it.
+func (m *teaModel) adoptContextWindow(window int) {
+	endpoint := m.settings.FindModel(m.modelName)
+	if endpoint == nil {
+		return
+	}
+	endpoint.ContextWindow = window
+	if m.runner != nil {
+		_ = m.runner.SwitchModel(endpoint)
+	}
 }
 
 type requestOverhead struct {

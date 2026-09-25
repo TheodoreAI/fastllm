@@ -267,6 +267,8 @@ func RunCLI(args []string) int {
 			if ev.Metrics != nil {
 				fmt.Println(FormatTurnSummary(*ev.Metrics))
 			}
+		case EventNotice:
+			fmt.Println(ColorYellow("  " + ev.Response))
 		}
 	}
 

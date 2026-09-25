@@ -323,7 +323,7 @@ type geminiErrorBody struct {
 func geminiError(resp *http.Response) error {
 	var eb geminiErrorBody
 	if json.NewDecoder(resp.Body).Decode(&eb) == nil && eb.Error.Message != "" {
-		return fmt.Errorf("gemini: %s", eb.Error.Message)
+		return classifyContextOverflow(fmt.Errorf("gemini: %s", eb.Error.Message), eb.Error.Message)
 	}
 	return fmt.Errorf("gemini: chat completion failed: %s", resp.Status)
 }

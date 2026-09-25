@@ -134,3 +134,40 @@ func shrinkToolResults(messages []llm.Message, budget int) ([]llm.Message, bool)
 	}
 	return result, changed
 }
+
+// recoverContextOverflow handles a provider refusing a request as too large for
+// the model's window. It adopts the window the provider stated -- or, when the
+// provider stated none or one no smaller than assumed, three quarters of the
+// assumed window, since the estimate itself undercounted -- and compacts the
+// transcript to fit it. ok is false when err is not an overflow.
+func recoverContextOverflow(err error, assumedWindow int, messages []llm.Message, tools []llm.Tool) (window int, budget CompactionConfig, fitted []llm.Message, ok bool) {
+	overflow, isOverflow := llm.AsContextOverflow(err)
+	if !isOverflow {
+		return 0, CompactionConfig{}, messages, false
+	}
+	window = overflow.Window
+	if window <= 0 || window >= assumedWindow {
+		window = assumedWindow * 3 / 4
+	}
+	budget = DefaultCompactionConfig()
+	budget.MaxTotalChars = contextBudgetChars(window)
+	budget = requestBudget(budget, tools)
+	// Compaction keeps the most recent messages whole; in a small window a few
+	// long ones can overflow by themselves. Keep fewer until the request fits.
+	for keep := budget.KeepRecentMessages; ; keep /= 2 {
+		attempt := budget
+		attempt.KeepRecentMessages = keep
+		fitted, _ = ForceCompactMessages(messages, attempt)
+		fitted, _ = shrinkToolResults(fitted, budget.MaxTotalChars)
+		if messageCharacterCount(fitted) <= budget.MaxTotalChars || keep <= 1 {
+			break
+		}
+	}
+	return window, budget, fitted, true
+}
+
+// overflowNotice tells the user what happened and how to make it stick.
+func overflowNotice(model string, window int) string {
+	return fmt.Sprintf("%s's context window is %d tokens, smaller than fastllm assumed; compacted the conversation and retried. "+
+		"Run /models detect %s to save the real window.", model, window, model)
+}

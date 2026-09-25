@@ -147,6 +147,10 @@ type RunResult struct {
 	ProposedPlan string `json:"proposed_plan,omitempty"`
 	// PermissionMode is the mode the run was actually evaluated under.
 	PermissionMode PermissionMode `json:"permission_mode,omitempty"`
+	// LearnedContextWindow is the model's real window in tokens when a provider
+	// refused a request as too large during the run, or zero. A caller should
+	// adopt it for the rest of the session.
+	LearnedContextWindow int `json:"learned_context_window,omitempty"`
 	// RequestOverheadChars is what the run sent with every request besides the
 	// transcript: the system prompt and the tool schemas, in characters.
 	RequestOverheadChars int `json:"request_overhead_chars,omitempty"`
@@ -175,6 +179,9 @@ const (
 	EventTokenDiscard EventType = "token_discard"
 	// EventPlanProposed carries a plan-mode run's submit_plan text in Response.
 	EventPlanProposed EventType = "plan_proposed"
+	// EventNotice carries a status message for the user in Response, such as
+	// a recovery the run made on its own.
+	EventNotice EventType = "notice"
 )
 
 // Event is emitted in real time during a harness run.

@@ -355,6 +355,14 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 	// The budget the transcript must fit, net of the tool schemas every request
 	// also carries.
 	budget := requestBudget(r.compactionConfig(), tools)
+	// assumedWindow is the window the budget was sized from; a provider's
+	// overflow error can correct it. It stays local to this run: child agents
+	// share the Runner and run concurrently.
+	assumedWindow := r.contextWindow
+	if assumedWindow <= 0 {
+		assumedWindow = ResolveContextWindow(nil, model)
+	}
+	overflowRetried := false
 
 	for turn := 1; turn <= maxTurns; turn++ {
 		if why := req.meter.exhausted(); why != "" {
@@ -393,6 +401,20 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 		}
 		chatResult, err := chatWithRetryStreaming(ctx, r.LLM, routed, modelMessages, tools, req.ThinkLevel, nil, sink)
 		turnDuration := time.Since(turnStart)
+		// A request the model's window cannot hold is retried once, compacted to
+		// the window the provider stated, instead of ending the run.
+		if !overflowRetried {
+			if window, fittedBudget, fitted, recovered := recoverContextOverflow(err, assumedWindow, messages, tools); recovered {
+				overflowRetried = true
+				assumedWindow = window
+				budget = fittedBudget
+				messages = fitted
+				result.LearnedContextWindow = window
+				emit(Event{Type: EventNotice, Turn: turn, Response: overflowNotice(model, window)})
+				turn--
+				continue
+			}
+		}
 		if err != nil {
 			result.Error = fmt.Sprintf("LLM chat error on turn %d: %v", turn, err)
 			if why := req.meter.exhausted(); why != "" && ctx.Err() != nil {
@@ -405,6 +427,9 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 			return result, err
 		}
 		reply := chatResult.Message
+		// The retry allowance is per request: a later turn that outgrows the
+		// corrected window may recover once more.
+		overflowRetried = false
 
 		compTokens := countApproxTokens([]llm.Message{reply})
 		promptTokens, compTokens, _ = resolveTurnTokens(chatResult.Usage, chatResult.HasUsage, promptTokens, compTokens)

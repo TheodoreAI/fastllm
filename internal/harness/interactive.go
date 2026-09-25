@@ -729,7 +729,22 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 					} else {
 						fmt.Println(ColorGray("  (no models configured in " + configPath + ")"))
 					}
-					fmt.Println("\n" + ColorGray("Usage: /model <name> | /models add <id> <url>"))
+					fmt.Println("\n" + ColorGray("Usage: /model <name> | /models add <id> <url> | /models detect [<id>|all]"))
+					continue
+				}
+
+				if strings.ToLower(parts[1]) == "detect" {
+					targets, missing := contextProbeTargets(settings, parts[2:])
+					fmt.Println(ColorGray("  Asking each provider for its model's context window..."))
+					lines, changed, err := applyContextWindows(settings, configPath, probeContextWindows(targets), missing)
+					printContextDetection(lines, err)
+					if changed {
+						// The active model's budget follows at once; line mode reads
+						// the rest from settings.
+						if endpoint := settings.FindModel(model); endpoint != nil {
+							_ = r.SwitchModel(endpoint)
+						}
+					}
 					continue
 				}
 
@@ -752,6 +767,10 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 						if len(relocated) > 0 {
 							fmt.Println(ColorYellow(fmt.Sprintf("  %s API keys for %s were moved out of %s into ~/.fastllm/keys/ and are now referenced by api_key_file.", SymDot, strings.Join(relocated, ", "), filepath.Base(configPath))))
 						}
+						// A new model's window is otherwise a guess from its name.
+						targets, missing := contextProbeTargets(settings, []string{newID})
+						lines, _, detectErr := applyContextWindows(settings, configPath, probeContextWindows(targets), missing)
+						printContextDetection(lines, detectErr)
 					}
 					continue
 				}
@@ -879,6 +898,7 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 			}
 		}()
 
+		var learnedWindow int
 		plan := r.runInteractiveTurn(
 			ctx,
 			model,
@@ -903,7 +923,15 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 			OpenAuditLog(auditNameFor(activeSession)),
 			taint,
 			journal,
+			&learnedWindow,
 		)
+		if learnedWindow > 0 {
+			// Held for the session; /models detect saves it to config.
+			if endpoint := settings.FindModel(model); endpoint != nil {
+				endpoint.ContextWindow = learnedWindow
+			}
+			learnedWindow = 0
+		}
 		sessionMessages[0].Content = baseSystemPrompt
 		saveSession()
 		cancel()
@@ -953,6 +981,9 @@ func (r *Runner) runInteractiveTurn(
 	audit *AuditLog,
 	taint *SessionTaint,
 	journal *WriteJournal,
+	// learnedWindow receives the model's real window when a provider refuses a
+	// request as too large, so the caller can use it for later turns.
+	learnedWindow *int,
 ) (proposedPlan string) {
 	owner := r.executions
 	if owner == nil {
@@ -997,6 +1028,11 @@ func (r *Runner) runInteractiveTurn(
 	// The budget the transcript must fit, net of the tool schemas every request
 	// also carries.
 	compactionCfg = requestBudget(compactionCfg, tools)
+	assumedWindow := r.contextWindow
+	if assumedWindow <= 0 {
+		assumedWindow = ResolveContextWindow(nil, model)
+	}
+	overflowRetried := false
 	for turn := 1; turn <= maxTurns; turn++ {
 		if ctx.Err() != nil {
 			fmt.Println("Turn canceled.")
@@ -1041,6 +1077,22 @@ func (r *Runner) runInteractiveTurn(
 		})
 		thinking.Stop()
 		turnDuration := time.Since(turnStart)
+		// A request the model's window cannot hold is retried once, compacted to
+		// the window the provider stated, instead of ending the turn.
+		if !overflowRetried {
+			if window, fittedBudget, fitted, recovered := recoverContextOverflow(err, assumedWindow, *sessionMessages, tools); recovered {
+				overflowRetried = true
+				assumedWindow = window
+				compactionCfg = fittedBudget
+				*sessionMessages = fitted
+				if learnedWindow != nil {
+					*learnedWindow = window
+				}
+				fmt.Println(ColorYellow("  " + overflowNotice(model, window)))
+				turn--
+				continue
+			}
+		}
 		if err != nil {
 			if ctx.Err() == nil {
 				fmt.Println(ColorRed(fmt.Sprintf("\n%s Error: %v", SymCross, err)))
@@ -1048,6 +1100,9 @@ func (r *Runner) runInteractiveTurn(
 			return
 		}
 		reply := chatResult.Message
+		// The retry allowance is per request: a later request that outgrows the
+		// corrected window may recover once more.
+		overflowRetried = false
 
 		compTokens := countApproxTokens([]llm.Message{reply})
 		promptTokens, compTokens, _ = resolveTurnTokens(chatResult.Usage, chatResult.HasUsage, promptTokens, compTokens)

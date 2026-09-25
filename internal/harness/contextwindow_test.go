@@ -106,3 +106,46 @@ func TestWindowBudgetExceedsLegacyFixedBudget(t *testing.T) {
 		t.Fatalf("200k-model budget = %d, want more than the legacy %d", got, legacy)
 	}
 }
+
+// Current cloud IDs resolved to wrong windows before the table was refreshed:
+// gpt-4.1 matched "gpt-4" (8k), and GPT-5, o4 and Gemini fell to the 32k default.
+func TestKnownWindowsForCurrentCloudModels(t *testing.T) {
+	for id, want := range map[string]int{
+		"claude-opus-5-5":           1000000,
+		"claude-fable-5-1":          1000000,
+		"claude-sonnet-5":           1000000,
+		"claude-haiku-4-5-20251001": 200000,
+		"claude-3-5-sonnet-latest":  200000,
+		"gpt-4.1":                   1000000,
+		"gpt-4.1-mini":              1000000,
+		"gpt-5":                     272000,
+		"gpt-5-mini":                272000,
+		"gpt-5.4-mini":              922000,
+		"gpt-6-astra":               922000,
+		"o4-mini":                   200000,
+		"o3-mini":                   200000,
+		"gemini-3.7-flash":          1048576,
+		"gemini-2.5-pro":            1048576,
+		"openai:gpt-5":              272000,
+	} {
+		if got := lookupKnownContextWindow(id); got != want {
+			t.Errorf("lookup(%q) = %d, want %d", id, got, want)
+		}
+	}
+}
+
+// A key matches only as a whole segment, so short keys cannot claim IDs that
+// merely contain their characters.
+func TestKnownWindowKeysMatchWholeSegments(t *testing.T) {
+	for id, want := range map[string]int{
+		"gpt-4o3-custom": 0, // "gpt-4o" and "o3" both run into a letter or digit
+		"myo3model":      0,
+		"fooo1":          0,
+		"llama3.1:70b":   131072,
+		"o3":             200000,
+	} {
+		if got := lookupKnownContextWindow(id); got != want {
+			t.Errorf("lookup(%q) = %d, want %d", id, got, want)
+		}
+	}
+}

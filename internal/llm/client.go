@@ -862,10 +862,12 @@ func readChatError(resp *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	var eb openAIErrorBody
 	if json.Unmarshal(body, &eb) == nil && eb.Error.Message != "" {
-		return fmt.Errorf("llm: chat completion failed: %s", eb.Error.Message)
+		// Classified against the whole body: some servers state the limit only
+		// in a field beside the message, or name the error only by its code.
+		return classifyContextOverflow(fmt.Errorf("llm: chat completion failed: %s", eb.Error.Message), eb.Error.Message+" "+string(body))
 	}
 	if trimmed := strings.TrimSpace(string(body)); trimmed != "" {
-		return fmt.Errorf("llm: chat completion failed: %s: %s", resp.Status, trimmed)
+		return classifyContextOverflow(fmt.Errorf("llm: chat completion failed: %s: %s", resp.Status, trimmed), trimmed)
 	}
 	return fmt.Errorf("llm: chat completion failed: %s", resp.Status)
 }

@@ -36,32 +36,60 @@ func replyReserveTokens(windowTokens int) int {
 	return reserve
 }
 
-// knownContextWindows maps a model identifier substring to its window in tokens.
-// Keys are matched case-insensitively against the model ID as a substring, so
-// "gpt-4o-2024-08-06" resolves through "gpt-4o". Longer keys are tried first, so
-// a more specific entry wins over a shorter prefix of itself.
+// knownContextWindows maps a model identifier to the most input tokens a request
+// may carry. Keys match case-insensitively as a whole segment of the model ID --
+// bounded by the ends or by a non-alphanumeric character -- so "gpt-4o-2024-08-06"
+// resolves through "gpt-4o" while "gpt-4o3" matches no "o3", and the longest
+// matching key wins, so "gpt-4.1" beats "gpt-4".
 //
-// This is a convenience for stock models, not a source of truth: an endpoint that
-// serves something custom should set context_window explicitly.
+// This is the fallback for a model nobody measured: /models detect asks the
+// provider and saves the real value as context_window, and a request the model
+// refuses as too large is compacted to the limit the provider states.
 var knownContextWindows = map[string]int{
+	// Anthropic, from the Models API reference (max_input_tokens), 2026-09.
+	"claude-fable-5":    1000000,
+	"claude-fable-5-1":  1000000,
+	"claude-mythos":     1000000,
+	"claude-opus-5":     1000000,
+	"claude-opus-5-5":   1000000,
+	"claude-opus-4-8":   1000000,
+	"claude-opus-4-7":   1000000,
+	"claude-opus-4-6":   1000000,
+	"claude-sonnet-5":   1000000,
+	"claude-sonnet-4-6": 1000000,
+	"claude-haiku-4-5":  200000,
 	"claude-3-5-sonnet": 200000,
 	"claude-3-7":        200000,
 	"claude-sonnet-4":   200000,
 	"claude-opus-4":     200000,
 	"claude":            200000,
-	"gpt-4o-mini":       128000,
-	"gpt-4o":            128000,
-	"gpt-4-turbo":       128000,
-	"gpt-4":             8192,
-	"gpt-3.5-turbo":     16385,
-	"o1":                200000,
-	"o3":                200000,
-	"llama3.1":          131072,
-	"llama3.2":          131072,
-	"llama3":            8192,
-	"qwen2.5-coder":     32768,
-	"qwen2.5":           32768,
-	"qwen3":             40960,
+	// OpenAI, from developers.openai.com/api/docs/models, 2026-09. Where a
+	// model's context window includes its output, the entry is the input limit
+	// (GPT-5: 272,000 of 400,000) or the window less the max output.
+	"gpt-6":         922000, // 1.05M window, 128K max output
+	"gpt-5.4":       922000, // 1.05M window, 128K max output
+	"gpt-5":         272000,
+	"gpt-4.1":       1000000, // 1,047,576 window, 32,768 max output
+	"gpt-4o-mini":   128000,
+	"gpt-4o":        128000,
+	"gpt-4-turbo":   128000,
+	"gpt-4":         8192,
+	"gpt-3.5-turbo": 16385,
+	"o1":            200000,
+	"o3":            200000,
+	"o4-mini":       200000,
+	// Google, from ai.google.dev/gemini-api/docs/models, 2026-09: Gemini models
+	// accept 1,048,576 input tokens. Variants differ; /models detect reads
+	// inputTokenLimit for the exact one.
+	"gemini": 1048576,
+	// Open models: the published maximum. A local server usually serves less,
+	// so a local endpoint should set context_window (see /models detect).
+	"llama3.1":      131072,
+	"llama3.2":      131072,
+	"llama3":        8192,
+	"qwen2.5-coder": 32768,
+	"qwen2.5":       32768,
+	"qwen3":         40960,
 	// Confirmed against the served endpoint's max_model_len, not inferred from
 	// the model name: GET /v1/models on the vLLM host reports 262144.
 	"gemma-4":  262144,
@@ -104,14 +132,31 @@ func lookupKnownContextWindow(modelID string) int {
 	}
 	bestKey, bestWindow := "", 0
 	for key, window := range knownContextWindows {
-		if !strings.Contains(id, key) {
-			continue
-		}
-		if len(key) > len(bestKey) {
+		if len(key) > len(bestKey) && containsSegment(id, key) {
 			bestKey, bestWindow = key, window
 		}
 	}
 	return bestWindow
+}
+
+// containsSegment reports whether key occurs in id with no letter or digit
+// directly before or after it.
+func containsSegment(id, key string) bool {
+	for offset := 0; ; {
+		i := strings.Index(id[offset:], key)
+		if i < 0 {
+			return false
+		}
+		start, end := offset+i, offset+i+len(key)
+		if (start == 0 || !isAlphanumeric(id[start-1])) && (end == len(id) || !isAlphanumeric(id[end])) {
+			return true
+		}
+		offset = start + 1
+	}
+}
+
+func isAlphanumeric(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
 }
 
 // CompactionConfigForModel sizes the compaction budget from the model's real
