@@ -36,10 +36,21 @@ func projectConfigPaths(workingDir string) []string {
 	if workingDir == "" {
 		return nil
 	}
-	return []string{
+	candidates := []string{
 		filepath.Join(workingDir, ".fastllm", "config.json"),
 		filepath.Join(workingDir, ".fastllm", "config", "settings.json"),
 	}
+	paths := make([]string, 0, len(candidates))
+	for _, path := range candidates {
+		// When fastllm starts in the user's home directory, the apparent
+		// workspace config is the global config. It must never go through the
+		// project-trust gate: skipping it would make LoadSettings conclude that
+		// no config exists and replace the file with defaults.
+		if isProjectConfigPath(path) {
+			paths = append(paths, path)
+		}
+	}
+	return paths
 }
 
 // ReviewProjectConfig reports the project config in workingDir, or nil when
