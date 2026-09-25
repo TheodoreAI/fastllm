@@ -12,10 +12,10 @@ import (
 )
 
 // AnthropicModels lists the Claude models offered in the model picker when
-// an Anthropic API key is configured. Anthropic has no public "list
-// models" endpoint usable the way Ollama's /api/tags is, so — same as
-// OpenAI/Gemini below — this is a hand-maintained list of current model
-// IDs rather than a live query.
+// an Anthropic API key is configured. It is a hand-maintained list, like
+// OpenAI's and Gemini's below, so the picker works without a network call.
+// Anthropic's Models API (GET /v1/models) does exist and reports each
+// model's max_input_tokens; DetectContextWindow reads it on request.
 var AnthropicModels = []string{
 	"claude-opus-5",
 	"claude-sonnet-5",
@@ -344,7 +344,7 @@ type anthropicErrorBody struct {
 func anthropicError(resp *http.Response) error {
 	var eb anthropicErrorBody
 	if json.NewDecoder(resp.Body).Decode(&eb) == nil && eb.Error.Message != "" {
-		return fmt.Errorf("anthropic: %s", eb.Error.Message)
+		return classifyContextOverflow(fmt.Errorf("anthropic: %s", eb.Error.Message), eb.Error.Message)
 	}
 	return fmt.Errorf("anthropic: chat completion failed: %s", resp.Status)
 }

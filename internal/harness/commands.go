@@ -299,7 +299,9 @@ func (m *teaModel) argumentValues(cmd string, done []string) (values []suggestio
 		case "/model":
 			return models(), true
 		case "/models":
-			return append(models(), word("add", "Register a new endpoint: add <id> <url>", true)), true
+			return append(models(),
+				word("add", "Register a new endpoint: add <id> <url>", true),
+				word("detect", "Ask providers for each model's context window: detect [<id>|all]", true)), true
 		case "/theme", "/themes":
 			var out []suggestion
 			for _, t := range builtinThemes {
