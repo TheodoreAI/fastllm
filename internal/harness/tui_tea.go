@@ -427,11 +427,27 @@ func (m *teaModel) formatWelcome() string {
 }
 
 func (m *teaModel) appendHistory(text string) {
-	m.historyText.WriteString(text)
+	m.historyText.WriteString(trimPaddedTail(text))
 	if m.ready {
 		m.viewport.SetContent(m.historyText.String())
 		m.viewport.GotoBottom()
 	}
+}
+
+// trimPaddedTail drops the padding lipgloss leaves on the last, unfinished
+// line of a chunk. A style rendered over text ending in blank lines pads every
+// line to the widest one, so the final blank line is really a row of spaces; the next
+// append continues on that row and starts indented -- a command typed after a
+// run showed up pushed right by the width of "Completed in N turn(s)". Only a
+// tail with nothing but spaces and escape codes is changed, and the escape
+// codes are kept so styles still close; lines before it are left alone.
+func trimPaddedTail(text string) string {
+	cut := strings.LastIndexByte(text, '\n') + 1
+	tail := text[cut:]
+	if tail == "" || strings.TrimSpace(StripANSI(tail)) != "" {
+		return text
+	}
+	return text[:cut] + strings.Join(ansiRegexp.FindAllString(tail, -1), "")
 }
 
 // frameWidth is the width every full-width row is built to.
@@ -1887,22 +1903,27 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 
 		case "/compact":
 			m.appendHistory(styleUserPrompt.Render("❯ /compact") + "\n")
+			// The same budget automatic compaction uses: the system prompt and
+			// tool schemas go with every request, so they come out of it.
 			budget := m.compactionConfig()
-			before := messageCharacterCount(m.sessionMessages)
+			budget.MaxTotalChars -= m.requestOverheadChars()
+			if budget.MaxTotalChars < minTranscriptBudget {
+				budget.MaxTotalChars = minTranscriptBudget
+			}
+			before, window := m.contextUsage()
 			compacted, didCompact := ForceCompactMessages(m.sessionMessages, budget)
 			if !didCompact {
 				m.appendHistory(styleMuted.Render("Nothing to compact yet; the transcript has no completed older turns to collapse.\n\n"))
 				return nil
 			}
 			m.sessionMessages = compacted
-			after := messageCharacterCount(m.sessionMessages)
+			after, _ := m.contextUsage()
 			if err := m.saveSession(); err != nil {
 				m.appendHistory(styleMuted.Render("Session autosave failed: "+err.Error()) + "\n\n")
 			}
-			m.appendHistory(styleMuted.Render(fmt.Sprintf("Compacted context from %s to %s (%d%% of the %s budget).",
-				formatCharCount(before), formatCharCount(after),
-				after*100/budget.MaxTotalChars,
-				formatCharCount(budget.MaxTotalChars))) + "\n\n")
+			// In the gauge's terms: the next request, in tokens, against the window.
+			m.appendHistory(styleMuted.Render(fmt.Sprintf("Compacted: the next request drops from %s to %s tokens (%d%% of the %s-token window).",
+				compactCount(before), compactCount(after), after*100/window, compactCount(window))) + "\n\n")
 			return nil
 
 		case "/rules":

@@ -171,3 +171,20 @@ func overflowNotice(model string, window int) string {
 	return fmt.Sprintf("%s's context window is %d tokens, smaller than fastllm assumed; compacted the conversation and retried. "+
 		"Run /models detect %s to save the real window.", model, window, model)
 }
+
+// compactedNotice reports an automatic compaction in the gauge's terms: the
+// next request, in tokens, against the model's window.
+func compactedNotice(beforeTokens, afterTokens, window int) string {
+	return fmt.Sprintf("Compacted older turns: the next request drops from %s to %s tokens of the %s-token window.",
+		compactCount(beforeTokens), compactCount(afterTokens), compactCount(window))
+}
+
+// approachingCompactionNotice warns that compaction is near. It starts when a
+// request reaches the window less the reply reserve.
+func approachingCompactionNotice(tokens, window int) string {
+	if window <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("The next request is %s of the %s-token window; older turns compact at about %d%%.",
+		compactCount(tokens), compactCount(window), (window-replyReserveTokens(window))*100/window)
+}

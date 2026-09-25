@@ -7,21 +7,6 @@ import (
 	"fastllm/internal/llm"
 )
 
-func TestFormatCharCountIsReadable(t *testing.T) {
-	for _, tc := range []struct {
-		in   int
-		want string
-	}{
-		{512, "512 chars"},
-		{67_200, "67k chars"},
-		{1_500_000, "1.5M chars"},
-	} {
-		if got := formatCharCount(tc.in); got != tc.want {
-			t.Errorf("formatCharCount(%d) = %q, want %q", tc.in, got, tc.want)
-		}
-	}
-}
-
 // The advisory only makes sense below the threshold. Above it, compaction runs
 // and the percentage would read over 100% — the confusing "112%" case.
 func TestContextAdvisoryOnlyAppliesBelowTheThreshold(t *testing.T) {

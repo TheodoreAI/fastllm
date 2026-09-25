@@ -646,20 +646,24 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 				continue
 
 			case "/compact":
-				budget := currentCompactionConfig()
-				before := messageCharacterCount(sessionMessages)
+				// The budget automatic compaction uses: net of the tool schemas
+				// every request carries (the system prompt is sessionMessages[0]).
+				budget := requestBudget(currentCompactionConfig(), tools)
+				requestTokens := func() int {
+					return (messageCharacterCount(sessionMessages) + toolSchemaChars(tools)) * 10 / budgetCharsPerTokenTenths
+				}
+				window := ResolveContextWindow(settings, model)
+				before := requestTokens()
 				compacted, didCompact := ForceCompactMessages(sessionMessages, budget)
 				if !didCompact {
 					fmt.Println(ColorGray("  Nothing to compact yet; the transcript has no completed older turns to collapse."))
 					continue
 				}
 				sessionMessages = compacted
-				after := messageCharacterCount(sessionMessages)
+				after := requestTokens()
 				saveSession()
-				fmt.Println(ColorGreen(fmt.Sprintf("  %s Compacted context from %s to %s (%d%% of the %s budget).",
-					SymCheck, formatCharCount(before), formatCharCount(after),
-					after*100/budget.MaxTotalChars,
-					formatCharCount(budget.MaxTotalChars))))
+				fmt.Println(ColorGreen(fmt.Sprintf("  %s Compacted: the next request drops from %s to %s tokens (%d%% of the %s-token window).",
+					SymCheck, compactCount(before), compactCount(after), after*100/window, compactCount(window))))
 				continue
 
 			case "/rules":
@@ -1054,14 +1058,14 @@ func (r *Runner) runInteractiveTurn(
 		// Report either the compaction or the approach to it, never both: warning
 		// that context is "at 112% of the threshold" and then that it was already
 		// compacted describes one event as if it were a problem plus a fix.
+		requestTokens := func(chars int) int {
+			return (chars + toolSchemaChars(tools)) * 10 / budgetCharsPerTokenTenths
+		}
 		switch {
 		case compacted:
-			after := messageCharacterCount(*sessionMessages)
-			fmt.Println(ColorGray(fmt.Sprintf("  Context reached %s; compacted older tool output down to %s.",
-				formatCharCount(contextChars), formatCharCount(after))))
+			fmt.Println(ColorGray("  " + compactedNotice(requestTokens(contextChars), requestTokens(messageCharacterCount(*sessionMessages)), assumedWindow)))
 		case contextChars >= cfg.MaxTotalChars*3/4:
-			fmt.Println(ColorGray(fmt.Sprintf("  Context is at %d%% of the compaction budget (%s).",
-				contextChars*100/cfg.MaxTotalChars, formatCharCount(cfg.MaxTotalChars))))
+			fmt.Println(ColorGray("  " + approachingCompactionNotice(requestTokens(contextChars), assumedWindow)))
 		}
 
 		turnStart := time.Now()

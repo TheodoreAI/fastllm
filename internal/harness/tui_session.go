@@ -201,6 +201,7 @@ func (m *teaModel) compactSessionContext() string {
 		cfg.MaxTotalChars = minTranscriptBudget
 	}
 	before := messageCharacterCount(m.sessionMessages)
+	beforeTokens, window := m.contextUsage()
 
 	compacted, didCompact := OnlineCompactMessages(m.sessionMessages, cfg)
 	if didCompact {
@@ -208,14 +209,13 @@ func (m *teaModel) compactSessionContext() string {
 		if err := m.saveSession(); err != nil {
 			return "Session autosave failed: " + err.Error()
 		}
-		return fmt.Sprintf("Context reached %s; compacted older turns down to %s.",
-			formatCharCount(before), formatCharCount(messageCharacterCount(m.sessionMessages)))
+		afterTokens, _ := m.contextUsage()
+		return compactedNotice(beforeTokens, afterTokens, window)
 	}
 
 	// Report either the compaction or the approach to it, never both.
 	if before >= cfg.MaxTotalChars*3/4 {
-		return fmt.Sprintf("Context is at %d%% of the compaction budget (%s).",
-			before*100/cfg.MaxTotalChars, formatCharCount(cfg.MaxTotalChars))
+		return approachingCompactionNotice(beforeTokens, window)
 	}
 	return ""
 }
