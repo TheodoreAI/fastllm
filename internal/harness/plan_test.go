@@ -90,7 +90,12 @@ func TestPlanBoundaryTriggersCompactionThatWouldOtherwiseWait(t *testing.T) {
 	if !compacted {
 		t.Fatal("a completed plan step should let compaction run early")
 	}
-	if !isConversationSummary(result[2]) || !strings.Contains(result[2].Content, "State Checkpoint") {
-		t.Fatalf("expected a checkpoint at the boundary, got %+v", result[2])
+	// Compaction's first stage clears older tool output, which is enough here, so
+	// the boundary shows as receipts rather than a checkpoint.
+	if messageCharacterCount(result) >= contextChars {
+		t.Fatalf("boundary compaction did not shrink the transcript: %d >= %d", messageCharacterCount(result), contextChars)
+	}
+	if !strings.HasPrefix(result[3].Content, toolReceiptPrefix) {
+		t.Fatalf("expected the oldest tool result cleared at the boundary, got %+v", result[3])
 	}
 }

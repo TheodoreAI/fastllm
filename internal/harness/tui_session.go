@@ -250,12 +250,16 @@ func (m *teaModel) appendSessionTranscript() {
 	for _, message := range m.sessionMessages {
 		// Tool traffic and compaction summaries are context for the model, not
 		// part of the conversation the user remembers.
-		if strings.TrimSpace(message.Content) == "" || isConversationSummary(message) {
+		if strings.TrimSpace(message.Content) == "" {
 			continue
 		}
 		switch message.Role {
 		case "user":
-			m.appendHistory(formatSubmittedPrompt(message.Content))
+			// A summary is folded in before a prompt, or after the task's text;
+			// show only what the user wrote.
+			if text := withoutConversationSummary(message.Content); text != "" {
+				m.appendHistory(formatSubmittedPrompt(text))
+			}
 		case "assistant":
 			m.appendHistory(formatAssistantAnswer(message.Content, m.contentWidth()))
 		}
