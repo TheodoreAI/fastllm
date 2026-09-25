@@ -96,3 +96,42 @@ func TestSavedProjectConfigIsTrusted(t *testing.T) {
 		t.Fatal("a file outside .fastllm is not a project config")
 	}
 }
+
+func TestHomeDirectoryConfigIsGlobalAndNeverRewritten(t *testing.T) {
+	home := t.TempDir()
+	previousUserHomeDir := userHomeDir
+	previousTrustHomeDir := trustHomeDir
+	userHomeDir = func() (string, error) { return home, nil }
+	trustHomeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() {
+		userHomeDir = previousUserHomeDir
+		trustHomeDir = previousTrustHomeDir
+	})
+
+	path := filepath.Join(home, ".fastllm", "config.json")
+	const contents = "{\n  \"default_model\": \"kept\",\n  \"models\": [{\"id\": \"kept\", \"url\": \"https://example.com/v1\"}]\n}\n"
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	settings, loaded, err := LoadSettings(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded != path || settings.DefaultModel != "kept" {
+		t.Fatalf("loaded %q with model %q; want global config %q", loaded, settings.DefaultModel, path)
+	}
+	if review := ReviewProjectConfig(home); review != nil {
+		t.Fatalf("global config was exposed as a project config: %+v", review)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != contents {
+		t.Fatalf("global config was rewritten:\n%s", got)
+	}
+}
