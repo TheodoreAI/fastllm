@@ -246,9 +246,10 @@ func TestDiffModalNavigationAndHotkeys(t *testing.T) {
 		checkpointMgr: NewCheckpointManager(tmp),
 		modelName:     "test-model",
 		input:         ta,
-		viewport:      viewport.New(120, 20),
-		width:         120,
+		viewport:      viewport.New(140, 20),
+		width:         140,
 		height:        30,
+		ready:         true,
 	}
 
 	// Populate files
@@ -316,9 +317,10 @@ func TestMouseClickChangesColumnOpensModal(t *testing.T) {
 		checkpointMgr: NewCheckpointManager(tmp),
 		modelName:     "test-model",
 		input:         ta,
-		viewport:      viewport.New(120, 20),
-		width:         120,
+		viewport:      viewport.New(140, 20),
+		width:         140,
 		height:        30,
+		ready:         true,
 	}
 
 	m.changes.files = []fileChange{
@@ -326,12 +328,17 @@ func TestMouseClickChangesColumnOpensModal(t *testing.T) {
 		{Path: "util.go", Added: 8, Removed: 4, Status: "M"},
 	}
 
-	// Terminal width = 120 (>= changesColumnMinFrame so Changes column is shown).
-	// Changes column is at X in [120 - 32, 120) = [88, 120).
-	// Header rows in Changes column is m.changes.HeaderRows()
-	// Row Y in terminal: header is row 0, divider is row 1, viewport + changes column begins at row 2.
-	clickX := 100
-	clickY := 2 + m.changes.HeaderRows() // First file row
+	// Terminal width = 140 (>= changesColumnMinFrame so the sidebar is shown).
+	// The sidebar spans X in [frameWidth - changesColumnWidth, frameWidth).
+	// Row Y in terminal: header is row 0, divider is row 1, the sidebar begins
+	// at row 2 with the Session and Context sections above the Changes list.
+	// Drawing a frame records how many rows those sections take.
+	_ = m.View()
+	if m.sidebarFileRowOffset == 0 {
+		t.Fatal("expected the Session and Context sections above the Changes list")
+	}
+	clickX := 120
+	clickY := 2 + m.sidebarFileRowOffset + m.changes.HeaderRows() // First file row
 
 	mouseMsg := tea.MouseMsg{
 		X:      clickX,
@@ -383,9 +390,10 @@ func TestDiffModalDiscardWorkflow(t *testing.T) {
 		checkpointMgr: NewCheckpointManager(tmp),
 		modelName:     "test-model",
 		input:         ta,
-		viewport:      viewport.New(120, 20),
-		width:         120,
+		viewport:      viewport.New(140, 20),
+		width:         140,
 		height:        30,
+		ready:         true,
 	}
 
 	m.changes.files = []fileChange{
@@ -466,9 +474,10 @@ func TestDiscardSlashCommand(t *testing.T) {
 		checkpointMgr: NewCheckpointManager(tmp),
 		modelName:     "test-model",
 		input:         ta,
-		viewport:      viewport.New(120, 20),
-		width:         120,
+		viewport:      viewport.New(140, 20),
+		width:         140,
 		height:        30,
+		ready:         true,
 	}
 
 	// 1. /discard with no args prints usage
@@ -490,9 +499,10 @@ func TestDiscardSlashCommand(t *testing.T) {
 		checkpointMgr: NewCheckpointManager(nonRepoDir),
 		modelName:     "test-model",
 		input:         ta2,
-		viewport:      viewport.New(120, 20),
-		width:         120,
+		viewport:      viewport.New(140, 20),
+		width:         140,
 		height:        30,
+		ready:         true,
 	}
 	mNonRepo.handleAgentSubmit("/discard somefile.go")
 	if !strings.Contains(mNonRepo.historyText.String(), "Not a git repository") {
@@ -520,9 +530,10 @@ func TestModelsModalNavigationAndSelection(t *testing.T) {
 		modelName:     "model-b",
 		settings:      settings,
 		input:         ta,
-		viewport:      viewport.New(120, 20),
-		width:         120,
+		viewport:      viewport.New(140, 20),
+		width:         140,
 		height:        30,
+		ready:         true,
 	}
 
 	// 1. openModelsModal pre-selects the currently active model (model-b at index 1)
@@ -559,8 +570,8 @@ func TestModelsModalNavigationAndSelection(t *testing.T) {
 	if m.modelName != "model-a" {
 		t.Fatalf("expected modelName='model-a', got %s", m.modelName)
 	}
-	if !strings.Contains(m.statusNotice, "Switched active model to model-a") {
-		t.Fatalf("expected statusNotice to confirm switch, got %q", m.statusNotice)
+	if !strings.Contains(m.historyText.String(), "Switched active model to model-a") {
+		t.Fatalf("expected the transcript to confirm the switch, got %q", m.historyText.String())
 	}
 
 	// 5. Test Alt+M shortcut opens modal

@@ -5,14 +5,18 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 // The changes column only appears when the terminal leaves the conversation a
 // comfortable width; on narrower terminals it would squeeze the transcript
-// into something unreadable, so it is hidden instead.
+// into something unreadable, so it is hidden instead. The input box shares the
+// conversation's width, so the minimum also leaves room for the 74-column
+// permission card inside it.
 const (
-	changesColumnMinFrame = 100
-	changesColumnWidth    = 32
+	changesColumnMinFrame = 120
+	changesColumnWidth    = 36
 )
 
 // fileChange is the running tally for one file modified or tracked this session.
@@ -207,6 +211,12 @@ func (c *sessionChanges) Render(width, height int) string {
 	if inner < 1 || height < 1 {
 		return ""
 	}
+	return renderSidebarColumn(c.Rows(inner, height), inner, height)
+}
+
+// Rows builds the section's rows at inner width, using at most height of
+// them. The sidebar stacks it under the Session and Context sections.
+func (c *sessionChanges) Rows(inner, height int) []string {
 	var rows []string
 	count, added, removed := c.Totals()
 
@@ -273,7 +283,13 @@ func (c *sessionChanges) Render(width, height int) string {
 		}
 	}
 
-	sep := styleMuted.Render("│") + " "
+	return rows
+}
+
+// renderSidebarColumn lays rows out as exactly height rows of a "│ " separator
+// plus inner columns, padding or cutting as needed.
+func renderSidebarColumn(rows []string, inner, height int) string {
+	sep := lipgloss.NewStyle().Foreground(tuiColorBorder).Render(SymVLine) + " "
 	var b strings.Builder
 	for i := 0; i < height; i++ {
 		row := ""
