@@ -285,10 +285,13 @@ type teaModel struct {
 	journal *WriteJournal
 	// taint records secret files this conversation has read (I10); it lives
 	// as long as the messages that may hold them.
-	taint        *SessionTaint
-	changes      sessionChanges
-	gitWatchChan <-chan struct{}
-	gitWatchStop func()
+	taint   *SessionTaint
+	changes sessionChanges
+	// sidebarFileRowOffset is how many sidebar rows sit above the Changes list
+	// in the last frame drawn.
+	sidebarFileRowOffset int
+	gitWatchChan         <-chan struct{}
+	gitWatchStop         func()
 
 	// Diff modal viewer state
 	diffModal          bool
@@ -411,15 +414,14 @@ func newTeaModel(runner *Runner, req RunRequest) (*teaModel, error) {
 	return m, nil
 }
 
+// formatWelcome is a short greeting rather than the legacy REPL's settings
+// card: a snapshot of the model and workspace in the transcript goes stale the
+// moment either changes, so the live values live in the sidebar and header.
 func (m *teaModel) formatWelcome() string {
-	banner := FormatWelcomeBanner(
-		m.workingDir,
-		m.modelName,
-		m.configPath,
-		m.checkpointMgr.IsGitRepo(),
-		len(m.rules),
-		m.allowCommands,
-	)
+	banner := "\n" + ColorCyan(StyleBold(SymBranch+" fastllm")) + ColorGray("  autonomous agent") + "\n" +
+		ColorGray("  Type ") + ColorCyan("/help") + ColorGray(" for commands  "+SymDot+"  ") +
+		ColorYellow("Tab") + ColorGray(" for shell mode  "+SymDot+"  ") +
+		ColorYellow("Shift+Tab") + ColorGray(" to change permissions")
 	if notice := untrustedConfigNotice(m.workingDir, "Run /trust to use it."); notice != "" {
 		banner += "\n\n" + notice
 	}
@@ -477,6 +479,16 @@ func (m *teaModel) conversationWidth() int {
 		return m.frameWidth() - changesColumnWidth
 	}
 	return m.frameWidth()
+}
+
+// inputBoxWidth is the lipgloss Width of the input box and the suggestion
+// dropdown. Beside the sidebar it stops one column short of the separator, so
+// the box's right border never touches it.
+func (m *teaModel) inputBoxWidth() int {
+	if m.showChangesColumn() {
+		return m.conversationWidth() - 3
+	}
+	return m.frameWidth() - 2
 }
 
 func (m *teaModel) contentWidth() int {
@@ -555,7 +567,7 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 
-		m.input.SetWidth(msg.Width - 6)
+		m.input.SetWidth(m.inputBoxWidth() - 3)
 		// Width changed, so the text re-wraps: recompute the box height before
 		// handing the remaining rows to the viewport.
 		m.syncInputHeight()
@@ -949,7 +961,7 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.showChangesColumn() && msg.X >= m.frameWidth()-changesColumnWidth && msg.X < m.frameWidth() {
 				if msg.Y >= 2 && msg.Y < 2+m.viewport.Height {
-					if _, idx, ok := m.changes.FileAtRow(msg.Y - 2); ok {
+					if _, idx, ok := m.changes.FileAtRow(msg.Y - 2 - m.sidebarFileRowOffset); ok {
 						m.openDiffModal(idx)
 						return m, nil
 					}
@@ -1733,6 +1745,20 @@ func (m *teaModel) updatePromptAndPlaceholder() {
 		m.input.Prompt = "❯ "
 		m.input.Placeholder = "Ask a question, enter a task, or type /help (Tab switches to Shell Mode)..."
 	}
+	setFirstLinePrompt(&m.input, m.input.Prompt)
+}
+
+// setFirstLinePrompt shows the prompt on the input's first row only and
+// indents the rest to match, instead of repeating it down the box.
+func setFirstLinePrompt(ta *textarea.Model, prompt string) {
+	width := lipgloss.Width(prompt)
+	indent := strings.Repeat(" ", width)
+	ta.SetPromptFunc(width, func(line int) string {
+		if line == 0 {
+			return prompt
+		}
+		return indent
+	})
 }
 
 func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
@@ -2358,7 +2384,8 @@ func (m *teaModel) selectModelFromModal() {
 
 	m.modelName = selected.ID
 	_ = m.saveSession()
-	m.statusNotice = fmt.Sprintf("✓ Switched active model to %s", selected.ID)
+	// No status notice: the transcript line below and the header pill already
+	// say it, and a third copy in the header read as noise.
 	m.appendHistory(styleStatusNotice.Render(fmt.Sprintf("✓ Switched active model to %s (%s)\nEndpoint: %s",
 		selected.ID, selected.Name, selected.URL)) + "\n\n")
 }
@@ -3054,20 +3081,21 @@ func (m *teaModel) View() string {
 	// jitters the whole UI up and down while a turn runs.
 	headerRow := clampToWidth(headerLeft+strings.Repeat(" ", gap)+rightInfo, m.frameWidth())
 	sb.WriteString(headerRow + "\n")
-	sb.WriteString(lipgloss.NewStyle().Foreground(tuiColorBorder).Render(strings.Repeat(SymHLine, m.frameWidth())) + "\n")
-
-	// 2. Viewport (Conversation & Tool Call History)
-	// The changes column sits beside it on wide terminals.
-	conversation := m.viewport.View()
+	// The rule tees into the sidebar's separator so the two read as one frame.
+	rule := strings.Repeat(SymHLine, m.frameWidth())
 	if m.showChangesColumn() {
-		conversation = lipgloss.JoinHorizontal(lipgloss.Top, conversation, m.changes.Render(changesColumnWidth, m.viewport.Height))
+		convW := m.conversationWidth()
+		rule = strings.Repeat(SymHLine, convW) + "┬" + strings.Repeat(SymHLine, m.frameWidth()-convW-1)
 	}
-	sb.WriteString(conversation + "\n")
+	sb.WriteString(lipgloss.NewStyle().Foreground(tuiColorBorder).Render(rule) + "\n")
 
-	// Slash-command suggestions sit directly above the input box; the
-	// viewport already gave up these rows in resizeViewport.
+	// 2. Left column: the conversation, then slash-command suggestions (the
+	// viewport already gave up their rows in resizeViewport), then the input
+	// box. On wide terminals the sidebar runs beside all three, down to the
+	// status bar.
+	left := []string{m.viewport.View()}
 	if dropdown := m.renderSuggestions(); dropdown != "" {
-		sb.WriteString(dropdown + "\n")
+		left = append(left, dropdown)
 	}
 
 	// 3. Bottom Input Box with Rounded Border
@@ -3098,9 +3126,17 @@ func (m *teaModel) View() string {
 	inputBox := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(borderCol).
-		Width(m.frameWidth() - 2).
+		Width(m.inputBoxWidth()).
 		Render(inputContent)
-	sb.WriteString(inputBox + "\n")
+	left = append(left, inputBox)
+	body := strings.Join(left, "\n")
+	if m.showChangesColumn() {
+		// Pad the left column to its full width so the sidebar lines up on
+		// every row, including the input box's.
+		body = lipgloss.NewStyle().Width(m.conversationWidth()).Render(body)
+		body = lipgloss.JoinHorizontal(lipgloss.Top, body, m.renderSidebar(lipgloss.Height(body)))
+	}
+	sb.WriteString(body + "\n")
 
 	// 4. Status Bar / Keymap Hints
 	// Hints drop to a short form rather than wrapping: the full string is ~97
@@ -3123,6 +3159,10 @@ func (m *teaModel) View() string {
 	}
 	used, budget := m.contextUsage()
 	gauge := formatContextGauge(used, budget, 8)
+	if m.showChangesColumn() {
+		// The sidebar's Context section carries the full meter.
+		gauge = formatContextGauge(used, budget, 0)
+	}
 	if VisualLen(hints)+VisualLen(gauge)+2 > m.frameWidth() {
 		hints = shortHints
 	}
