@@ -844,10 +844,12 @@ func TestPasteInsertsTextInsteadOfSubmitting(t *testing.T) {
 	m := newBusyModel(t, &mockLLM{})
 	pasted := "line one\nline two\nline three"
 
-	updated, cmd := m.Update(tea.PasteMsg{Content: pasted})
+	updated, _ := m.Update(tea.PasteMsg{Content: pasted})
 	m = updated.(*teaModel)
 
-	if m.isExecuting || cmd != nil {
+	// The textarea answers a paste with a cursor-blink command, so a nil cmd
+	// is no longer the signal; submitting is what sets isExecuting.
+	if m.isExecuting || m.pendingPrompt != "" {
 		t.Fatal("paste started a turn instead of inserting text")
 	}
 	if got := m.input.Value(); got != pasted {
