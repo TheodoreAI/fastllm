@@ -3,7 +3,7 @@ package harness
 import (
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
 // streamBuffer accumulates streamed assistant text for one turn and decides how

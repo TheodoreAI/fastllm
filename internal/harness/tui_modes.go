@@ -2,15 +2,16 @@ package harness
 
 import (
 	"fmt"
+	"image/color"
 	"strings"
 	"time"
+	"unicode/utf8"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
 )
 
 // permissionModeColor matches colorForMode for lipgloss surfaces.
-func permissionModeColor(mode PermissionMode) lipgloss.Color {
+func permissionModeColor(mode PermissionMode) color.Color {
 	switch NormalizeMode(mode) {
 	case PermissionPlan:
 		return tuiColorCyan
@@ -61,24 +62,24 @@ func (m *teaModel) cyclePermissionMode() tea.Cmd {
 }
 
 // updatePlanApproval handles keys while a submitted plan awaits a decision.
-func (m *teaModel) updatePlanApproval(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.KeyCtrlC, tea.KeyEsc:
+func (m *teaModel) updatePlanApproval(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c", "esc":
 		return m, m.resolvePlan("")
-	case tea.KeyUp:
+	case "up":
 		if m.planCursor > 0 {
 			m.planCursor--
 		}
-	case tea.KeyDown:
+	case "down":
 		if m.planCursor < len(planApprovals)-1 {
 			m.planCursor++
 		}
-	case tea.KeyEnter:
+	case "enter":
 		return m, m.resolvePlan(planApprovals[m.planCursor].Mode)
-	case tea.KeyRunes:
-		if len(msg.Runes) > 0 {
+	default:
+		if r := typedRune(msg); r != 0 {
 			for _, approval := range planApprovals {
-				if msg.Runes[0] == approval.Key {
+				if r == approval.Key {
 					return m, m.resolvePlan(approval.Mode)
 				}
 			}
@@ -120,4 +121,14 @@ func (m *teaModel) renderPlanApproval() string {
 	}
 	b.WriteString("  " + ColorGray("↑/↓ and enter, or a key; esc keeps planning"))
 	return b.String()
+}
+
+// typedRune returns the character a key press typed, or 0 for special keys
+// and ctrl/alt chords, which carry no text.
+func typedRune(msg tea.KeyPressMsg) rune {
+	r, _ := utf8.DecodeRuneInString(msg.Text)
+	if r == utf8.RuneError {
+		return 0
+	}
+	return r
 }

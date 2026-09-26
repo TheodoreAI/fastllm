@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/muesli/termenv"
 )
 
@@ -170,7 +170,7 @@ var (
 	currentTheme Theme
 	themeSeqs    [roleCount]string
 	// colorProfile reports what the terminal can display; tests override it.
-	colorProfile = lipgloss.ColorProfile
+	colorProfile = termenv.ColorProfile
 )
 
 func init() {

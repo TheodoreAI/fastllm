@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"fastllm/internal/llm"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 func (m *teaModel) runtimeSettings() InteractiveRuntime {

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/bubbles/textarea"
+	"charm.land/bubbles/v2/textarea"
 )
 
 func trustTestModel(t *testing.T, projectConfig string) (*teaModel, string) {

@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/bubbles/textarea"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textarea"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/muesli/termenv"
 )
 
@@ -155,11 +155,11 @@ func TestThemeModalPreviewCancelAndSave(t *testing.T) {
 	if m.themeModal == nil {
 		t.Fatal("/theme should open the picker")
 	}
-	m.handleThemeModalKey(tea.KeyMsg{Type: tea.KeyDown})
+	m.handleThemeModalKey(tea.KeyPressMsg{Code: tea.KeyDown})
 	if currentTheme.Name != builtinThemes[1].Name {
 		t.Fatalf("moving the cursor should preview %s, got %s", builtinThemes[1].Name, currentTheme.Name)
 	}
-	m.handleThemeModalKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m.handleThemeModalKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if m.themeModal != nil || currentTheme.Name != "nord" {
 		t.Fatalf("Esc should close and restore nord, got %s", currentTheme.Name)
 	}
@@ -168,8 +168,8 @@ func TestThemeModalPreviewCancelAndSave(t *testing.T) {
 	}
 
 	m.handleThemeSlash([]string{"/theme"})
-	m.handleThemeModalKey(tea.KeyMsg{Type: tea.KeyEnd})
-	m.handleThemeModalKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m.handleThemeModalKey(tea.KeyPressMsg{Code: tea.KeyEnd})
+	m.handleThemeModalKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	last := builtinThemes[len(builtinThemes)-1].Name
 	if m.themeModal != nil || currentTheme.Name != last {
 		t.Fatalf("Enter should keep %s, got %s", last, currentTheme.Name)
@@ -220,7 +220,7 @@ func TestThemeModalWindowedScrolling(t *testing.T) {
 	}
 
 	// Move cursor to bottom
-	m.handleThemeModalKey(tea.KeyMsg{Type: tea.KeyEnd})
+	m.handleThemeModalKey(tea.KeyPressMsg{Code: tea.KeyEnd})
 	outBottom := StripANSI(m.renderThemeModal())
 	if !strings.Contains(outBottom, "▲") || !strings.Contains(outBottom, "more above") {
 		t.Fatalf("bottom of list should show upward scroll indicator, got:\n%s", outBottom)
@@ -261,4 +261,3 @@ func TestAllNewThemesApplyProperly(t *testing.T) {
 		}
 	}
 }
-

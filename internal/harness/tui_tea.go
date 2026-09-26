@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"image/color"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"fastllm/internal/config"
 	"fastllm/internal/execution"
@@ -16,12 +18,12 @@ import (
 	"fastllm/internal/llm"
 	"fastllm/internal/webtools"
 
+	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/atotto/clipboard"
-	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // TUI Modes
@@ -35,19 +37,19 @@ const (
 // Palette. ApplyTheme (theme.go) assigns every colour from the active theme;
 // nothing here is a literal so a theme switch reaches all of the chrome.
 var (
-	tuiColorCyan    lipgloss.Color
-	tuiColorBlue    lipgloss.Color
-	tuiColorGreen   lipgloss.Color
-	tuiColorYellow  lipgloss.Color
-	tuiColorRed     lipgloss.Color
-	tuiColorPurple  lipgloss.Color
-	tuiColorMuted   lipgloss.Color
-	tuiColorDarkBg  lipgloss.Color
-	tuiColorCardBg  lipgloss.Color
-	tuiColorBorder  lipgloss.Color
-	tuiColorTrack   lipgloss.Color
-	tuiColorWhite   lipgloss.Color
-	tuiColorBrandFg lipgloss.Color
+	tuiColorCyan    color.Color
+	tuiColorBlue    color.Color
+	tuiColorGreen   color.Color
+	tuiColorYellow  color.Color
+	tuiColorRed     color.Color
+	tuiColorPurple  color.Color
+	tuiColorMuted   color.Color
+	tuiColorDarkBg  color.Color
+	tuiColorCardBg  color.Color
+	tuiColorBorder  color.Color
+	tuiColorTrack   color.Color
+	tuiColorWhite   color.Color
+	tuiColorBrandFg color.Color
 )
 
 // Lip Gloss Styles, rebuilt by buildStyles whenever the theme changes.
@@ -130,7 +132,7 @@ func buildStyles() {
 }
 
 func tuiToolBadge(name string) string {
-	var c lipgloss.Color
+	var c color.Color
 	switch name {
 	case "read_file", "list_files", "search_files", "glob_files":
 		c = tuiColorCyan
@@ -546,7 +548,7 @@ func (m *teaModel) waitForGitWatch() tea.Cmd {
 // Init implements tea.Model
 func (m *teaModel) Init() tea.Cmd {
 	return tea.Batch(
-		textarea.Blink,
+		m.input.Focus(),
 		m.spinner.Tick,
 		m.refreshGitStatusCmd(),
 		m.waitForGitWatch(),
@@ -573,81 +575,70 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncInputHeight()
 
 		if !m.ready {
-			m.viewport = viewport.New(m.conversationWidth(), 3)
+			m.viewport = viewport.New(viewport.WithWidth(m.conversationWidth()), viewport.WithHeight(3))
 			m.viewport.SetContent(m.historyText.String())
 			m.ready = true
 			m.resizeViewport()
 			m.viewport.GotoBottom()
 		} else {
-			m.viewport.Width = m.conversationWidth()
+			m.viewport.SetWidth(m.conversationWidth())
 			m.resizeViewport()
 		}
 
-	case tea.KeyMsg:
+	case tea.PasteMsg:
+		// Terminals deliver a paste as one message, newlines included; it falls
+		// through to the textarea below, which inserts it literally. Modals and
+		// prompts have no text box for it, so drop it there rather than typing
+		// into the chat input behind them.
+		if m.pendingPlan != "" || m.pendingPermission != nil || m.skillsModal ||
+			m.sessionsModal != nil || m.themeModal != nil || m.filesModal != nil ||
+			m.modelsModal || m.diffModal {
+			return m, nil
+		}
+
+	case tea.KeyPressMsg:
 		if m.pendingPlan != "" && !m.isExecuting {
 			return m.updatePlanApproval(msg)
 		}
 		if m.pendingPermission != nil {
-			if msg.Type == tea.KeyCtrlC {
+			switch msg.String() {
+			case "ctrl+c":
 				m.resolvePermission(false, false)
 				if m.cancelTurn != nil {
 					m.cancelTurn()
 				}
 				return m, m.waitForNextEvent()
-			}
-			if msg.Type == tea.KeyEnter || msg.Type == tea.KeyEsc {
+			case "enter", "esc", "n", "N":
 				m.resolvePermission(false, false)
 				return m, m.waitForNextEvent()
-			}
-			if msg.Type == tea.KeyRunes && len(msg.Runes) > 0 {
-				switch msg.Runes[0] {
-				case 'y', 'Y':
-					m.resolvePermission(true, false)
-					return m, m.waitForNextEvent()
-				case 'a', 'A':
-					m.resolvePermission(true, true)
-					return m, m.waitForNextEvent()
-				case 'n', 'N':
-					m.resolvePermission(false, false)
-					return m, m.waitForNextEvent()
-				}
+			case "y", "Y":
+				m.resolvePermission(true, false)
+				return m, m.waitForNextEvent()
+			case "a", "A":
+				m.resolvePermission(true, true)
+				return m, m.waitForNextEvent()
 			}
 			return m, nil
 		}
 		if m.skillsModal {
-			switch msg.Type {
-			case tea.KeyEsc, tea.KeyCtrlC:
+			switch msg.String() {
+			case "esc", "ctrl+c", "q", "Q":
 				m.closeSkillsModal()
-			case tea.KeyEnter:
+			case "enter":
 				m.selectSkillFromModal()
-			case tea.KeyUp:
+			case "up", "k":
 				if m.skillCursor > 0 {
 					m.skillCursor--
 				}
-			case tea.KeyDown:
+			case "down", "j":
 				if m.skillCursor < len(m.skills)-1 {
 					m.skillCursor++
 				}
-			case tea.KeyHome:
+			case "home":
 				m.skillCursor = 0
-			case tea.KeyEnd:
+			case "end":
 				if len(m.skills) > 0 {
 					m.skillCursor = len(m.skills) - 1
-				}
-			case tea.KeyRunes:
-				if len(msg.Runes) > 0 {
-					switch msg.Runes[0] {
-					case 'q', 'Q':
-						m.closeSkillsModal()
-					case 'j':
-						if m.skillCursor < len(m.skills)-1 {
-							m.skillCursor++
-						}
-					case 'k':
-						if m.skillCursor > 0 {
-							m.skillCursor--
-						}
-					}
 				}
 			}
 			return m, nil
@@ -662,111 +653,73 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.handleFilesModalKey(msg)
 		}
 		if m.modelsModal {
-			switch msg.Type {
-			case tea.KeyEsc, tea.KeyCtrlC:
+			switch msg.String() {
+			case "esc", "ctrl+c", "q", "Q":
 				m.closeModelsModal()
-			case tea.KeyEnter:
+			case "enter":
 				m.selectModelFromModal()
-			case tea.KeyUp:
+			case "up", "k":
 				if m.modelCursor > 0 {
 					m.modelCursor--
 				}
-			case tea.KeyDown:
+			case "down", "j":
 				if m.settings != nil && m.modelCursor < len(m.settings.Models)-1 {
 					m.modelCursor++
 				}
-			case tea.KeyHome:
+			case "home":
 				m.modelCursor = 0
-			case tea.KeyEnd:
+			case "end":
 				if m.settings != nil && len(m.settings.Models) > 0 {
 					m.modelCursor = len(m.settings.Models) - 1
-				}
-			case tea.KeyRunes:
-				if len(msg.Runes) > 0 {
-					switch msg.Runes[0] {
-					case 'q', 'Q':
-						m.closeModelsModal()
-					case 'j':
-						if m.settings != nil && m.modelCursor < len(m.settings.Models)-1 {
-							m.modelCursor++
-						}
-					case 'k':
-						if m.modelCursor > 0 {
-							m.modelCursor--
-						}
-					}
 				}
 			}
 			return m, nil
 		}
 		if m.diffModal {
 			if m.diffConfirmDiscard {
-				switch msg.Type {
-				case tea.KeyEsc, tea.KeyCtrlC:
-					m.diffConfirmDiscard = false
-					return m, nil
-				case tea.KeyEnter:
+				switch msg.String() {
+				case "enter", "y", "Y":
 					m.diffConfirmDiscard = false
 					m.discardCurrentFile()
-					return m, nil
-				case tea.KeyRunes:
-					if len(msg.Runes) > 0 {
-						switch msg.Runes[0] {
-						case 'y', 'Y':
-							m.diffConfirmDiscard = false
-							m.discardCurrentFile()
-							return m, nil
-						default:
-							m.diffConfirmDiscard = false
-							return m, nil
-						}
+				case "esc", "ctrl+c":
+					m.diffConfirmDiscard = false
+				default:
+					// Any other typed character answers "no".
+					if msg.Text != "" {
+						m.diffConfirmDiscard = false
 					}
 				}
 				return m, nil
 			}
 
-			switch msg.Type {
-			case tea.KeyEsc, tea.KeyCtrlC:
+			switch msg.String() {
+			case "esc", "ctrl+c", "q", "Q":
 				m.closeDiffModal()
 				return m, nil
-			case tea.KeyRight:
+			case "right", "n", "N":
 				m.nextDiffFile()
 				return m, nil
-			case tea.KeyLeft:
+			case "left", "p", "P":
 				m.prevDiffFile()
 				return m, nil
-			case tea.KeyRunes:
-				if len(msg.Runes) > 0 {
-					switch msg.Runes[0] {
-					case 'q', 'Q':
-						m.closeDiffModal()
-						return m, nil
-					case 'n', 'N':
-						m.nextDiffFile()
-						return m, nil
-					case 'p', 'P':
-						m.prevDiffFile()
-						return m, nil
-					case 's', 'S':
-						m.toggleStageCurrentFile()
-						return m, nil
-					case 'd', 'D':
-						m.toggleDiffStaged()
-						return m, nil
-					case 'x', 'X':
-						m.diffConfirmDiscard = true
-						return m, nil
-					}
-				}
+			case "s", "S":
+				m.toggleStageCurrentFile()
+				return m, nil
+			case "d", "D":
+				m.toggleDiffStaged()
+				return m, nil
+			case "x", "X":
+				m.diffConfirmDiscard = true
+				return m, nil
 			}
 			var vpCmd tea.Cmd
 			m.diffViewport, vpCmd = m.diffViewport.Update(msg)
 			return m, vpCmd
 		}
 
-		if msg.Alt && len(msg.Runes) > 0 {
-			switch msg.Runes[0] {
-			case 'c', 'C':
+		if msg.Mod.Contains(tea.ModAlt) {
+			switch unicode.ToLower(msg.Code) {
+			case 'c':
 				if len(m.changes.files) > 0 {
 					targetIdx := 0
 					if m.changes.cursor >= 0 && m.changes.cursor < len(m.changes.files) {
@@ -775,19 +728,10 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.openDiffModal(targetIdx)
 					return m, nil
 				}
-			case 'm', 'M':
+			case 'm':
 				m.openModelsModal()
 				return m, nil
 			}
-		}
-
-		// A bracketed paste arrives as one key event carrying the whole
-		// clipboard, newlines included. Insert it literally -- treating those
-		// newlines as Enter submits the paste one line at a time, which also
-		// starts one agent turn per line.
-		if msg.Paste {
-			m.input.InsertString(string(msg.Runes))
-			return m, nil
 		}
 
 		// While the slash-command dropdown shows, it owns ↑/↓, Tab, Enter and
@@ -796,8 +740,8 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 
-		switch msg.Type {
-		case tea.KeyCtrlC:
+		switch msg.String() {
+		case "ctrl+c":
 			if m.isExecuting && m.cancelTurn != nil {
 				m.cancelActiveOperation()
 				cmds = append(cmds, m.clearStatusAfter(3*time.Second))
@@ -811,7 +755,7 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.closeSession()
 			return m, tea.Quit
 
-		case tea.KeyCtrlB:
+		case "ctrl+b":
 			if m.shellExecuting && m.currentShellProc != nil {
 				bp := m.currentShellProc
 				m.shellBackgrounded = true
@@ -826,7 +770,7 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.clearStatusAfter(3 * time.Second)
 			}
 
-		case tea.KeyTab:
+		case "tab":
 			// Toggle between Agent Mode and Shell Mode
 			if m.mode == modeAgent {
 				m.mode = modeShell
@@ -839,19 +783,19 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.clearStatusAfter(2*time.Second))
 			return m, tea.Batch(cmds...)
 
-		case tea.KeyShiftTab:
+		case "shift+tab":
 			cmds = append(cmds, m.cyclePermissionMode())
 			return m, tea.Batch(cmds...)
 
-		case tea.KeyCtrlV:
+		case "ctrl+v":
 			return m, m.handlePasteCommand()
 
-		case tea.KeyCtrlJ:
+		case "ctrl+j":
 			// Ctrl+J is universal terminal newline / linefeed
 			m.input.InsertString("\n")
 			return m, nil
 
-		case tea.KeyCtrlO:
+		case "ctrl+o":
 			if len(m.changes.files) > 0 {
 				targetIdx := 0
 				if m.changes.cursor >= 0 && m.changes.cursor < len(m.changes.files) {
@@ -861,11 +805,11 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-		case tea.KeyEnter:
-			if msg.Alt {
-				m.input.InsertString("\n")
-				return m, nil
-			}
+		case "alt+enter", "shift+enter":
+			m.input.InsertString("\n")
+			return m, nil
+
+		case "enter":
 			val := m.input.Value()
 			// If ends with backslash, allow multiline continuation
 			if strings.HasSuffix(val, "\\") {
@@ -886,7 +830,7 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Batch(cmds...)
 			}
 
-		case tea.KeyUp:
+		case "up":
 			if m.input.Line() == 0 && len(m.promptHistory) > 0 {
 				if m.historyIdx == -1 {
 					m.historyDraft = m.input.Value()
@@ -902,7 +846,7 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.input, inputCmd = m.input.Update(msg)
 			return m, inputCmd
 
-		case tea.KeyDown:
+		case "down":
 			if m.historyIdx != -1 && m.input.Line() >= m.input.LineCount()-1 {
 				if m.historyIdx < len(m.promptHistory)-1 {
 					m.historyIdx++
@@ -919,7 +863,7 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.input, inputCmd = m.input.Update(msg)
 			return m, inputCmd
 
-		case tea.KeyEsc:
+		case "esc":
 			if m.isExecuting || m.shellExecuting {
 				m.cancelActiveOperation()
 				cmds = append(cmds, m.clearStatusAfter(3*time.Second))
@@ -932,12 +876,12 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-		case tea.KeyPgUp:
-			m.viewport.LineUp(5)
+		case "pgup":
+			m.viewport.ScrollUp(5)
 			return m, nil
 
-		case tea.KeyPgDown:
-			m.viewport.LineDown(5)
+		case "pgdown":
+			m.viewport.ScrollDown(5)
 			return m, nil
 		}
 
@@ -950,18 +894,19 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.modelsModal || m.skillsModal || m.sessionsModal != nil || m.themeModal != nil || m.filesModal != nil {
 			return m, nil
 		}
-		if (msg.Button == tea.MouseButtonLeft || msg.Type == tea.MouseLeft) && msg.Action != tea.MouseActionRelease {
-			if msg.Y == 0 {
+		if click, ok := msg.(tea.MouseClickMsg); ok && click.Button == tea.MouseLeft {
+			mouse := click.Mouse()
+			if mouse.Y == 0 {
 				modelStart := 7 + 1 + 9 + 1 // brand(7) + " " + modeBadge(9) + " " = 18
 				modelEnd := modelStart + VisualLen(m.modelName) + 2
-				if msg.X >= modelStart && msg.X <= modelEnd {
+				if mouse.X >= modelStart && mouse.X <= modelEnd {
 					m.openModelsModal()
 					return m, nil
 				}
 			}
-			if m.showChangesColumn() && msg.X >= m.frameWidth()-changesColumnWidth && msg.X < m.frameWidth() {
-				if msg.Y >= 2 && msg.Y < 2+m.viewport.Height {
-					if _, idx, ok := m.changes.FileAtRow(msg.Y - 2 - m.sidebarFileRowOffset); ok {
+			if m.showChangesColumn() && mouse.X >= m.frameWidth()-changesColumnWidth && mouse.X < m.frameWidth() {
+				if mouse.Y >= 2 && mouse.Y < 2+m.viewport.Height() {
+					if _, idx, ok := m.changes.FileAtRow(mouse.Y - 2 - m.sidebarFileRowOffset); ok {
 						m.openDiffModal(idx)
 						return m, nil
 					}
@@ -1316,7 +1261,7 @@ func (m *teaModel) resizeViewport() {
 	if vpHeight < 3 {
 		vpHeight = 3
 	}
-	m.viewport.Height = vpHeight
+	m.viewport.SetHeight(vpHeight)
 }
 
 func (m *teaModel) clearStatusAfter(d time.Duration) tea.Cmd {
@@ -1753,8 +1698,8 @@ func (m *teaModel) updatePromptAndPlaceholder() {
 func setFirstLinePrompt(ta *textarea.Model, prompt string) {
 	width := lipgloss.Width(prompt)
 	indent := strings.Repeat(" ", width)
-	ta.SetPromptFunc(width, func(line int) string {
-		if line == 0 {
+	ta.SetPromptFunc(width, func(info textarea.PromptInfo) string {
+		if info.LineNumber == 0 {
 			return prompt
 		}
 		return indent
@@ -2554,7 +2499,7 @@ func (m *teaModel) renderSkillsModal() string {
 		Width(contentWidth).
 		Render(strings.Join(lines, "\n"))
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box,
-		lipgloss.WithWhitespaceBackground(tuiColorDarkBg))
+		lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Background(tuiColorDarkBg)))
 }
 
 func (m *teaModel) renderModelsModal() string {
@@ -2669,7 +2614,7 @@ func (m *teaModel) renderModelsModal() string {
 		Render(strings.Join(lines, "\n"))
 
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box,
-		lipgloss.WithWhitespaceBackground(tuiColorDarkBg))
+		lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Background(tuiColorDarkBg)))
 }
 
 func (m *teaModel) openDiffModal(fileIdx int) {
@@ -2751,7 +2696,7 @@ func (m *teaModel) openDiffModal(fileIdx int) {
 		vpHeight = 3
 	}
 
-	m.diffViewport = viewport.New(vpWidth, vpHeight)
+	m.diffViewport = viewport.New(viewport.WithWidth(vpWidth), viewport.WithHeight(vpHeight))
 	m.diffViewport.SetContent(highlighted)
 	m.diffViewport.GotoTop()
 	m.diffReady = true
@@ -2903,9 +2848,9 @@ func (m *teaModel) renderDiffModal() string {
 	if vpHeight < 3 {
 		vpHeight = 3
 	}
-	if m.diffViewport.Width != vpWidth || m.diffViewport.Height != vpHeight {
-		m.diffViewport.Width = vpWidth
-		m.diffViewport.Height = vpHeight
+	if m.diffViewport.Width() != vpWidth || m.diffViewport.Height() != vpHeight {
+		m.diffViewport.SetWidth(vpWidth)
+		m.diffViewport.SetHeight(vpHeight)
 	}
 
 	badge := styleDiffHdr.Render("[Modified]")
@@ -2977,7 +2922,7 @@ func (m *teaModel) renderDiffModal() string {
 		Render(strings.Join(lines, "\n"))
 
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box,
-		lipgloss.WithWhitespaceBackground(tuiColorDarkBg))
+		lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Background(tuiColorDarkBg)))
 }
 
 func truncateText(value string, width int) string {
@@ -2995,7 +2940,15 @@ func truncateText(value string, width int) string {
 }
 
 // View implements tea.Model
-func (m *teaModel) View() string {
+func (m *teaModel) View() tea.View {
+	v := tea.NewView(m.render())
+	v.AltScreen = true // Clean full-screen TUI buffer
+	v.MouseMode = tea.MouseModeCellMotion
+	return v
+}
+
+// render draws the whole frame: the active modal, or the chat layout.
+func (m *teaModel) render() string {
 	if !m.ready {
 		return "Initializing fastllm..."
 	}
@@ -3099,7 +3052,7 @@ func (m *teaModel) View() string {
 	}
 
 	// 3. Bottom Input Box with Rounded Border
-	var borderCol lipgloss.Color = tuiColorBorder
+	var borderCol color.Color = tuiColorBorder
 	if m.mode == modeShell {
 		borderCol = tuiColorYellow
 	}
@@ -3193,11 +3146,7 @@ func (r *Runner) RunBubbleTea(req RunRequest) error {
 		return err
 	}
 
-	p := tea.NewProgram(
-		model,
-		tea.WithAltScreen(), // Clean full-screen TUI buffer
-		tea.WithMouseCellMotion(),
-	)
+	p := tea.NewProgram(model)
 	teaModelProg = p
 
 	_, err = p.Run()

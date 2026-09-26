@@ -11,8 +11,8 @@ import (
 	"fastllm/internal/llm"
 	"fastllm/internal/media"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/atotto/clipboard"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 func (m *teaModel) handlePasteCommand() tea.Cmd {

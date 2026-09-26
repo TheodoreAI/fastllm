@@ -14,9 +14,9 @@ import (
 	"fastllm/internal/config"
 	"fastllm/internal/llm"
 
-	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 )
 
 func TestInteractiveShellSupportsLS(t *testing.T) {
@@ -62,14 +62,14 @@ func TestEscapeCancelsActiveAgentTurn(t *testing.T) {
 	canceled := false
 	m := &teaModel{
 		input:       ta,
-		viewport:    viewport.New(80, 6),
+		viewport:    viewport.New(viewport.WithWidth(80), viewport.WithHeight(6)),
 		ready:       true,
 		width:       80,
 		isExecuting: true,
 		cancelTurn:  func() { canceled = true },
 	}
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = updated.(*teaModel)
 
 	if !canceled {
@@ -85,7 +85,7 @@ func TestEscapeCancelsActiveShellCommand(t *testing.T) {
 	m := &teaModel{
 		workingDir: t.TempDir(),
 		input:      ta,
-		viewport:   viewport.New(80, 6),
+		viewport:   viewport.New(viewport.WithWidth(80), viewport.WithHeight(6)),
 		ready:      true,
 		width:      80,
 	}
@@ -108,7 +108,7 @@ func TestEscapeCancelsActiveShellCommand(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = updated.(*teaModel)
 
 	select {
@@ -154,7 +154,7 @@ func TestCopyTranscriptStripsANSI(t *testing.T) {
 
 func TestTaskFinishedRendersToolProvidedFinalAnswer(t *testing.T) {
 	ta := textarea.New()
-	vp := viewport.New(80, 10)
+	vp := viewport.New(viewport.WithWidth(80), viewport.WithHeight(10))
 	m := &teaModel{input: ta, viewport: vp, ready: true, width: 80}
 
 	updated, _ := m.Update(teaAgentEventMsg(Event{
@@ -178,7 +178,7 @@ func TestTaskFinishedRendersToolProvidedFinalAnswer(t *testing.T) {
 func TestMouseWheelScrollsViewportWithoutChangingPromptHistory(t *testing.T) {
 	ta := textarea.New()
 	ta.Focus()
-	vp := viewport.New(80, 3)
+	vp := viewport.New(viewport.WithWidth(80), viewport.WithHeight(3))
 	vp.SetContent("one\ntwo\nthree\nfour\nfive\nsix")
 	vp.GotoBottom()
 
@@ -189,25 +189,23 @@ func TestMouseWheelScrollsViewportWithoutChangingPromptHistory(t *testing.T) {
 		historyIdx:    -1,
 		ready:         true,
 	}
-	initialOffset := m.viewport.YOffset
+	initialOffset := m.viewport.YOffset()
 
-	updated, _ := m.Update(tea.MouseMsg{
-		X: 1, Y: 1, Type: tea.MouseWheelUp, Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress,
-	})
+	updated, _ := m.Update(tea.MouseWheelMsg{X: 1, Y: 1, Button: tea.MouseWheelUp})
 	m = updated.(*teaModel)
 
 	if m.historyIdx != -1 || m.input.Value() != "" {
 		t.Fatalf("mouse wheel changed prompt history: index=%d input=%q", m.historyIdx, m.input.Value())
 	}
-	if m.viewport.YOffset >= initialOffset {
-		t.Fatalf("mouse wheel did not scroll viewport: before=%d after=%d", initialOffset, m.viewport.YOffset)
+	if m.viewport.YOffset() >= initialOffset {
+		t.Fatalf("mouse wheel did not scroll viewport: before=%d after=%d", initialOffset, m.viewport.YOffset())
 	}
 }
 
 func TestTypingDoesNotScrollViewport(t *testing.T) {
 	ta := textarea.New()
 	ta.Focus()
-	vp := viewport.New(80, 3)
+	vp := viewport.New(viewport.WithWidth(80), viewport.WithHeight(3))
 	vp.SetContent("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten")
 	vp.GotoBottom()
 
@@ -217,14 +215,14 @@ func TestTypingDoesNotScrollViewport(t *testing.T) {
 		historyIdx: -1,
 		ready:      true,
 	}
-	initialOffset := m.viewport.YOffset
+	initialOffset := m.viewport.YOffset()
 
 	// Every one of these is a viewport scroll binding in bubbles' default keymap.
 	for _, r := range "kjudbf hl" {
-		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		updated, _ := m.Update(tea.KeyPressMsg{Code: r, Text: string(rune(r))})
 		m = updated.(*teaModel)
-		if m.viewport.YOffset != initialOffset {
-			t.Fatalf("typing %q scrolled the viewport: before=%d after=%d", r, initialOffset, m.viewport.YOffset)
+		if m.viewport.YOffset() != initialOffset {
+			t.Fatalf("typing %q scrolled the viewport: before=%d after=%d", r, initialOffset, m.viewport.YOffset())
 		}
 	}
 	if got := m.input.Value(); got != "kjudbf hl" {
@@ -247,7 +245,7 @@ func TestPromptHistoryNavigation(t *testing.T) {
 	m.input.SetValue("my unfinished draft")
 
 	// 2. Press Up: should recall "third prompt" (the latest in history)
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	m = updated.(*teaModel)
 
 	if m.historyIdx != 2 {
@@ -261,7 +259,7 @@ func TestPromptHistoryNavigation(t *testing.T) {
 	}
 
 	// 3. Press Up again: should recall "second prompt"
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	m = updated.(*teaModel)
 
 	if m.historyIdx != 1 {
@@ -272,7 +270,7 @@ func TestPromptHistoryNavigation(t *testing.T) {
 	}
 
 	// 4. Press Up again: should recall "first prompt"
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	m = updated.(*teaModel)
 
 	if m.historyIdx != 0 {
@@ -283,7 +281,7 @@ func TestPromptHistoryNavigation(t *testing.T) {
 	}
 
 	// 5. Press Up at oldest item: should stay at 0
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	m = updated.(*teaModel)
 
 	if m.historyIdx != 0 {
@@ -294,7 +292,7 @@ func TestPromptHistoryNavigation(t *testing.T) {
 	}
 
 	// 6. Press Down: should move forward to "second prompt"
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	m = updated.(*teaModel)
 
 	if m.historyIdx != 1 {
@@ -305,7 +303,7 @@ func TestPromptHistoryNavigation(t *testing.T) {
 	}
 
 	// 7. Press Down again: should move forward to "third prompt"
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	m = updated.(*teaModel)
 
 	if m.historyIdx != 2 {
@@ -316,7 +314,7 @@ func TestPromptHistoryNavigation(t *testing.T) {
 	}
 
 	// 8. Press Down past the latest item: should restore "my unfinished draft"
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	m = updated.(*teaModel)
 
 	if m.historyIdx != -1 {
@@ -327,13 +325,13 @@ func TestPromptHistoryNavigation(t *testing.T) {
 	}
 
 	// 9. Press Up to browse, then Esc: should cancel and restore draft
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	m = updated.(*teaModel)
 	if m.historyIdx != 2 {
 		t.Fatalf("expected historyIdx 2, got %d", m.historyIdx)
 	}
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = updated.(*teaModel)
 	if m.historyIdx != -1 {
 		t.Fatalf("expected historyIdx -1 after Esc, got %d", m.historyIdx)
@@ -513,12 +511,12 @@ func TestPermissionPromptShowsKeyLegend(t *testing.T) {
 	ta := textarea.New()
 	m := &teaModel{
 		runner: NewRunner(&mockLLM{}, tmp, "test-model"), workingDir: tmp,
-		input: ta, viewport: viewport.New(80, 6), ready: true, width: 80,
+		input: ta, viewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(6)), ready: true, width: 80,
 		permissionChan: make(chan teaPermissionRequestMsg),
 	}
 	m.pendingPermission = &teaPermissionRequestMsg{ToolName: "write_file", Summary: "path=hello.txt"}
 
-	plain := StripANSI(m.View())
+	plain := StripANSI(m.render())
 	for _, want := range []string{"Permission Required", "write_file", "[y]", "[a]", "[n]", "esc"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("permission prompt is missing %q:\n%s", want, plain)
@@ -527,10 +525,10 @@ func TestPermissionPromptShowsKeyLegend(t *testing.T) {
 }
 
 func TestPermissionPromptEnterAndEscDeny(t *testing.T) {
-	for _, key := range []tea.KeyMsg{{Type: tea.KeyEnter}, {Type: tea.KeyEsc}} {
+	for _, key := range []tea.KeyPressMsg{{Code: tea.KeyEnter}, {Code: tea.KeyEscape}} {
 		ta := textarea.New()
 		m := &teaModel{
-			input: ta, viewport: viewport.New(80, 6), ready: true, width: 80,
+			input: ta, viewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(6)), ready: true, width: 80,
 			permissionChan: make(chan teaPermissionRequestMsg),
 		}
 		reply := make(chan permissionDecision, 1)
@@ -542,13 +540,13 @@ func TestPermissionPromptEnterAndEscDeny(t *testing.T) {
 		select {
 		case d := <-reply:
 			if d.Allow {
-				t.Fatalf("%v allowed the write; it must deny", key.Type)
+				t.Fatalf("%v allowed the write; it must deny", key)
 			}
 		default:
-			t.Fatalf("%v left the prompt unanswered -- the UI looks frozen", key.Type)
+			t.Fatalf("%v left the prompt unanswered -- the UI looks frozen", key)
 		}
 		if m.pendingPermission != nil || cmd == nil {
-			t.Fatalf("%v did not clear the prompt or resume the event loop", key.Type)
+			t.Fatalf("%v did not clear the prompt or resume the event loop", key)
 		}
 	}
 }
@@ -588,7 +586,7 @@ func TestFailedTurnIsReportedExactlyOnce(t *testing.T) {
 	m := &teaModel{
 		runner:     NewRunner(&failingLLM{err: errors.New("dial tcp 127.0.0.1:8003: connection refused")}, tmp, "test-model"),
 		workingDir: tmp, modelName: "test-model",
-		input: ta, viewport: viewport.New(80, 10), ready: true, width: 80,
+		input: ta, viewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(10)), ready: true, width: 80,
 		maxTurns: 3, commandTimeout: time.Minute,
 		permissionMode: PermissionFull,
 		permissionChan: make(chan teaPermissionRequestMsg),
@@ -617,7 +615,7 @@ func TestPreflightFailureStillReportsOnce(t *testing.T) {
 	m := &teaModel{
 		runner:     NewRunner(&failingLLM{err: errors.New("unused")}, tmp, "test-model"),
 		workingDir: string([]byte{0}), modelName: "test-model",
-		input: ta, viewport: viewport.New(80, 10), ready: true, width: 80,
+		input: ta, viewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(10)), ready: true, width: 80,
 		maxTurns: 3, commandTimeout: time.Minute,
 		permissionMode: PermissionFull,
 		permissionChan: make(chan teaPermissionRequestMsg),
@@ -651,7 +649,7 @@ func TestFrameSizeIsStableAcrossWidthsAndHeaderStates(t *testing.T) {
 
 	m := &teaModel{
 		runner: NewRunner(&mockLLM{}, tmp, "test-model"), workingDir: tmp,
-		modelName: "gemma-4-31b", input: ta, viewport: viewport.New(80, 10),
+		modelName: "gemma-4-31b", input: ta, viewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(10)),
 	}
 	m.appendHistory(strings.Repeat("history line\n", 40))
 
@@ -667,7 +665,7 @@ func TestFrameSizeIsStableAcrossWidthsAndHeaderStates(t *testing.T) {
 					m.mode = mode
 					m.input.SetValue(strings.Repeat("x", typed))
 
-					rows := strings.Split(m.View(), "\n")
+					rows := strings.Split(m.render(), "\n")
 					for i, row := range rows {
 						if w := VisualLen(StripANSI(row)); w > width {
 							t.Fatalf("width=%d row %d is %d columns wide; the terminal will wrap it and shift the frame",
@@ -722,17 +720,17 @@ func TestSkillsModalNavigatesAndCloses(t *testing.T) {
 		},
 	}
 	m.openSkillsModal()
-	plain := StripANSI(m.View())
+	plain := StripANSI(m.render())
 	if !strings.Contains(plain, "SKILLS · 2 available") || !strings.Contains(plain, "alpha") || !strings.Contains(plain, "beta") {
 		t.Fatalf("modal = %q", plain)
 	}
 
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	m = updated.(*teaModel)
 	if m.skillCursor != 1 {
 		t.Fatalf("skill cursor = %d", m.skillCursor)
 	}
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = updated.(*teaModel)
 	if m.skillsModal {
 		t.Fatal("Escape did not close skills modal")
@@ -750,9 +748,9 @@ func TestSkillsModalEnterStagesInvocation(t *testing.T) {
 		},
 	}
 	m.openSkillsModal()
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	m = updated.(*teaModel)
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated.(*teaModel)
 
 	if m.skillsModal {
@@ -771,7 +769,7 @@ func TestSkillsModalEnterWithNoSkills(t *testing.T) {
 	ta.Focus()
 	m := &teaModel{input: ta, ready: true, width: 80, height: 24}
 	m.openSkillsModal()
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated.(*teaModel)
 
 	if m.skillsModal {
@@ -801,7 +799,7 @@ func newBusyModel(t *testing.T, client LLMClient) *teaModel {
 	tmp := t.TempDir()
 	return &teaModel{
 		runner: NewRunner(client, tmp, "test-model"), workingDir: tmp, modelName: "test-model",
-		input: ta, viewport: viewport.New(80, 10), ready: true, width: 80,
+		input: ta, viewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(10)), ready: true, width: 80,
 		maxTurns: 2, commandTimeout: time.Minute,
 		permissionMode: PermissionFull,
 		permissionChan: make(chan teaPermissionRequestMsg),
@@ -846,7 +844,7 @@ func TestPasteInsertsTextInsteadOfSubmitting(t *testing.T) {
 	m := newBusyModel(t, &mockLLM{})
 	pasted := "line one\nline two\nline three"
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(pasted), Paste: true})
+	updated, cmd := m.Update(tea.PasteMsg{Content: pasted})
 	m = updated.(*teaModel)
 
 	if m.isExecuting || cmd != nil {
@@ -871,7 +869,7 @@ func TestInputBoxGrowsAndKeepsTypedTextVisible(t *testing.T) {
 	ta.Focus()
 	m := &teaModel{
 		runner: NewRunner(&mockLLM{}, tmp, "test-model"), workingDir: tmp,
-		modelName: "test-model", input: ta, viewport: viewport.New(width, 10),
+		modelName: "test-model", input: ta, viewport: viewport.New(viewport.WithWidth(width), viewport.WithHeight(10)),
 	}
 	m.appendHistory(strings.Repeat("history\n", 60))
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: height})
@@ -881,10 +879,10 @@ func TestInputBoxGrowsAndKeepsTypedTextVisible(t *testing.T) {
 	// Type through the real key path so the caret moves exactly as it does for
 	// a user; SetValue would leave the textarea's own scroll position behind.
 	for typed := 1; typed <= 900; typed++ {
-		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+		updated, _ = m.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
 		m = updated.(*teaModel)
 
-		view := m.View()
+		view := m.render()
 		rows := strings.Split(view, "\n")
 		if frame < 0 {
 			frame = len(rows)
@@ -909,9 +907,11 @@ func TestInputBoxGrowsAndKeepsTypedTextVisible(t *testing.T) {
 	}
 
 	// The caret must still be on screen at the cap -- that is the whole point.
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("END")})
-	m = updated.(*teaModel)
-	if !strings.Contains(StripANSI(m.View()), "END") {
+	for _, r := range "END" {
+		updated, _ = m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+		m = updated.(*teaModel)
+	}
+	if !strings.Contains(StripANSI(m.render()), "END") {
 		t.Fatal("the caret line scrolled out of the input box")
 	}
 }
@@ -976,7 +976,7 @@ func TestBackgroundProcessesInTUI(t *testing.T) {
 	m := &teaModel{
 		workingDir: t.TempDir(),
 		input:      ta,
-		viewport:   viewport.New(120, 10),
+		viewport:   viewport.New(viewport.WithWidth(120), viewport.WithHeight(10)),
 		ready:      true,
 		width:      120,
 		processMgr: pm,
@@ -1017,7 +1017,7 @@ func TestBackgroundProcessesInTUI(t *testing.T) {
 	}
 
 	// 4. Test Header badge in View()
-	view := m.View()
+	view := m.render()
 	if !strings.Contains(view, "2 servers") {
 		t.Fatalf("header missing '2 servers' badge: %s", view)
 	}
@@ -1038,7 +1038,7 @@ func TestCtrlBBackgroundsRunningShellCommand(t *testing.T) {
 	m := &teaModel{
 		workingDir: t.TempDir(),
 		input:      ta,
-		viewport:   viewport.New(120, 10),
+		viewport:   viewport.New(viewport.WithWidth(120), viewport.WithHeight(10)),
 		ready:      true,
 		width:      120,
 		processMgr: pm,
@@ -1071,7 +1071,7 @@ func TestCtrlBBackgroundsRunningShellCommand(t *testing.T) {
 	}
 
 	// Press Ctrl+B to background
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlB})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'b', Mod: tea.ModCtrl})
 	m = updated.(*teaModel)
 
 	if m.shellExecuting {

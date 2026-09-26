@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 )
 
 // suggestModel is a TUI model driven through the real Update loop.
@@ -15,7 +15,7 @@ func suggestModel(t *testing.T) *teaModel {
 	input := textarea.New()
 	input.Focus()
 	m := &teaModel{
-		input: input, viewport: viewport.New(80, 20),
+		input: input, viewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(20)),
 		width: 100, height: 40, ready: true,
 		historyIdx: -1, workingDir: t.TempDir(),
 		sessionStore: &SessionStore{Dir: t.TempDir()},
@@ -33,10 +33,10 @@ func send(m *teaModel, msg tea.KeyMsg) tea.Cmd {
 func typeInto(m *teaModel, text string) {
 	for _, r := range text {
 		if r == ' ' {
-			send(m, tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}})
+			send(m, tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
 			continue
 		}
-		send(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		send(m, tea.KeyPressMsg{Code: r, Text: string(rune(r))})
 	}
 }
 
@@ -66,16 +66,16 @@ func TestSuggestionsAppearAndNarrow(t *testing.T) {
 
 func TestSuggestionsShrinkTheViewport(t *testing.T) {
 	m := suggestModel(t)
-	before := m.viewport.Height
+	before := m.viewport.Height()
 	typeInto(m, "/")
-	if m.viewport.Height != before-(maxSuggestionRows+2) {
-		t.Fatalf("viewport %d -> %d, want a drop of %d", before, m.viewport.Height, maxSuggestionRows+2)
+	if m.viewport.Height() != before-(maxSuggestionRows+2) {
+		t.Fatalf("viewport %d -> %d, want a drop of %d", before, m.viewport.Height(), maxSuggestionRows+2)
 	}
-	if lines := strings.Count(m.View(), "\n") + 1; lines > m.height {
+	if lines := strings.Count(m.render(), "\n") + 1; lines > m.height {
 		t.Fatalf("frame is %d rows, terminal is %d", lines, m.height)
 	}
-	send(m, tea.KeyMsg{Type: tea.KeyEsc})
-	if m.viewport.Height != before {
+	send(m, tea.KeyPressMsg{Code: tea.KeyEscape})
+	if m.viewport.Height() != before {
 		t.Fatal("hiding the list should give the rows back")
 	}
 }
@@ -83,7 +83,7 @@ func TestSuggestionsShrinkTheViewport(t *testing.T) {
 func TestTabCompletesAndEnterIsSmart(t *testing.T) {
 	m := suggestModel(t)
 	typeInto(m, "/ren")
-	send(m, tea.KeyMsg{Type: tea.KeyTab})
+	send(m, tea.KeyPressMsg{Code: tea.KeyTab})
 	if got := m.input.Value(); got != "/rename " {
 		t.Fatalf("Tab gave %q", got)
 	}
@@ -93,14 +93,14 @@ func TestTabCompletesAndEnterIsSmart(t *testing.T) {
 
 	m = suggestModel(t)
 	typeInto(m, "/ren")
-	send(m, tea.KeyMsg{Type: tea.KeyEnter})
+	send(m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	if got := m.input.Value(); got != "/rename " {
 		t.Fatalf("Enter on a command needing an argument should complete it, got %q", got)
 	}
 
 	m = suggestModel(t)
 	typeInto(m, "/sess")
-	send(m, tea.KeyMsg{Type: tea.KeyEnter})
+	send(m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.sessionsModal == nil || m.input.Value() != "" {
 		t.Fatal("Enter on /sessions should run it and open the menu")
 	}
@@ -109,7 +109,7 @@ func TestTabCompletesAndEnterIsSmart(t *testing.T) {
 func TestDestructiveCommandsNeverRunFromTheList(t *testing.T) {
 	m := suggestModel(t)
 	typeInto(m, "/und")
-	send(m, tea.KeyMsg{Type: tea.KeyEnter})
+	send(m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	if got := m.input.Value(); got != "/undo" {
 		t.Fatalf("Enter should only fill in /undo, got %q", got)
 	}
@@ -121,7 +121,7 @@ func TestDestructiveCommandsNeverRunFromTheList(t *testing.T) {
 func TestExactCommandRunsAsTyped(t *testing.T) {
 	m := suggestModel(t)
 	typeInto(m, "/sessions")
-	send(m, tea.KeyMsg{Type: tea.KeyEnter})
+	send(m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.sessionsModal == nil {
 		t.Fatal("typing a full command then Enter should run it")
 	}
@@ -155,7 +155,7 @@ func TestArgumentSuggestions(t *testing.T) {
 		t.Fatalf("/resume should list sessions by title and insert the ID: %+v", m.suggest.items)
 	}
 	typeInto(m, "auth")
-	send(m, tea.KeyMsg{Type: tea.KeyTab})
+	send(m, tea.KeyPressMsg{Code: tea.KeyTab})
 	if got := m.input.Value(); got != "/resume "+session.ID {
 		t.Fatalf("Tab should insert the session ID, got %q", got)
 	}
@@ -164,11 +164,11 @@ func TestArgumentSuggestions(t *testing.T) {
 func TestEscDismissesUntilInputChanges(t *testing.T) {
 	m := suggestModel(t)
 	typeInto(m, "/se")
-	send(m, tea.KeyMsg{Type: tea.KeyEsc})
+	send(m, tea.KeyPressMsg{Code: tea.KeyEscape})
 	if len(m.suggest.items) != 0 {
 		t.Fatal("Esc should hide the list")
 	}
-	send(m, tea.KeyMsg{Type: tea.KeyDown}) // must not move a hidden list
+	send(m, tea.KeyPressMsg{Code: tea.KeyDown}) // must not move a hidden list
 	typeInto(m, "s")
 	if len(m.suggest.items) == 0 {
 		t.Fatal("typing again should bring the list back")
@@ -179,12 +179,12 @@ func TestArrowKeysMoveTheHighlightNotHistory(t *testing.T) {
 	m := suggestModel(t)
 	m.promptHistory = []string{"earlier prompt"}
 	typeInto(m, "/s")
-	send(m, tea.KeyMsg{Type: tea.KeyDown})
+	send(m, tea.KeyPressMsg{Code: tea.KeyDown})
 	if m.suggest.cursor != 1 || m.input.Value() != "/s" {
 		t.Fatalf("↓ should move the highlight (cursor %d, input %q)", m.suggest.cursor, m.input.Value())
 	}
-	send(m, tea.KeyMsg{Type: tea.KeyUp})
-	send(m, tea.KeyMsg{Type: tea.KeyUp})
+	send(m, tea.KeyPressMsg{Code: tea.KeyUp})
+	send(m, tea.KeyPressMsg{Code: tea.KeyUp})
 	if m.suggest.cursor != 0 || m.input.Value() != "/s" {
 		t.Fatal("↑ at the top should stay in the list, not recall history")
 	}
@@ -215,7 +215,7 @@ func TestNoSuggestionsWhenNotApplicable(t *testing.T) {
 
 func TestTabTogglesShellModeWhenNoList(t *testing.T) {
 	m := suggestModel(t)
-	send(m, tea.KeyMsg{Type: tea.KeyTab})
+	send(m, tea.KeyPressMsg{Code: tea.KeyTab})
 	if m.mode != modeShell {
 		t.Fatal("Tab on an empty input should still toggle Shell Mode")
 	}
