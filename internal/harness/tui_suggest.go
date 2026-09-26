@@ -226,7 +226,7 @@ func (m *teaModel) renderSuggestions() string {
 	if len(s.items) == 0 {
 		return ""
 	}
-	inner := m.frameWidth() - 4
+	inner := m.inputBoxWidth() - 2
 	if inner < 20 {
 		inner = 20
 	}
@@ -278,7 +278,7 @@ func (m *teaModel) renderSuggestions() string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(tuiColorBorder).
 		Padding(0, 1).
-		Width(m.frameWidth() - 2).
+		Width(m.inputBoxWidth()).
 		Render(strings.Join(lines, "\n"))
 }
 
