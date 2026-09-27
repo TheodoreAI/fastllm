@@ -456,6 +456,7 @@ type anthropicResponse struct {
 		InputTokens  int `json:"input_tokens"`
 		OutputTokens int `json:"output_tokens"`
 	} `json:"usage"`
+	StopReason string `json:"stop_reason"`
 }
 
 // Chat sends a single non-streaming completion request with the given
@@ -509,7 +510,10 @@ func (c *AnthropicClient) ChatWithUsage(ctx context.Context, model string, messa
 			calls = append(calls, call)
 		}
 	}
-	result := ChatResult{Message: Message{Role: "assistant", Content: text.String(), ToolCalls: calls}}
+	result := ChatResult{
+		Message:   Message{Role: "assistant", Content: text.String(), ToolCalls: calls},
+		Truncated: ar.StopReason == "max_tokens",
+	}
 	if ar.Usage.InputTokens > 0 || ar.Usage.OutputTokens > 0 {
 		result.Usage = Usage{
 			PromptTokens:     ar.Usage.InputTokens,

@@ -350,6 +350,10 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 
 	var taskFinished bool
 	var planBoundary bool
+	// truncatedInARow counts consecutive replies cut off at the output limit;
+	// partialAnswer holds the answer text those replies produced so far.
+	var truncatedInARow int
+	var partialAnswer string
 	// The budget the transcript must fit, net of the tool schemas every request
 	// also carries.
 	budget := requestBudget(r.compactionConfig(), tools)
@@ -448,14 +452,52 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 			Metrics: &turnMetrics,
 		}
 
+		if chatResult.Truncated {
+			truncatedInARow++
+		} else {
+			truncatedInARow = 0
+		}
+
+		// A reply cut off at the output limit with no tool call is not an
+		// answer, however little text it holds: often the whole budget went to
+		// reasoning. Ask the model to carry on; a second cut-off in a row ends
+		// the run with the reason rather than an empty "success".
+		if len(reply.ToolCalls) == 0 && chatResult.Truncated {
+			partialAnswer += reply.Content
+			result.History = append(result.History, turnRec)
+			emit(Event{Type: EventTurnComplete, Turn: turn, Metrics: &turnMetrics})
+			if truncatedInARow > 1 || turn == maxTurns {
+				result.Turns = turn
+				result.FinalResponse = partialAnswer
+				result.Error = fmt.Sprintf("stopped: the model hit its output limit (%d tokens) before answering; "+
+					"raise max_tokens for this model or lower /set think", compTokens)
+				break
+			}
+			emit(Event{Type: EventNotice, Turn: turn, Response: fmt.Sprintf(
+				"Turn %d was cut off at the output limit (%d tokens) before a tool call or answer; asking the model to continue.",
+				turn, compTokens)})
+			if reply.Content != "" {
+				messages = append(messages, llm.Message{Role: "assistant", Content: reply.Content})
+			}
+			messages = append(messages, llm.Message{Role: "user", Content: truncatedReplyPrompt})
+			continue
+		}
+		if chatResult.Truncated {
+			// The last tool call was likely cut mid-arguments; its error result
+			// tells the model, and this tells the user why.
+			emit(Event{Type: EventNotice, Turn: turn, Response: fmt.Sprintf(
+				"Turn %d was cut off at the output limit (%d tokens) while writing a tool call.", turn, compTokens)})
+		}
+
 		// If model produced no tool calls, it has finished with a textual answer.
 		if len(reply.ToolCalls) == 0 {
-			result.FinalResponse = reply.Content
+			answer := partialAnswer + reply.Content
+			result.FinalResponse = answer
 			result.Success = true
 			result.Turns = turn
-			turnRec.Response = reply.Content
+			turnRec.Response = answer
 			result.History = append(result.History, turnRec)
-			emit(Event{Type: EventTurnComplete, Turn: turn, Response: reply.Content, Metrics: &turnMetrics})
+			emit(Event{Type: EventTurnComplete, Turn: turn, Response: answer, Metrics: &turnMetrics})
 			taskFinished = true
 			break
 		}
@@ -551,6 +593,12 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 	emit(Event{Type: EventTaskFinished, Result: result, Error: result.Error})
 	return result, nil
 }
+
+// truncatedReplyPrompt follows a reply the output limit cut off before it
+// made a tool call or finished its answer. A user-role message, like the
+// turn-budget notice, so single-system-slot providers keep it in place.
+const truncatedReplyPrompt = "Your previous reply was cut off at the output token limit before you made a tool call or finished your answer. " +
+	"Continue from where you stopped: keep any further reasoning short, then make the next tool call or give your final answer."
 
 func (r *Runner) executeReadFile(fileReader *files.Reader, requestedPath string) string {
 	if strings.TrimSpace(requestedPath) == "" {

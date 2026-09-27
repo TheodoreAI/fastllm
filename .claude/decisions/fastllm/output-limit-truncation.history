@@ -1,0 +1,4 @@
+- decided_at: 2026-09-27T00:49:30+00:00
+  event: initial
+  value: Providers report llm.ChatResult.Truncated (OpenAI finish_reason length, Anthropic stop_reason max_tokens, Gemini MAX_TOKENS, Responses incomplete/max_output_tokens); the runner treats a truncated reply with no tool call as unfinished: notice + one user-role continuation prompt, partial text joined into the final answer, second consecutive cut-off (or last turn) ends with a 'stopped: ... output limit' error.
+  reason: A thinking model (Ornith 1.5 35B) spent its whole 8192-token max_tokens on reasoning; with finish_reason ignored the run ended as an empty success ('Completed in 5 turns'), which looked like a stall.

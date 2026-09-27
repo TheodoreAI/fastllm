@@ -323,6 +323,10 @@ type ChatResult struct {
 	Message  Message
 	Usage    Usage
 	HasUsage bool
+	// Truncated reports that the provider stopped the reply at its output
+	// token limit (finish_reason "length" and the equivalents), so Message
+	// may be a partial answer, a partial tool call, or empty.
+	Truncated bool
 }
 
 // RateLimit is fastllm's provider-agnostic view of the remaining-capacity
@@ -997,7 +1001,8 @@ func (c *Client) StreamChat(ctx context.Context, model string, messages []Messag
 
 type chatResponse struct {
 	Choices []struct {
-		Message Message `json:"message"`
+		Message      Message `json:"message"`
+		FinishReason string  `json:"finish_reason"`
 	} `json:"choices"`
 	// Usage is what the server actually counted. Without it the caller can
 	// only estimate from the visible reply, which badly undercounts a
@@ -1083,7 +1088,7 @@ func (c *Client) ChatWithUsage(ctx context.Context, model string, messages []Mes
 			reply.Content = ""
 		}
 	}
-	result := ChatResult{Message: reply}
+	result := ChatResult{Message: reply, Truncated: cr.Choices[0].FinishReason == "length"}
 	if cr.Usage != nil && (cr.Usage.PromptTokens > 0 || cr.Usage.CompletionTokens > 0) {
 		result.Usage = Usage{
 			PromptTokens:     cr.Usage.PromptTokens,
