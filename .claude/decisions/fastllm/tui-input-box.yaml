@@ -1,0 +1,3 @@
+value: textarea DynamicHeight (MinHeight 2, MaxHeight 10) built by newChatInput(); virtual cursor off, real terminal cursor placed in View from textarea.Cursor() plus the input box origin recorded during render; blinking bar in the theme accent
+reason: Replaces hand-counted wrap rows (inputDisplayRows) that disagreed with the textarea's own word wrap; real cursor lines up IME input. MaxHeight only gates the Enter-key newline, which fastllm intercepts, so pastes are not capped at 10 lines.
+decided_at: 2026-09-27T00:57:31+00:00

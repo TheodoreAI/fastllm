@@ -11,8 +11,8 @@ import (
 	"fastllm/internal/llm"
 	"fastllm/internal/media"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 type fileItem struct {
@@ -111,19 +111,19 @@ func (p *filesPicker) loadEntries() {
 	p.entries = append(p.entries, files...)
 }
 
-func (m *teaModel) handleFilesModalKey(msg tea.KeyMsg) tea.Cmd {
+func (m *teaModel) handleFilesModalKey(msg tea.KeyPressMsg) tea.Cmd {
 	p := m.filesModal
 	if p == nil {
 		return nil
 	}
 
 	if p.creatingDir {
-		switch msg.Type {
-		case tea.KeyEsc:
+		switch msg.String() {
+		case "esc":
 			p.creatingDir = false
 			p.newDirInput = ""
 			return nil
-		case tea.KeyEnter:
+		case "enter":
 			name := strings.TrimSpace(p.newDirInput)
 			if name != "" {
 				target := filepath.Join(p.currentDir, name)
@@ -137,34 +137,33 @@ func (m *teaModel) handleFilesModalKey(msg tea.KeyMsg) tea.Cmd {
 			p.creatingDir = false
 			p.newDirInput = ""
 			return nil
-		case tea.KeyBackspace:
+		case "backspace":
 			if len(p.newDirInput) > 0 {
 				p.newDirInput = p.newDirInput[:len(p.newDirInput)-1]
 			}
 			return nil
-		case tea.KeyRunes:
-			p.newDirInput += string(msg.Runes)
-			return nil
+		default:
+			p.newDirInput += msg.Text
 		}
 		return nil
 	}
 
-	switch msg.Type {
-	case tea.KeyEsc, tea.KeyCtrlC:
+	switch msg.String() {
+	case "esc", "ctrl+c":
 		m.closeFilesModal()
 		return nil
 
-	case tea.KeyUp, tea.KeyCtrlP:
+	case "up", "ctrl+p":
 		if p.cursor > 0 {
 			p.cursor--
 		}
 
-	case tea.KeyDown, tea.KeyCtrlN:
+	case "down", "ctrl+n":
 		if p.cursor < len(p.entries)-1 {
 			p.cursor++
 		}
 
-	case tea.KeyEnter:
+	case "enter":
 		if len(p.entries) == 0 {
 			return nil
 		}
@@ -177,25 +176,22 @@ func (m *teaModel) handleFilesModalKey(msg tea.KeyMsg) tea.Cmd {
 		// Attaching file to chat prompt
 		return m.attachFileAndCloseModal(item.path)
 
-	case tea.KeyRunes:
-		switch msg.String() {
-		case "q":
+	case "q":
+		m.closeFilesModal()
+		return nil
+	case "a":
+		if len(p.entries) > 0 && !p.entries[p.cursor].isDir {
+			return m.attachFileAndCloseModal(p.entries[p.cursor].path)
+		}
+	case "n":
+		p.creatingDir = true
+		p.newDirInput = ""
+		return nil
+	case "e":
+		if len(p.entries) > 0 && !p.entries[p.cursor].isDir {
+			targetPath := p.entries[p.cursor].path
 			m.closeFilesModal()
-			return nil
-		case "a":
-			if len(p.entries) > 0 && !p.entries[p.cursor].isDir {
-				return m.attachFileAndCloseModal(p.entries[p.cursor].path)
-			}
-		case "n":
-			p.creatingDir = true
-			p.newDirInput = ""
-			return nil
-		case "e":
-			if len(p.entries) > 0 && !p.entries[p.cursor].isDir {
-				targetPath := p.entries[p.cursor].path
-				m.closeFilesModal()
-				return m.handleShellSubmit("edit " + targetPath)
-			}
+			return m.handleShellSubmit("edit " + targetPath)
 		}
 	}
 	return nil
@@ -334,7 +330,7 @@ func (m *teaModel) renderFilesModal() string {
 		Width(modalWidth).
 		Render(sb.String())
 
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, contentBox)
+	return contentBox
 }
 
 func padLeft(s string, width int) string {

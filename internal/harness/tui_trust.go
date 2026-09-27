@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"fastllm/internal/config"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // untrustedConfigNotice describes a project config that is being ignored

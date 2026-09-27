@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 )
 
 // Only whole lines may be rendered: FormatMarkdownWidth tracks code-fence state
@@ -169,7 +169,7 @@ func newStreamTestModel() *teaModel {
 	ta := textarea.New()
 	return &teaModel{
 		input:    ta,
-		viewport: viewport.New(80, 10),
+		viewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(10)),
 		ready:    true,
 		width:    80,
 	}
@@ -235,7 +235,7 @@ func TestFrameNeverFillsLastColumn(t *testing.T) {
 		for _, typed := range []string{"", "hello", strings.Repeat("z", 200)} {
 			m.input.SetValue(typed)
 			m.syncInputHeight()
-			lines := strings.Split(m.View(), "\n")
+			lines := strings.Split(m.render(), "\n")
 			frameHeights[len(lines)] = true
 			for i, line := range lines {
 				if w := VisualLen(line); w >= width {

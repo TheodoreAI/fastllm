@@ -4,15 +4,15 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/viewport"
+	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/viewport"
 )
 
 func permissionTestModel(t *testing.T) *teaModel {
 	t.Helper()
 	return &teaModel{
 		workingDir: t.TempDir(), permissionMode: PermissionAgent,
-		input: textarea.New(), viewport: viewport.New(80, 6),
+		input: textarea.New(), viewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(6)),
 		ready: true, width: 80,
 	}
 }

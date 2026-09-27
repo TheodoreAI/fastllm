@@ -11,7 +11,7 @@ import (
 	"fastllm/internal/files"
 	"fastllm/internal/llm"
 
-	"github.com/charmbracelet/bubbles/textarea"
+	"charm.land/bubbles/v2/textarea"
 )
 
 func createTestPDF(t *testing.T, dir, filename, textContent string) string {

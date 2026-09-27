@@ -186,7 +186,7 @@ var listFilesTool = llm.Tool{
 	Type: "function",
 	Function: llm.ToolFunction{
 		Name:        "list_files",
-		Description: "List files in the project directory recursively. Returns relative paths.",
+		Description: "List files in the project directory recursively. Returns relative paths. Skips what .gitignore and .fastllmignore exclude and dependency, cache and build folders (node_modules, .venv, __pycache__, target, ...); read_file can still open such a file by path.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -203,7 +203,7 @@ var searchFilesTool = llm.Tool{
 	Type: "function",
 	Function: llm.ToolFunction{
 		Name:        "search_files",
-		Description: "Search file contents in the project directory using a regular expression (Go RE2 syntax). Returns matching lines formatted as 'path:line: text'.",
+		Description: "Search file contents in the project directory using a regular expression (Go RE2 syntax). Returns matching lines formatted as 'path:line: text'. Covers the files list_files shows, skipping binary files and files over 1 MB.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -225,7 +225,7 @@ var globFilesTool = llm.Tool{
 	Type: "function",
 	Function: llm.ToolFunction{
 		Name:        "glob_files",
-		Description: "Find project files by glob pattern. Supports *, ?, character classes, and ** across directories.",
+		Description: "Find project files by glob pattern. Supports *, ?, character classes, and ** across directories. Covers the files list_files shows.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

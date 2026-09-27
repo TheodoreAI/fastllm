@@ -3,8 +3,8 @@ package harness
 import (
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // maxSuggestionRows caps the dropdown; longer lists scroll around the cursor.
@@ -150,41 +150,40 @@ func (m *teaModel) setInputLine(line string) {
 
 // handleSuggestKey handles the keys the dropdown owns while it is shown. It
 // reports false for everything else so the input behaves as it always has.
-func (m *teaModel) handleSuggestKey(msg tea.KeyMsg) (bool, tea.Cmd) {
+func (m *teaModel) handleSuggestKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	s := &m.suggest
 	if len(s.items) == 0 {
 		return false, nil
 	}
 	item := s.items[s.cursor]
-	switch msg.Type {
-	case tea.KeyUp:
+	// Modified chords (alt+enter, shift+tab, ...) have their own strings, so
+	// they fall through to the input untouched.
+	switch msg.String() {
+	case "up":
 		if s.cursor > 0 {
 			s.cursor--
 		}
 		return true, nil
-	case tea.KeyDown:
+	case "down":
 		if s.cursor < len(s.items)-1 {
 			s.cursor++
 		}
 		return true, nil
-	case tea.KeyEsc:
+	case "esc":
 		if m.isExecuting || m.shellExecuting {
 			return false, nil // Esc cancels the running turn first
 		}
 		s.dismissedFor = m.input.Value()
 		s.value = "" // force the next refresh to apply the dismissal
 		return true, nil
-	case tea.KeyTab:
+	case "tab":
 		line := m.completedLine(item)
 		if m.takesArguments(line, item) {
 			line += " "
 		}
 		m.setInputLine(line)
 		return true, nil
-	case tea.KeyEnter:
-		if msg.Alt {
-			return false, nil
-		}
+	case "enter":
 		value := strings.TrimSpace(m.input.Value())
 		// A command typed out in full runs exactly as it always did.
 		if !strings.Contains(value, " ") {

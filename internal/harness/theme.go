@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/muesli/termenv"
 )
 
@@ -30,7 +30,7 @@ type Theme struct {
 	Ok      string // success, diff additions
 	Warn    string // warnings, shell mode
 	Error   string // errors, diff deletions
-	DarkBg  string // modal backdrop
+	Bg      string // terminal background, painted behind everything
 	CardBg  string // pills, cards, status bar
 	Track   string // gauge track
 	BrandFg string // text on the brand pill
@@ -38,15 +38,22 @@ type Theme struct {
 	// ANSI16 prints text with the terminal's own 16 colours instead of the
 	// palette, so it follows whatever scheme the terminal is set to.
 	ANSI16 bool
+	// Light marks a palette meant for a light terminal background.
+	Light bool
 }
 
-const defaultThemeName = "nord"
+const (
+	defaultThemeName = "nord"
+	// defaultLightThemeName replaces the default when the terminal reports a
+	// light background and the user has not chosen a theme.
+	defaultLightThemeName = "github-light"
+)
 
 var zincPalette = Theme{
 	Muted: "#71717A", Border: "#27272A", Frame: "#52525B", Text: "#D4D4D8", Value: "#FAFAFA",
 	Accent: "#06B6D4", Accent2: "#38BDF8", Purple: "#A855F7",
 	Ok: "#10B981", Warn: "#F59E0B", Error: "#EF4444",
-	DarkBg: "#09090B", CardBg: "#18181B", Track: "#3F3F46", BrandFg: "#000000",
+	Bg: "#09090B", CardBg: "#18181B", Track: "#3F3F46", BrandFg: "#000000",
 }
 
 // builtinThemes is in picker order.
@@ -56,7 +63,7 @@ var builtinThemes = []Theme{
 		Muted: "#616E88", Border: "#4C566A", Frame: "#4C566A", Text: "#D8DEE9", Value: "#ECEFF4",
 		Accent: "#88C0D0", Accent2: "#81A1C1", Purple: "#B48EAD",
 		Ok: "#A3BE8C", Warn: "#EBCB8B", Error: "#BF616A",
-		DarkBg: "#242933", CardBg: "#2E3440", Track: "#434C5E", BrandFg: "#2E3440",
+		Bg: "#242933", CardBg: "#2E3440", Track: "#434C5E", BrandFg: "#2E3440",
 	},
 	withName(zincPalette, "zinc", "The original zinc and cyan palette"),
 	func() Theme {
@@ -69,70 +76,91 @@ var builtinThemes = []Theme{
 		Muted: "#565F89", Border: "#3B4261", Frame: "#3B4261", Text: "#A9B1D6", Value: "#C0CAF5",
 		Accent: "#7AA2F7", Accent2: "#BB9AF7", Purple: "#9D7CD8",
 		Ok: "#9ECE6A", Warn: "#E0AF68", Error: "#F7768E",
-		DarkBg: "#16161E", CardBg: "#1A1B26", Track: "#292E42", BrandFg: "#1A1B26",
+		Bg: "#16161E", CardBg: "#1A1B26", Track: "#292E42", BrandFg: "#1A1B26",
 	},
 	{
 		Name: "catppuccin", Description: "Mocha pastels, mauve and pink",
 		Muted: "#7F849C", Border: "#45475A", Frame: "#45475A", Text: "#BAC2DE", Value: "#CDD6F4",
 		Accent: "#CBA6F7", Accent2: "#F5C2E7", Purple: "#B4BEFE",
 		Ok: "#A6E3A1", Warn: "#F9E2AF", Error: "#F38BA8",
-		DarkBg: "#11111B", CardBg: "#1E1E2E", Track: "#313244", BrandFg: "#1E1E2E",
+		Bg: "#11111B", CardBg: "#1E1E2E", Track: "#313244", BrandFg: "#1E1E2E",
 	},
 	{
 		Name: "gruvbox", Description: "Warm retro earth tones",
 		Muted: "#928374", Border: "#504945", Frame: "#504945", Text: "#D5C4A1", Value: "#EBDBB2",
 		Accent: "#FE8019", Accent2: "#83A598", Purple: "#D3869B",
 		Ok: "#B8BB26", Warn: "#FABD2F", Error: "#FB4934",
-		DarkBg: "#1D2021", CardBg: "#282828", Track: "#3C3836", BrandFg: "#282828",
+		Bg: "#1D2021", CardBg: "#282828", Track: "#3C3836", BrandFg: "#282828",
 	},
 	{
 		Name: "dracula", Description: "Iconic high-contrast vampire dark palette",
 		Muted: "#6272A4", Border: "#44475A", Frame: "#44475A", Text: "#F8F8F2", Value: "#FFFFFF",
 		Accent: "#BD93F9", Accent2: "#FF79C6", Purple: "#BD93F9",
 		Ok: "#50FA7B", Warn: "#F1FA8C", Error: "#FF5555",
-		DarkBg: "#1E1F29", CardBg: "#282A36", Track: "#44475A", BrandFg: "#282A36",
+		Bg: "#1E1F29", CardBg: "#282A36", Track: "#44475A", BrandFg: "#282A36",
 	},
 	{
 		Name: "solarized-dark", Description: "Precision teal and blue contrast palette",
 		Muted: "#657B83", Border: "#073642", Frame: "#586E75", Text: "#839496", Value: "#93A1A1",
 		Accent: "#268BD2", Accent2: "#2AA198", Purple: "#6C71C4",
 		Ok: "#859900", Warn: "#B58900", Error: "#DC322F",
-		DarkBg: "#00212B", CardBg: "#002B36", Track: "#073642", BrandFg: "#002B36",
+		Bg: "#00212B", CardBg: "#002B36", Track: "#073642", BrandFg: "#002B36",
 	},
 	{
 		Name: "monokai", Description: "Iconic vibrant code editor palette",
 		Muted: "#75715E", Border: "#3E3D32", Frame: "#49483E", Text: "#F8F8F2", Value: "#FFFFFF",
 		Accent: "#66D9EF", Accent2: "#FD971F", Purple: "#AE81FF",
 		Ok: "#A6E22E", Warn: "#E6DB74", Error: "#F92672",
-		DarkBg: "#1E1F1C", CardBg: "#272822", Track: "#3E3D32", BrandFg: "#272822",
+		Bg: "#1E1F1C", CardBg: "#272822", Track: "#3E3D32", BrandFg: "#272822",
 	},
 	{
 		Name: "rose-pine", Description: "Minimalist warm dark aesthetic with pine and rose",
 		Muted: "#6E6A86", Border: "#26233A", Frame: "#403D52", Text: "#E0DEF4", Value: "#F0EEF8",
 		Accent: "#EBBCBA", Accent2: "#31748F", Purple: "#C4A7E7",
 		Ok: "#9CCFD8", Warn: "#F6C177", Error: "#EB6F92",
-		DarkBg: "#14121E", CardBg: "#191724", Track: "#26233A", BrandFg: "#191724",
+		Bg: "#14121E", CardBg: "#191724", Track: "#26233A", BrandFg: "#191724",
 	},
 	{
 		Name: "one-dark", Description: "Atom and VS Code balanced slate and pastel palette",
 		Muted: "#5C6370", Border: "#3E4451", Frame: "#4B5263", Text: "#ABB2BF", Value: "#DCDFE4",
 		Accent: "#61AFEF", Accent2: "#56B6C2", Purple: "#C678DD",
 		Ok: "#98C379", Warn: "#E5C07B", Error: "#E06C75",
-		DarkBg: "#1E2227", CardBg: "#282C34", Track: "#3E4451", BrandFg: "#282C34",
+		Bg: "#1E2227", CardBg: "#282C34", Track: "#3E4451", BrandFg: "#282C34",
 	},
 	{
 		Name: "github-dark", Description: "GitHub dark mode with sleek borders and blue accents",
 		Muted: "#8B949E", Border: "#21262D", Frame: "#30363D", Text: "#C9D1D9", Value: "#F0F6FC",
 		Accent: "#58A6FF", Accent2: "#79C0FF", Purple: "#BC8CFF",
 		Ok: "#3FB950", Warn: "#D29922", Error: "#F85149",
-		DarkBg: "#010409", CardBg: "#0D1117", Track: "#21262D", BrandFg: "#0D1117",
+		Bg: "#010409", CardBg: "#0D1117", Track: "#21262D", BrandFg: "#0D1117",
 	},
 	{
 		Name: "synthwave", Description: "80s cyberpunk neon pink, cyan and electric glow",
 		Muted: "#7B5EA7", Border: "#341C5B", Frame: "#502888", Text: "#E2E8F0", Value: "#FFFFFF",
 		Accent: "#FF007F", Accent2: "#00F0FF", Purple: "#8B00FF",
 		Ok: "#05FFA1", Warn: "#FFE600", Error: "#FF3366",
-		DarkBg: "#140B24", CardBg: "#1A102F", Track: "#341C5B", BrandFg: "#1A102F",
+		Bg: "#140B24", CardBg: "#1A102F", Track: "#341C5B", BrandFg: "#1A102F",
+	},
+	{
+		Name: "github-light", Description: "GitHub light mode, for light terminals", Light: true,
+		Muted: "#6E7781", Border: "#D0D7DE", Frame: "#D0D7DE", Text: "#24292F", Value: "#1F2328",
+		Accent: "#0969DA", Accent2: "#1B7C83", Purple: "#8250DF",
+		Ok: "#1A7F37", Warn: "#9A6700", Error: "#CF222E",
+		Bg: "#F6F8FA", CardBg: "#EAEEF2", Track: "#D0D7DE", BrandFg: "#FFFFFF",
+	},
+	{
+		Name: "catppuccin-latte", Description: "Latte pastels, for light terminals", Light: true,
+		Muted: "#8C8FA1", Border: "#BCC0CC", Frame: "#BCC0CC", Text: "#5C5F77", Value: "#4C4F69",
+		Accent: "#8839EF", Accent2: "#EA76CB", Purple: "#7287FD",
+		Ok: "#40A02B", Warn: "#DF8E1D", Error: "#D20F39",
+		Bg: "#DCE0E8", CardBg: "#E6E9EF", Track: "#CCD0DA", BrandFg: "#EFF1F5",
+	},
+	{
+		Name: "solarized-light", Description: "Solarized on its cream base, for light terminals", Light: true,
+		Muted: "#93A1A1", Border: "#93A1A1", Frame: "#93A1A1", Text: "#657B83", Value: "#586E75",
+		Accent: "#268BD2", Accent2: "#2AA198", Purple: "#6C71C4",
+		Ok: "#859900", Warn: "#B58900", Error: "#DC322F",
+		Bg: "#FDF6E3", CardBg: "#EEE8D5", Track: "#E4DDC8", BrandFg: "#FDF6E3",
 	},
 }
 
@@ -169,8 +197,11 @@ var ansi16Codes = [roleCount]string{
 var (
 	currentTheme Theme
 	themeSeqs    [roleCount]string
+	// themeFromPreference is set when the active theme came from the saved
+	// preference, which the terminal's background never overrides.
+	themeFromPreference bool
 	// colorProfile reports what the terminal can display; tests override it.
-	colorProfile = lipgloss.ColorProfile
+	colorProfile = termenv.ColorProfile
 )
 
 func init() {
@@ -212,13 +243,17 @@ func ApplyTheme(name string) error {
 	tuiColorRed = lipgloss.Color(t.Error)
 	tuiColorPurple = lipgloss.Color(t.Purple)
 	tuiColorMuted = lipgloss.Color(t.Muted)
-	tuiColorDarkBg = lipgloss.Color(t.DarkBg)
+	tuiColorBg = lipgloss.Color(t.Bg)
 	tuiColorCardBg = lipgloss.Color(t.CardBg)
 	tuiColorBorder = lipgloss.Color(t.Border)
 	tuiColorTrack = lipgloss.Color(t.Track)
 	tuiColorWhite = lipgloss.Color(t.Value)
 	tuiColorBrandFg = lipgloss.Color(t.BrandFg)
 	buildStyles()
+	diffBg = darkDiffBackgrounds
+	if t.Light {
+		diffBg = lightDiffBackgrounds
+	}
 
 	hexes := [roleCount]string{
 		roleMuted: t.Muted, roleFrame: t.Frame, roleText: t.Text, roleValue: t.Value,
@@ -260,12 +295,14 @@ var preferencesPath = func() string {
 // when none is saved or the saved name is unknown.
 func LoadThemePreference() {
 	name := defaultThemeName
+	themeFromPreference = false
 	if path := preferencesPath(); path != "" {
 		if data, err := os.ReadFile(path); err == nil {
 			var prefs themePreferences
 			if json.Unmarshal(data, &prefs) == nil {
 				if _, ok := FindTheme(prefs.Theme); ok {
 					name = prefs.Theme
+					themeFromPreference = true
 				}
 			}
 		}

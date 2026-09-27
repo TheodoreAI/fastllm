@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // themePicker is the state of the /theme menu. Moving the cursor applies the
@@ -41,36 +41,24 @@ func (m *teaModel) previewThemeAt(cursor int) {
 	_ = ApplyTheme(builtinThemes[cursor].Name)
 }
 
-func (m *teaModel) handleThemeModalKey(msg tea.KeyMsg) tea.Cmd {
+func (m *teaModel) handleThemeModalKey(msg tea.KeyPressMsg) tea.Cmd {
 	p := m.themeModal
-	switch msg.Type {
-	case tea.KeyEsc, tea.KeyCtrlC:
+	switch msg.String() {
+	case "esc", "ctrl+c", "q", "Q":
 		_ = ApplyTheme(p.original)
 		m.closeThemeModal()
-	case tea.KeyEnter:
+	case "enter":
 		name := builtinThemes[p.cursor].Name
 		m.closeThemeModal()
 		return m.commitTheme(name)
-	case tea.KeyUp:
+	case "up", "k":
 		m.previewThemeAt(p.cursor - 1)
-	case tea.KeyDown:
+	case "down", "j":
 		m.previewThemeAt(p.cursor + 1)
-	case tea.KeyHome:
+	case "home":
 		m.previewThemeAt(0)
-	case tea.KeyEnd:
+	case "end":
 		m.previewThemeAt(len(builtinThemes) - 1)
-	case tea.KeyRunes:
-		if len(msg.Runes) == 1 {
-			switch msg.Runes[0] {
-			case 'q', 'Q':
-				_ = ApplyTheme(p.original)
-				m.closeThemeModal()
-			case 'j':
-				m.previewThemeAt(p.cursor + 1)
-			case 'k':
-				m.previewThemeAt(p.cursor - 1)
-			}
-		}
 	}
 	return nil
 }
@@ -190,8 +178,7 @@ func (m *teaModel) renderThemeModal() string {
 		Padding(0, 1).
 		Width(contentWidth).
 		Render(strings.Join(lines, "\n"))
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box,
-		lipgloss.WithWhitespaceBackground(tuiColorDarkBg))
+	return box
 }
 
 // themeSwatches previews a theme's main colours as blocks. They are drawn in

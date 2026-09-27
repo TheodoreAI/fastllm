@@ -74,6 +74,24 @@ func ListFiles(ctx context.Context, root string) ([]string, error) {
 	return splitLines(out), nil
 }
 
+// ListTrackedAndUntracked returns the same files as ListFiles, split into
+// those git tracks and those it does not track but does not ignore either.
+func ListTrackedAndUntracked(ctx context.Context, root string) (tracked, untracked []string, err error) {
+	if !IsRepo(ctx, root) {
+		return nil, nil, ErrNotARepo
+	}
+	out, err := run(ctx, root, "ls-files", "--cached")
+	if err != nil {
+		return nil, nil, err
+	}
+	tracked = splitLines(out)
+	out, err = run(ctx, root, "ls-files", "--others", "--exclude-standard")
+	if err != nil {
+		return nil, nil, err
+	}
+	return tracked, splitLines(out), nil
+}
+
 // FileStatus is one entry from `git status`.
 type FileStatus struct {
 	Path     string `json:"path"`

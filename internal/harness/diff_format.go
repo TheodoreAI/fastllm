@@ -252,12 +252,26 @@ func renderWordSpans(spans []WordSpan, lang string, isAddition bool) string {
 
 // Background / Style Helpers for VS Code diff appearance
 
-const (
-	// 24-bit TrueColor ANSI background escape codes for dark terminals
-	bgDarkGreen = "\033[48;2;20;50;30m"
-	bgDarkRed   = "\033[48;2;55;25;25m"
-	bgWordGreen = "\033[48;2;35;95;50m\033[1m"
-	bgWordRed   = "\033[48;2;110;35;35m\033[1m"
+// diffBackgrounds are the 24-bit backgrounds behind changed lines and the
+// changed words within them. ApplyTheme picks the set matching the theme.
+type diffBackgrounds struct {
+	lineAdd, lineDel, wordAdd, wordDel string
+}
+
+var (
+	darkDiffBackgrounds = diffBackgrounds{
+		lineAdd: "\033[48;2;20;50;30m",
+		lineDel: "\033[48;2;55;25;25m",
+		wordAdd: "\033[48;2;35;95;50m\033[1m",
+		wordDel: "\033[48;2;110;35;35m\033[1m",
+	}
+	lightDiffBackgrounds = diffBackgrounds{
+		lineAdd: "\033[48;2;218;251;225m",
+		lineDel: "\033[48;2;255;235;233m",
+		wordAdd: "\033[48;2;172;238;187m\033[1m",
+		wordDel: "\033[48;2;255;206;203m\033[1m",
+	}
+	diffBg = darkDiffBackgrounds
 )
 
 func styleAddedLine(text string) string {
@@ -266,7 +280,7 @@ func styleAddedLine(text string) string {
 	}
 	// In TrueColor terminals, wrap with subtle dark green background tint
 	// On terminals with restricted colors, preserve syntax text with a green tint or bold
-	return bgDarkGreen + text + ansiReset
+	return diffBg.lineAdd + text + ansiReset
 }
 
 func styleDeletedLine(text string) string {
@@ -274,19 +288,19 @@ func styleDeletedLine(text string) string {
 		return ""
 	}
 	// In TrueColor terminals, wrap with subtle dark red background tint
-	return bgDarkRed + text + ansiReset
+	return diffBg.lineDel + text + ansiReset
 }
 
 func styleAddedWord(text string) string {
 	if text == "" {
 		return ""
 	}
-	return bgWordGreen + text + ansiReset
+	return diffBg.wordAdd + text + ansiReset
 }
 
 func styleDeletedWord(text string) string {
 	if text == "" {
 		return ""
 	}
-	return bgWordRed + text + ansiReset
+	return diffBg.wordDel + text + ansiReset
 }

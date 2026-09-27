@@ -6,13 +6,14 @@ import (
 	"fastllm/internal/llm"
 	"fmt"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 )
 
 func TestSessionChangesTalliesSuccessfulFileTools(t *testing.T) {
@@ -82,7 +83,7 @@ func TestChangesColumnKeepsFrameWithinTerminal(t *testing.T) {
 	ta.ShowLineNumbers = false
 	m := &teaModel{
 		runner: NewRunner(&mockLLM{}, tmp, "test-model"), workingDir: tmp,
-		modelName: "test-model", input: ta, viewport: viewport.New(80, 10),
+		modelName: "test-model", input: ta, viewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(10)),
 	}
 	m.appendHistory(strings.Repeat("history line that is fairly long so it fills the conversation width\n", 40))
 	m.changes.Record(tmp, "write_file", `{"path":"internal/harness/tui_changes.go","content":"a\nb"}`, "Successfully wrote 3 bytes.")
@@ -90,7 +91,7 @@ func TestChangesColumnKeepsFrameWithinTerminal(t *testing.T) {
 	for _, width := range []int{80, 99, 100, 101, 120, 200} {
 		updated, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: height})
 		m = updated.(*teaModel)
-		view := m.View()
+		view := m.render()
 		rows := strings.Split(view, "\n")
 		if len(rows) > height {
 			t.Fatalf("width=%d frame is %d rows in a %d-row terminal", width, len(rows), height)
@@ -184,9 +185,10 @@ func TestSessionChangesCleanAndSynced(t *testing.T) {
 	}
 }
 
-func TestSessionChangesFileAtRow(t *testing.T) {
+// fileAt must name the file each row draws, and nothing for header rows.
+func TestSessionChangesRowsMapFiles(t *testing.T) {
 	var c sessionChanges
-	status := gitrepo.RepoStatus{
+	c.UpdateFromGit(gitrepo.RepoStatus{
 		IsRepo:   true,
 		Branch:   "main",
 		Upstream: "origin/main",
@@ -195,44 +197,64 @@ func TestSessionChangesFileAtRow(t *testing.T) {
 			{Path: "file2.go", Staged: "M", Added: 10, Removed: 2},
 			{Path: "file3.go", Unstaged: "?", Added: 20, Removed: 0},
 		},
-	}
-	c.UpdateFromGit(status)
+	})
 
+	rows, fileAt := c.Rows(34, 20)
+	if len(rows) != len(fileAt) {
+		t.Fatalf("rows and fileAt differ in length: %d vs %d", len(rows), len(fileAt))
+	}
 	hdr := c.HeaderRows()
-	if hdr < 2 {
-		t.Fatalf("expected header rows >= 2, got %d", hdr)
+	for r := 0; r < hdr; r++ {
+		if fileAt[r] != -1 {
+			t.Fatalf("header row %d maps to file %d", r, fileAt[r])
+		}
+	}
+	for i, want := range []string{"file1.go", "file2.go", "file3.go"} {
+		row := hdr + i
+		if fileAt[row] != i || !strings.Contains(StripANSI(rows[row]), want) {
+			t.Fatalf("row %d = %q (file %d); want %s as file %d", row, StripANSI(rows[row]), fileAt[row], want, i)
+		}
+	}
+}
+
+// Files in subdirectories are grouped under their directory, and each file
+// row still maps to its own index. A "… N more" row is never a file.
+func TestSessionChangesGroupsByDirectory(t *testing.T) {
+	var c sessionChanges
+	c.files = []fileChange{
+		{Path: "internal/harness/tui_tea.go", Added: 3, Status: "M"},
+		{Path: "cmd/main.go", Added: 1, Status: "M"},
+		{Path: "internal/harness/theme.go", Added: 2, Status: "M"},
 	}
 
-	// Click in header row should not resolve to a file
-	for r := 0; r < hdr; r++ {
-		_, _, ok := c.FileAtRow(r)
-		if ok {
-			t.Fatalf("row %d in header unexpectedly resolved to file", r)
+	rows, fileAt := c.Rows(34, 20)
+	plain := make([]string, len(rows))
+	for i, r := range rows {
+		plain[i] = StripANSI(r)
+	}
+	text := strings.Join(plain, "\n")
+	for _, want := range []string{"internal/harness/", "cmd/", "tui_tea.go", "theme.go", "main.go"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("grouped list is missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "internal/harness/tui_tea.go") {
+		t.Fatalf("a grouped file still shows its full path:\n%s", text)
+	}
+	for r, idx := range fileAt {
+		if idx < 0 {
+			continue
+		}
+		if name := path.Base(c.files[idx].Path); !strings.Contains(plain[r], name) {
+			t.Fatalf("row %d %q maps to file %d (%s)", r, plain[r], idx, name)
 		}
 	}
 
-	// First file row
-	f1, idx1, ok1 := c.FileAtRow(hdr)
-	if !ok1 || idx1 != 0 || f1.Path != "file1.go" {
-		t.Fatalf("expected file 0 file1.go, got ok=%v idx=%d file=%+v", ok1, idx1, f1)
-	}
-
-	// Second file row
-	f2, idx2, ok2 := c.FileAtRow(hdr + 1)
-	if !ok2 || idx2 != 1 || f2.Path != "file2.go" {
-		t.Fatalf("expected file 1 file2.go, got ok=%v idx=%d file=%+v", ok2, idx2, f2)
-	}
-
-	// Third file row
-	f3, idx3, ok3 := c.FileAtRow(hdr + 2)
-	if !ok3 || idx3 != 2 || f3.Path != "file3.go" {
-		t.Fatalf("expected file 2 file3.go, got ok=%v idx=%d file=%+v", ok3, idx3, f3)
-	}
-
-	// Out of bounds row
-	_, _, ok4 := c.FileAtRow(hdr + 3)
-	if ok4 {
-		t.Fatal("expected out of bounds row to return ok=false")
+	// Too short for everything: the overflow line is not clickable.
+	rows, fileAt = c.Rows(34, c.HeaderRows()+3)
+	last := len(rows) - 1
+	if !strings.Contains(StripANSI(rows[last]), "more") || fileAt[last] != -1 {
+		t.Fatalf("expected a non-file '… N more' last row, got %q (file %d)", StripANSI(rows[last]), fileAt[last])
 	}
 }
 
@@ -246,7 +268,7 @@ func TestDiffModalNavigationAndHotkeys(t *testing.T) {
 		checkpointMgr: NewCheckpointManager(tmp),
 		modelName:     "test-model",
 		input:         ta,
-		viewport:      viewport.New(140, 20),
+		viewport:      viewport.New(viewport.WithWidth(140), viewport.WithHeight(20)),
 		width:         140,
 		height:        30,
 		ready:         true,
@@ -259,7 +281,7 @@ func TestDiffModalNavigationAndHotkeys(t *testing.T) {
 	}
 
 	// 1. Alt+c opens diff modal
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}, Alt: true})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModAlt})
 	m = updated.(*teaModel)
 	if !m.diffModal {
 		t.Fatal("expected diffModal to be open after Alt+c")
@@ -269,28 +291,28 @@ func TestDiffModalNavigationAndHotkeys(t *testing.T) {
 	}
 
 	// 2. Next file with 'n'
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'n', Text: "n"})
 	m = updated.(*teaModel)
 	if m.diffCursor != 1 {
 		t.Fatalf("expected diffCursor=1, got %d", m.diffCursor)
 	}
 
 	// 3. Prev file with 'p'
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
 	m = updated.(*teaModel)
 	if m.diffCursor != 0 {
 		t.Fatalf("expected diffCursor=0 after 'p', got %d", m.diffCursor)
 	}
 
 	// 4. Close with Esc
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = updated.(*teaModel)
 	if m.diffModal {
 		t.Fatal("expected diffModal to be closed after Esc")
 	}
 
 	// 5. Ctrl+O opens diff modal
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
 	m = updated.(*teaModel)
 	if !m.diffModal {
 		t.Fatal("expected diffModal to be open after Ctrl+O")
@@ -300,7 +322,7 @@ func TestDiffModalNavigationAndHotkeys(t *testing.T) {
 	}
 
 	// Close with 'q'
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
 	m = updated.(*teaModel)
 	if m.diffModal {
 		t.Fatal("expected diffModal to be closed after 'q'")
@@ -317,7 +339,7 @@ func TestMouseClickChangesColumnOpensModal(t *testing.T) {
 		checkpointMgr: NewCheckpointManager(tmp),
 		modelName:     "test-model",
 		input:         ta,
-		viewport:      viewport.New(140, 20),
+		viewport:      viewport.New(viewport.WithWidth(140), viewport.WithHeight(20)),
 		width:         140,
 		height:        30,
 		ready:         true,
@@ -329,23 +351,11 @@ func TestMouseClickChangesColumnOpensModal(t *testing.T) {
 	}
 
 	// Terminal width = 140 (>= changesColumnMinFrame so the sidebar is shown).
-	// The sidebar spans X in [frameWidth - changesColumnWidth, frameWidth).
-	// Row Y in terminal: header is row 0, divider is row 1, the sidebar begins
-	// at row 2 with the Session and Context sections above the Changes list.
-	// Drawing a frame records how many rows those sections take.
-	_ = m.View()
-	if m.sidebarFileRowOffset == 0 {
-		t.Fatal("expected the Session and Context sections above the Changes list")
-	}
+	// Click on the sidebar row that actually shows main.go.
 	clickX := 120
-	clickY := 2 + m.sidebarFileRowOffset + m.changes.HeaderRows() // First file row
+	clickY := frameRowContaining(t, m.render(), m.conversationWidth(), "main.go")
 
-	mouseMsg := tea.MouseMsg{
-		X:      clickX,
-		Y:      clickY,
-		Button: tea.MouseButtonLeft,
-		Action: tea.MouseActionPress,
-	}
+	mouseMsg := tea.MouseClickMsg{X: clickX, Y: clickY, Button: tea.MouseLeft}
 
 	updated, _ := m.Update(mouseMsg)
 	m = updated.(*teaModel)
@@ -390,7 +400,7 @@ func TestDiffModalDiscardWorkflow(t *testing.T) {
 		checkpointMgr: NewCheckpointManager(tmp),
 		modelName:     "test-model",
 		input:         ta,
-		viewport:      viewport.New(140, 20),
+		viewport:      viewport.New(viewport.WithWidth(140), viewport.WithHeight(20)),
 		width:         140,
 		height:        30,
 		ready:         true,
@@ -408,14 +418,14 @@ func TestDiffModalDiscardWorkflow(t *testing.T) {
 	}
 
 	// 2. Press 'x' to trigger discard confirmation
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
 	m = updated.(*teaModel)
 	if !m.diffConfirmDiscard {
 		t.Fatal("expected diffConfirmDiscard to be true after pressing 'x'")
 	}
 
 	// 3. Press 'n' to cancel confirmation
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'n', Text: "n"})
 	m = updated.(*teaModel)
 	if m.diffConfirmDiscard {
 		t.Fatal("expected diffConfirmDiscard to be false after pressing 'n'")
@@ -425,9 +435,9 @@ func TestDiffModalDiscardWorkflow(t *testing.T) {
 	}
 
 	// 4. Press 'x', then 'y' to confirm discard
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
 	m = updated.(*teaModel)
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
 	m = updated.(*teaModel)
 
 	if m.diffConfirmDiscard {
@@ -444,9 +454,9 @@ func TestDiffModalDiscardWorkflow(t *testing.T) {
 	}
 
 	// 5. Discard last remaining file: modal should close
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
 	m = updated.(*teaModel)
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
 	m = updated.(*teaModel)
 
 	if m.diffModal {
@@ -474,7 +484,7 @@ func TestDiscardSlashCommand(t *testing.T) {
 		checkpointMgr: NewCheckpointManager(tmp),
 		modelName:     "test-model",
 		input:         ta,
-		viewport:      viewport.New(140, 20),
+		viewport:      viewport.New(viewport.WithWidth(140), viewport.WithHeight(20)),
 		width:         140,
 		height:        30,
 		ready:         true,
@@ -499,7 +509,7 @@ func TestDiscardSlashCommand(t *testing.T) {
 		checkpointMgr: NewCheckpointManager(nonRepoDir),
 		modelName:     "test-model",
 		input:         ta2,
-		viewport:      viewport.New(140, 20),
+		viewport:      viewport.New(viewport.WithWidth(140), viewport.WithHeight(20)),
 		width:         140,
 		height:        30,
 		ready:         true,
@@ -530,7 +540,7 @@ func TestModelsModalNavigationAndSelection(t *testing.T) {
 		modelName:     "model-b",
 		settings:      settings,
 		input:         ta,
-		viewport:      viewport.New(140, 20),
+		viewport:      viewport.New(viewport.WithWidth(140), viewport.WithHeight(20)),
 		width:         140,
 		height:        30,
 		ready:         true,
@@ -546,23 +556,23 @@ func TestModelsModalNavigationAndSelection(t *testing.T) {
 	}
 
 	// 2. Navigate down with 'j'
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
 	m = updated.(*teaModel)
 	if m.modelCursor != 2 {
 		t.Fatalf("expected modelCursor=2, got %d", m.modelCursor)
 	}
 
 	// 3. Navigate up with 'k' twice to model-a (index 0)
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'k', Text: "k"})
 	m = updated.(*teaModel)
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'k', Text: "k"})
 	m = updated.(*teaModel)
 	if m.modelCursor != 0 {
 		t.Fatalf("expected modelCursor=0, got %d", m.modelCursor)
 	}
 
 	// 4. Press Enter to select model-a
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated.(*teaModel)
 	if m.modelsModal {
 		t.Fatal("expected modelsModal to close on Enter")
@@ -575,7 +585,7 @@ func TestModelsModalNavigationAndSelection(t *testing.T) {
 	}
 
 	// 5. Test Alt+M shortcut opens modal
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}, Alt: true})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'm', Mod: tea.ModAlt})
 	m = updated.(*teaModel)
 	if !m.modelsModal {
 		t.Fatal("expected Alt+M to open modelsModal")
@@ -585,7 +595,7 @@ func TestModelsModalNavigationAndSelection(t *testing.T) {
 	}
 
 	// 6. Test Esc closes modal without switching
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = updated.(*teaModel)
 	if m.modelsModal {
 		t.Fatal("expected Esc to close modelsModal")

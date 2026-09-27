@@ -167,10 +167,11 @@ func (c *Client) StreamChatWithTools(
 	rateLimit := parseRateLimitHeaders(resp.Header)
 
 	var (
-		text      strings.Builder
-		reasoning strings.Builder
-		usage     *Usage
-		calls     = newToolCallAccumulator()
+		text         strings.Builder
+		reasoning    strings.Builder
+		usage        *Usage
+		calls        = newToolCallAccumulator()
+		finishReason string
 	)
 
 	// Channel-framed models interleave private reasoning with the answer in one
@@ -221,6 +222,9 @@ func (c *Client) StreamChatWithTools(
 			for _, delta := range choice.Delta.ToolCalls {
 				calls.Add(delta)
 			}
+			if choice.FinishReason != "" {
+				finishReason = choice.FinishReason
+			}
 		}
 		if chunk.Usage != nil {
 			usage = &Usage{
@@ -257,7 +261,7 @@ func (c *Client) StreamChatWithTools(
 		}
 	}
 
-	result = ChatResult{Message: reply}
+	result = ChatResult{Message: reply, Truncated: finishReason == "length"}
 	if usage != nil && (usage.PromptTokens > 0 || usage.CompletionTokens > 0) {
 		result.Usage = *usage
 		result.HasUsage = true

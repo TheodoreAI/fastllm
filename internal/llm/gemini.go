@@ -429,6 +429,7 @@ type geminiResponse struct {
 		Content struct {
 			Parts []geminiPart `json:"parts"`
 		} `json:"content"`
+		FinishReason string `json:"finishReason"`
 	} `json:"candidates"`
 	UsageMetadata struct {
 		PromptTokenCount     int `json:"promptTokenCount"`
@@ -494,6 +495,7 @@ func (c *GeminiClient) ChatWithUsage(ctx context.Context, model string, messages
 		}
 	}
 	result := ChatResult{Message: Message{Role: "assistant", Content: text.String(), ToolCalls: calls}}
+	result.Truncated = len(gr.Candidates) > 0 && gr.Candidates[0].FinishReason == "MAX_TOKENS"
 	if gr.UsageMetadata.PromptTokenCount > 0 || gr.UsageMetadata.CandidatesTokenCount > 0 {
 		result.Usage = Usage{
 			PromptTokens:     gr.UsageMetadata.PromptTokenCount,
