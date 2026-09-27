@@ -1,0 +1,3 @@
+value: Find bar (Ctrl+F, /find) replaces the input box; matches found on ANSI-stripped transcript lines by cell column and highlighted with lipgloss.StyleRanges; Enter/down next, up/shift+enter previous, Esc closes; new output re-highlights without jumping
+reason: bubbles v2.2.1 viewport.SetHighlights mis-maps offsets on ANSI content (parseMatches checks newlines in the raw string while walking stripped text), and the transcript is always coloured.
+decided_at: 2026-09-27T00:57:32+00:00

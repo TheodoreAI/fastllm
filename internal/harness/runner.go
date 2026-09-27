@@ -2,12 +2,11 @@ package harness
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
-	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -16,7 +15,6 @@ import (
 	"fastllm/internal/config"
 	"fastllm/internal/execution"
 	"fastllm/internal/files"
-	"fastllm/internal/gitrepo"
 	"fastllm/internal/llm"
 	"fastllm/internal/media"
 )
@@ -352,6 +350,10 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 
 	var taskFinished bool
 	var planBoundary bool
+	// truncatedInARow counts consecutive replies cut off at the output limit;
+	// partialAnswer holds the answer text those replies produced so far.
+	var truncatedInARow int
+	var partialAnswer string
 	// The budget the transcript must fit, net of the tool schemas every request
 	// also carries.
 	budget := requestBudget(r.compactionConfig(), tools)
@@ -450,14 +452,52 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 			Metrics: &turnMetrics,
 		}
 
+		if chatResult.Truncated {
+			truncatedInARow++
+		} else {
+			truncatedInARow = 0
+		}
+
+		// A reply cut off at the output limit with no tool call is not an
+		// answer, however little text it holds: often the whole budget went to
+		// reasoning. Ask the model to carry on; a second cut-off in a row ends
+		// the run with the reason rather than an empty "success".
+		if len(reply.ToolCalls) == 0 && chatResult.Truncated {
+			partialAnswer += reply.Content
+			result.History = append(result.History, turnRec)
+			emit(Event{Type: EventTurnComplete, Turn: turn, Metrics: &turnMetrics})
+			if truncatedInARow > 1 || turn == maxTurns {
+				result.Turns = turn
+				result.FinalResponse = partialAnswer
+				result.Error = fmt.Sprintf("stopped: the model hit its output limit (%d tokens) before answering; "+
+					"raise max_tokens for this model or lower /set think", compTokens)
+				break
+			}
+			emit(Event{Type: EventNotice, Turn: turn, Response: fmt.Sprintf(
+				"Turn %d was cut off at the output limit (%d tokens) before a tool call or answer; asking the model to continue.",
+				turn, compTokens)})
+			if reply.Content != "" {
+				messages = append(messages, llm.Message{Role: "assistant", Content: reply.Content})
+			}
+			messages = append(messages, llm.Message{Role: "user", Content: truncatedReplyPrompt})
+			continue
+		}
+		if chatResult.Truncated {
+			// The last tool call was likely cut mid-arguments; its error result
+			// tells the model, and this tells the user why.
+			emit(Event{Type: EventNotice, Turn: turn, Response: fmt.Sprintf(
+				"Turn %d was cut off at the output limit (%d tokens) while writing a tool call.", turn, compTokens)})
+		}
+
 		// If model produced no tool calls, it has finished with a textual answer.
 		if len(reply.ToolCalls) == 0 {
-			result.FinalResponse = reply.Content
+			answer := partialAnswer + reply.Content
+			result.FinalResponse = answer
 			result.Success = true
 			result.Turns = turn
-			turnRec.Response = reply.Content
+			turnRec.Response = answer
 			result.History = append(result.History, turnRec)
-			emit(Event{Type: EventTurnComplete, Turn: turn, Response: reply.Content, Metrics: &turnMetrics})
+			emit(Event{Type: EventTurnComplete, Turn: turn, Response: answer, Metrics: &turnMetrics})
 			taskFinished = true
 			break
 		}
@@ -553,6 +593,12 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 	emit(Event{Type: EventTaskFinished, Result: result, Error: result.Error})
 	return result, nil
 }
+
+// truncatedReplyPrompt follows a reply the output limit cut off before it
+// made a tool call or finished its answer. A user-role message, like the
+// turn-budget notice, so single-system-slot providers keep it in place.
+const truncatedReplyPrompt = "Your previous reply was cut off at the output token limit before you made a tool call or finished your answer. " +
+	"Continue from where you stopped: keep any further reasoning short, then make the next tool call or give your final answer."
 
 func (r *Runner) executeReadFile(fileReader *files.Reader, requestedPath string) string {
 	if strings.TrimSpace(requestedPath) == "" {
@@ -676,15 +722,12 @@ func countApproxTokens(messages []llm.Message) int {
 }
 
 func (r *Runner) executeListFiles(ctx context.Context, root, requestedPath string) string {
-	all, err := gitrepo.ListFiles(ctx, root)
-	if errors.Is(err, gitrepo.ErrNotARepo) {
-		all, err = walkFiles(root)
-	}
+	all, err := workspaceFiles(ctx, root)
 	if err != nil {
 		return "Error listing files: " + err.Error()
 	}
 
-	prefix := path.Clean(strings.Trim(requestedPath, "/"))
+	prefix := cleanPrefix(requestedPath)
 	var matched []string
 	for _, f := range all {
 		if prefix == "" || prefix == "." || f == prefix || strings.HasPrefix(f, prefix+"/") {
@@ -720,15 +763,12 @@ func (r *Runner) executeSearchFiles(ctx context.Context, root, pattern, requeste
 		return "Error: invalid regular expression: " + err.Error()
 	}
 
-	all, err := gitrepo.ListFiles(ctx, root)
-	if errors.Is(err, gitrepo.ErrNotARepo) {
-		all, err = walkFiles(root)
-	}
+	all, err := workspaceFiles(ctx, root)
 	if err != nil {
 		return "Error listing files: " + err.Error()
 	}
 
-	prefix := path.Clean(strings.Trim(requestedPath, "/"))
+	prefix := cleanPrefix(requestedPath)
 	var matches []string
 	const maxMatches = 150
 	const maxFileBytes = 1024 * 1024
@@ -747,11 +787,11 @@ scan:
 		if err != nil || info.IsDir() || info.Size() > maxFileBytes {
 			continue
 		}
-		file, err := os.Open(fullPath)
-		if err != nil {
+		data, err := os.ReadFile(fullPath)
+		if err != nil || looksBinary(data) {
 			continue
 		}
-		scanner := bufio.NewScanner(file)
+		scanner := bufio.NewScanner(bytes.NewReader(data))
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		lineNum := 0
 		for scanner.Scan() {
@@ -760,12 +800,10 @@ scan:
 			if re.MatchString(line) {
 				matches = append(matches, fmt.Sprintf("%s:%d: %s", f, lineNum, files.ClipMatch(line, re)))
 				if len(matches) >= maxMatches {
-					file.Close()
 					break scan
 				}
 			}
 		}
-		file.Close()
 	}
 
 	if len(matches) == 0 {
@@ -787,15 +825,12 @@ func (r *Runner) executeGlobFiles(ctx context.Context, root, patternValue, reque
 	if err != nil {
 		return "Error: invalid glob pattern: " + err.Error()
 	}
-	all, err := gitrepo.ListFiles(ctx, root)
-	if errors.Is(err, gitrepo.ErrNotARepo) {
-		all, err = walkFiles(root)
-	}
+	all, err := workspaceFiles(ctx, root)
 	if err != nil {
 		return "Error listing files: " + err.Error()
 	}
 
-	prefix := path.Clean(strings.Trim(strings.ReplaceAll(requestedPath, "\\", "/"), "/"))
+	prefix := cleanPrefix(requestedPath)
 	var matches []string
 	for _, file := range all {
 		if prefix != "" && prefix != "." && file != prefix && !strings.HasPrefix(file, prefix+"/") {
@@ -825,8 +860,17 @@ func (r *Runner) executeGlobFiles(ctx context.Context, root, patternValue, reque
 }
 
 func compileGlob(glob string) (*regexp.Regexp, error) {
+	pattern, err := globRegexp(glob)
+	if err != nil {
+		return nil, err
+	}
+	return regexp.Compile("^" + pattern + "$")
+}
+
+// globRegexp translates a glob into an unanchored regular expression: * and ?
+// stay within one path segment, ** crosses them.
+func globRegexp(glob string) (string, error) {
 	var b strings.Builder
-	b.WriteString("^")
 	for i := 0; i < len(glob); i++ {
 		switch glob[i] {
 		case '*':
@@ -846,7 +890,7 @@ func compileGlob(glob string) (*regexp.Regexp, error) {
 		case '[':
 			end := strings.IndexByte(glob[i+1:], ']')
 			if end < 0 {
-				return nil, fmt.Errorf("unterminated character class")
+				return "", fmt.Errorf("unterminated character class")
 			}
 			end += i + 1
 			class := glob[i+1 : end]
@@ -861,8 +905,7 @@ func compileGlob(glob string) (*regexp.Regexp, error) {
 			b.WriteString(regexp.QuoteMeta(string(glob[i])))
 		}
 	}
-	b.WriteString("$")
-	return regexp.Compile(b.String())
+	return b.String(), nil
 }
 
 func (r *Runner) executeRunCommand(ctx context.Context, root, command string, timeout time.Duration) string {
@@ -920,27 +963,4 @@ func writePlanSection(builder *strings.Builder, title string, steps []string) {
 		}
 	}
 	writeCheckpointSection(builder, title, rendered)
-}
-
-func walkFiles(root string) ([]string, error) {
-	var filesList []string
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			name := d.Name()
-			if name == ".git" || name == "node_modules" || name == "dist" || name == "build" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		rel, err := filepath.Rel(root, p)
-		if err != nil {
-			return err
-		}
-		filesList = append(filesList, filepath.ToSlash(rel))
-		return nil
-	})
-	return filesList, err
 }

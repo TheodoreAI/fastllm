@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"image/color"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"fastllm/internal/config"
 	"fastllm/internal/execution"
@@ -16,12 +18,12 @@ import (
 	"fastllm/internal/llm"
 	"fastllm/internal/webtools"
 
+	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/atotto/clipboard"
-	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // TUI Modes
@@ -35,19 +37,19 @@ const (
 // Palette. ApplyTheme (theme.go) assigns every colour from the active theme;
 // nothing here is a literal so a theme switch reaches all of the chrome.
 var (
-	tuiColorCyan    lipgloss.Color
-	tuiColorBlue    lipgloss.Color
-	tuiColorGreen   lipgloss.Color
-	tuiColorYellow  lipgloss.Color
-	tuiColorRed     lipgloss.Color
-	tuiColorPurple  lipgloss.Color
-	tuiColorMuted   lipgloss.Color
-	tuiColorDarkBg  lipgloss.Color
-	tuiColorCardBg  lipgloss.Color
-	tuiColorBorder  lipgloss.Color
-	tuiColorTrack   lipgloss.Color
-	tuiColorWhite   lipgloss.Color
-	tuiColorBrandFg lipgloss.Color
+	tuiColorCyan    color.Color
+	tuiColorBlue    color.Color
+	tuiColorGreen   color.Color
+	tuiColorYellow  color.Color
+	tuiColorRed     color.Color
+	tuiColorPurple  color.Color
+	tuiColorMuted   color.Color
+	tuiColorBg      color.Color
+	tuiColorCardBg  color.Color
+	tuiColorBorder  color.Color
+	tuiColorTrack   color.Color
+	tuiColorWhite   color.Color
+	tuiColorBrandFg color.Color
 )
 
 // Lip Gloss Styles, rebuilt by buildStyles whenever the theme changes.
@@ -130,7 +132,7 @@ func buildStyles() {
 }
 
 func tuiToolBadge(name string) string {
-	var c lipgloss.Color
+	var c color.Color
 	switch name {
 	case "read_file", "list_files", "search_files", "glob_files":
 		c = tuiColorCyan
@@ -287,11 +289,39 @@ type teaModel struct {
 	// as long as the messages that may hold them.
 	taint   *SessionTaint
 	changes sessionChanges
-	// sidebarFileRowOffset is how many sidebar rows sit above the Changes list
-	// in the last frame drawn.
-	sidebarFileRowOffset int
-	gitWatchChan         <-chan struct{}
-	gitWatchStop         func()
+	// hits holds the click targets of the last frame drawn (tui_hits.go).
+	hits         hitMap
+	gitWatchChan <-chan struct{}
+	gitWatchStop func()
+
+	// blurred is set while the terminal window is in the background; the
+	// spinner stops ticking then. finishedAway records that a turn or shell
+	// command ended meanwhile, for the window title.
+	blurred      bool
+	finishedAway bool
+	// turnFailed marks the last agent turn as failed (not canceled) until the
+	// next key press; the taskbar progress shows it in red.
+	turnFailed bool
+	// canceling is set when the user cancels, so the failure that the
+	// cancellation produces is not reported as one.
+	canceling bool
+	// keyDisambiguation reports that the terminal tells Shift+Enter apart from
+	// Enter, so the hints can offer it for newlines.
+	keyDisambiguation bool
+	// inputStylesTheme is the theme the textarea styles were last built for.
+	inputStylesTheme string
+	// inputRows is the input box height the viewport was last sized for.
+	inputRows int
+	// inputOrigin is where the textarea's first cell was drawn in the last
+	// frame, for placing the terminal cursor; nil when the box showed
+	// something else (a prompt, the find bar) or no frame was drawn.
+	inputOrigin *tea.Position
+	// search is the open find bar (tui_search.go); nil when closed.
+	search *transcriptSearch
+	// termColorsKnown is set once the terminal has reported its background
+	// (or did not answer in time). Painting the theme's background before
+	// then would make the terminal report the theme's colour back.
+	termColorsKnown bool
 
 	// Diff modal viewer state
 	diffModal          bool
@@ -361,13 +391,7 @@ func newTeaModel(runner *Runner, req RunRequest) (*teaModel, error) {
 		permissionMode = NormalizeMode(req.PermissionMode)
 	}
 
-	ta := textarea.New()
-	ta.Placeholder = "Ask a question, enter a task, or type /help (Tab switches to Shell Mode)..."
-	ta.Focus()
-	ta.Prompt = "❯ "
-	ta.CharLimit = 8192
-	ta.SetHeight(2)
-	ta.ShowLineNumbers = false
+	ta := newChatInput()
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
@@ -431,8 +455,7 @@ func (m *teaModel) formatWelcome() string {
 func (m *teaModel) appendHistory(text string) {
 	m.historyText.WriteString(trimPaddedTail(text))
 	if m.ready {
-		m.viewport.SetContent(m.historyText.String())
-		m.viewport.GotoBottom()
+		m.syncTranscript(true)
 	}
 }
 
@@ -546,8 +569,10 @@ func (m *teaModel) waitForGitWatch() tea.Cmd {
 // Init implements tea.Model
 func (m *teaModel) Init() tea.Cmd {
 	return tea.Batch(
-		textarea.Blink,
+		m.input.Focus(),
 		m.spinner.Tick,
+		tea.RequestBackgroundColor,
+		tea.Tick(terminalColorWait, func(time.Time) tea.Msg { return teaTermColorsTimeoutMsg{} }),
 		m.refreshGitStatusCmd(),
 		m.waitForGitWatch(),
 	)
@@ -573,81 +598,105 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncInputHeight()
 
 		if !m.ready {
-			m.viewport = viewport.New(m.conversationWidth(), 3)
-			m.viewport.SetContent(m.historyText.String())
+			m.viewport = viewport.New(viewport.WithWidth(m.conversationWidth()), viewport.WithHeight(3))
+			m.syncTranscript(false)
 			m.ready = true
 			m.resizeViewport()
 			m.viewport.GotoBottom()
 		} else {
-			m.viewport.Width = m.conversationWidth()
+			m.viewport.SetWidth(m.conversationWidth())
 			m.resizeViewport()
 		}
 
-	case tea.KeyMsg:
+	case tea.PasteMsg:
+		// Terminals deliver a paste as one message, newlines included; it falls
+		// through to the textarea below, which inserts it literally. Modals and
+		// prompts have no text box for it, so drop it there rather than typing
+		// into the chat input behind them.
+		if m.pendingPlan != "" || m.pendingPermission != nil || m.modalOpen() {
+			return m, nil
+		}
+		if m.search != nil {
+			m.addSearchText(msg.Content)
+			return m, nil
+		}
+
+	case teaTermColorsTimeoutMsg:
+		m.termColorsKnown = true
+
+	case tea.FocusMsg:
+		m.blurred = false
+		m.finishedAway = false
+		// The spinner stopped ticking while the window was in the background.
+		cmds = append(cmds, m.spinner.Tick)
+
+	case tea.BlurMsg:
+		m.blurred = true
+
+	case tea.BackgroundColorMsg:
+		m.termColorsKnown = true
+		// Follow a light terminal unless the user picked a theme themselves.
+		if !msg.IsDark() && !themeFromPreference && !currentTheme.Light {
+			// The greeting was drawn in the dark default; redraw it if it is
+			// still all the transcript holds.
+			welcomeOnly := m.historyText.String() == trimPaddedTail(m.formatWelcome())
+			if err := ApplyTheme(defaultLightThemeName); err == nil {
+				if welcomeOnly {
+					m.historyText.Reset()
+					m.appendHistory(m.formatWelcome())
+				}
+				m.statusNotice = "Light terminal: using " + defaultLightThemeName + " (/theme to change)"
+				cmds = append(cmds, m.clearStatusAfter(5*time.Second))
+			}
+		}
+
+	case tea.KeyboardEnhancementsMsg:
+		m.keyDisambiguation = msg.SupportsKeyDisambiguation()
+
+	case tea.KeyPressMsg:
+		m.turnFailed = false
 		if m.pendingPlan != "" && !m.isExecuting {
 			return m.updatePlanApproval(msg)
 		}
 		if m.pendingPermission != nil {
-			if msg.Type == tea.KeyCtrlC {
+			switch msg.String() {
+			case "ctrl+c":
 				m.resolvePermission(false, false)
 				if m.cancelTurn != nil {
 					m.cancelTurn()
 				}
 				return m, m.waitForNextEvent()
-			}
-			if msg.Type == tea.KeyEnter || msg.Type == tea.KeyEsc {
+			case "enter", "esc", "n", "N":
 				m.resolvePermission(false, false)
 				return m, m.waitForNextEvent()
-			}
-			if msg.Type == tea.KeyRunes && len(msg.Runes) > 0 {
-				switch msg.Runes[0] {
-				case 'y', 'Y':
-					m.resolvePermission(true, false)
-					return m, m.waitForNextEvent()
-				case 'a', 'A':
-					m.resolvePermission(true, true)
-					return m, m.waitForNextEvent()
-				case 'n', 'N':
-					m.resolvePermission(false, false)
-					return m, m.waitForNextEvent()
-				}
+			case "y", "Y":
+				m.resolvePermission(true, false)
+				return m, m.waitForNextEvent()
+			case "a", "A":
+				m.resolvePermission(true, true)
+				return m, m.waitForNextEvent()
 			}
 			return m, nil
 		}
 		if m.skillsModal {
-			switch msg.Type {
-			case tea.KeyEsc, tea.KeyCtrlC:
+			switch msg.String() {
+			case "esc", "ctrl+c", "q", "Q":
 				m.closeSkillsModal()
-			case tea.KeyEnter:
+			case "enter":
 				m.selectSkillFromModal()
-			case tea.KeyUp:
+			case "up", "k":
 				if m.skillCursor > 0 {
 					m.skillCursor--
 				}
-			case tea.KeyDown:
+			case "down", "j":
 				if m.skillCursor < len(m.skills)-1 {
 					m.skillCursor++
 				}
-			case tea.KeyHome:
+			case "home":
 				m.skillCursor = 0
-			case tea.KeyEnd:
+			case "end":
 				if len(m.skills) > 0 {
 					m.skillCursor = len(m.skills) - 1
-				}
-			case tea.KeyRunes:
-				if len(msg.Runes) > 0 {
-					switch msg.Runes[0] {
-					case 'q', 'Q':
-						m.closeSkillsModal()
-					case 'j':
-						if m.skillCursor < len(m.skills)-1 {
-							m.skillCursor++
-						}
-					case 'k':
-						if m.skillCursor > 0 {
-							m.skillCursor--
-						}
-					}
 				}
 			}
 			return m, nil
@@ -661,112 +710,77 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.filesModal != nil {
 			return m, m.handleFilesModalKey(msg)
 		}
+		if m.search != nil && !m.modalOpen() {
+			return m, m.handleSearchKey(msg)
+		}
 		if m.modelsModal {
-			switch msg.Type {
-			case tea.KeyEsc, tea.KeyCtrlC:
+			switch msg.String() {
+			case "esc", "ctrl+c", "q", "Q":
 				m.closeModelsModal()
-			case tea.KeyEnter:
+			case "enter":
 				m.selectModelFromModal()
-			case tea.KeyUp:
+			case "up", "k":
 				if m.modelCursor > 0 {
 					m.modelCursor--
 				}
-			case tea.KeyDown:
+			case "down", "j":
 				if m.settings != nil && m.modelCursor < len(m.settings.Models)-1 {
 					m.modelCursor++
 				}
-			case tea.KeyHome:
+			case "home":
 				m.modelCursor = 0
-			case tea.KeyEnd:
+			case "end":
 				if m.settings != nil && len(m.settings.Models) > 0 {
 					m.modelCursor = len(m.settings.Models) - 1
-				}
-			case tea.KeyRunes:
-				if len(msg.Runes) > 0 {
-					switch msg.Runes[0] {
-					case 'q', 'Q':
-						m.closeModelsModal()
-					case 'j':
-						if m.settings != nil && m.modelCursor < len(m.settings.Models)-1 {
-							m.modelCursor++
-						}
-					case 'k':
-						if m.modelCursor > 0 {
-							m.modelCursor--
-						}
-					}
 				}
 			}
 			return m, nil
 		}
 		if m.diffModal {
 			if m.diffConfirmDiscard {
-				switch msg.Type {
-				case tea.KeyEsc, tea.KeyCtrlC:
-					m.diffConfirmDiscard = false
-					return m, nil
-				case tea.KeyEnter:
+				switch msg.String() {
+				case "enter", "y", "Y":
 					m.diffConfirmDiscard = false
 					m.discardCurrentFile()
-					return m, nil
-				case tea.KeyRunes:
-					if len(msg.Runes) > 0 {
-						switch msg.Runes[0] {
-						case 'y', 'Y':
-							m.diffConfirmDiscard = false
-							m.discardCurrentFile()
-							return m, nil
-						default:
-							m.diffConfirmDiscard = false
-							return m, nil
-						}
+				case "esc", "ctrl+c":
+					m.diffConfirmDiscard = false
+				default:
+					// Any other typed character answers "no".
+					if msg.Text != "" {
+						m.diffConfirmDiscard = false
 					}
 				}
 				return m, nil
 			}
 
-			switch msg.Type {
-			case tea.KeyEsc, tea.KeyCtrlC:
+			switch msg.String() {
+			case "esc", "ctrl+c", "q", "Q":
 				m.closeDiffModal()
 				return m, nil
-			case tea.KeyRight:
+			case "right", "n", "N":
 				m.nextDiffFile()
 				return m, nil
-			case tea.KeyLeft:
+			case "left", "p", "P":
 				m.prevDiffFile()
 				return m, nil
-			case tea.KeyRunes:
-				if len(msg.Runes) > 0 {
-					switch msg.Runes[0] {
-					case 'q', 'Q':
-						m.closeDiffModal()
-						return m, nil
-					case 'n', 'N':
-						m.nextDiffFile()
-						return m, nil
-					case 'p', 'P':
-						m.prevDiffFile()
-						return m, nil
-					case 's', 'S':
-						m.toggleStageCurrentFile()
-						return m, nil
-					case 'd', 'D':
-						m.toggleDiffStaged()
-						return m, nil
-					case 'x', 'X':
-						m.diffConfirmDiscard = true
-						return m, nil
-					}
-				}
+			case "s", "S":
+				m.toggleStageCurrentFile()
+				return m, nil
+			case "d", "D":
+				m.toggleDiffStaged()
+				return m, nil
+			case "x", "X":
+				m.diffConfirmDiscard = true
+				return m, nil
 			}
 			var vpCmd tea.Cmd
 			m.diffViewport, vpCmd = m.diffViewport.Update(msg)
 			return m, vpCmd
 		}
 
-		if msg.Alt && len(msg.Runes) > 0 {
-			switch msg.Runes[0] {
-			case 'c', 'C':
+		if msg.Mod.Contains(tea.ModAlt) {
+			switch unicode.ToLower(msg.Code) {
+			case 'c':
 				if len(m.changes.files) > 0 {
 					targetIdx := 0
 					if m.changes.cursor >= 0 && m.changes.cursor < len(m.changes.files) {
@@ -775,19 +789,10 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.openDiffModal(targetIdx)
 					return m, nil
 				}
-			case 'm', 'M':
+			case 'm':
 				m.openModelsModal()
 				return m, nil
 			}
-		}
-
-		// A bracketed paste arrives as one key event carrying the whole
-		// clipboard, newlines included. Insert it literally -- treating those
-		// newlines as Enter submits the paste one line at a time, which also
-		// starts one agent turn per line.
-		if msg.Paste {
-			m.input.InsertString(string(msg.Runes))
-			return m, nil
 		}
 
 		// While the slash-command dropdown shows, it owns ↑/↓, Tab, Enter and
@@ -796,8 +801,15 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 
-		switch msg.Type {
-		case tea.KeyCtrlC:
+		switch msg.String() {
+		case "ctrl+c":
+			// With text selected in the input, Ctrl+C copies it, as in an
+			// editor. Windows Terminal keeps Ctrl+Shift+C for itself.
+			if m.input.HasSelection() {
+				text := m.input.SelectedText()
+				m.input.ClearSelection()
+				return m, m.copyText(text, "selection")
+			}
 			if m.isExecuting && m.cancelTurn != nil {
 				m.cancelActiveOperation()
 				cmds = append(cmds, m.clearStatusAfter(3*time.Second))
@@ -811,7 +823,7 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.closeSession()
 			return m, tea.Quit
 
-		case tea.KeyCtrlB:
+		case "ctrl+b":
 			if m.shellExecuting && m.currentShellProc != nil {
 				bp := m.currentShellProc
 				m.shellBackgrounded = true
@@ -826,7 +838,7 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.clearStatusAfter(3 * time.Second)
 			}
 
-		case tea.KeyTab:
+		case "tab":
 			// Toggle between Agent Mode and Shell Mode
 			if m.mode == modeAgent {
 				m.mode = modeShell
@@ -839,19 +851,23 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.clearStatusAfter(2*time.Second))
 			return m, tea.Batch(cmds...)
 
-		case tea.KeyShiftTab:
+		case "shift+tab":
 			cmds = append(cmds, m.cyclePermissionMode())
 			return m, tea.Batch(cmds...)
 
-		case tea.KeyCtrlV:
+		case "ctrl+v":
 			return m, m.handlePasteCommand()
 
-		case tea.KeyCtrlJ:
+		case "ctrl+j":
 			// Ctrl+J is universal terminal newline / linefeed
 			m.input.InsertString("\n")
 			return m, nil
 
-		case tea.KeyCtrlO:
+		case "ctrl+f":
+			m.openSearch("")
+			return m, nil
+
+		case "ctrl+o":
 			if len(m.changes.files) > 0 {
 				targetIdx := 0
 				if m.changes.cursor >= 0 && m.changes.cursor < len(m.changes.files) {
@@ -861,11 +877,11 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-		case tea.KeyEnter:
-			if msg.Alt {
-				m.input.InsertString("\n")
-				return m, nil
-			}
+		case "alt+enter", "shift+enter":
+			m.input.InsertString("\n")
+			return m, nil
+
+		case "enter":
 			val := m.input.Value()
 			// If ends with backslash, allow multiline continuation
 			if strings.HasSuffix(val, "\\") {
@@ -886,7 +902,7 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Batch(cmds...)
 			}
 
-		case tea.KeyUp:
+		case "up":
 			if m.input.Line() == 0 && len(m.promptHistory) > 0 {
 				if m.historyIdx == -1 {
 					m.historyDraft = m.input.Value()
@@ -902,7 +918,7 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.input, inputCmd = m.input.Update(msg)
 			return m, inputCmd
 
-		case tea.KeyDown:
+		case "down":
 			if m.historyIdx != -1 && m.input.Line() >= m.input.LineCount()-1 {
 				if m.historyIdx < len(m.promptHistory)-1 {
 					m.historyIdx++
@@ -919,7 +935,7 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.input, inputCmd = m.input.Update(msg)
 			return m, inputCmd
 
-		case tea.KeyEsc:
+		case "esc":
 			if m.isExecuting || m.shellExecuting {
 				m.cancelActiveOperation()
 				cmds = append(cmds, m.clearStatusAfter(3*time.Second))
@@ -932,39 +948,41 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-		case tea.KeyPgUp:
-			m.viewport.LineUp(5)
+		case "pgup":
+			m.viewport.ScrollUp(5)
 			return m, nil
 
-		case tea.KeyPgDown:
-			m.viewport.LineDown(5)
+		case "pgdown":
+			m.viewport.ScrollDown(5)
 			return m, nil
 		}
 
 	case tea.MouseMsg:
-		if m.diffModal {
-			var vpCmd tea.Cmd
-			m.diffViewport, vpCmd = m.diffViewport.Update(msg)
-			return m, vpCmd
-		}
-		if m.modelsModal || m.skillsModal || m.sessionsModal != nil || m.themeModal != nil || m.filesModal != nil {
+		click, isClick := msg.(tea.MouseClickMsg)
+		isClick = isClick && click.Button == tea.MouseLeft
+		if m.modalOpen() {
+			// A click outside the modal dismisses it, as Esc would.
+			if isClick && m.hits.at(click.X, click.Y) != hitModal {
+				return m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+			}
+			if m.diffModal {
+				var vpCmd tea.Cmd
+				m.diffViewport, vpCmd = m.diffViewport.Update(msg)
+				return m, vpCmd
+			}
 			return m, nil
 		}
-		if (msg.Button == tea.MouseButtonLeft || msg.Type == tea.MouseLeft) && msg.Action != tea.MouseActionRelease {
-			if msg.Y == 0 {
-				modelStart := 7 + 1 + 9 + 1 // brand(7) + " " + modeBadge(9) + " " = 18
-				modelEnd := modelStart + VisualLen(m.modelName) + 2
-				if msg.X >= modelStart && msg.X <= modelEnd {
-					m.openModelsModal()
+		if isClick {
+			switch id := m.hits.at(click.X, click.Y); {
+			case id == hitModel:
+				m.openModelsModal()
+				return m, nil
+			case id == hitMode:
+				return m, m.cyclePermissionMode()
+			case strings.HasPrefix(id, hitChangeFile):
+				if idx, err := strconv.Atoi(strings.TrimPrefix(id, hitChangeFile)); err == nil {
+					m.openDiffModal(idx)
 					return m, nil
-				}
-			}
-			if m.showChangesColumn() && msg.X >= m.frameWidth()-changesColumnWidth && msg.X < m.frameWidth() {
-				if msg.Y >= 2 && msg.Y < 2+m.viewport.Height {
-					if _, idx, ok := m.changes.FileAtRow(msg.Y - 2 - m.sidebarFileRowOffset); ok {
-						m.openDiffModal(idx)
-						return m, nil
-					}
 				}
 			}
 		}
@@ -1092,6 +1110,9 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.activeTool = ""
 			m.activeArgs = ""
 			m.cancelTurn = nil
+			m.turnFailed = ev.Error != "" && !m.canceling
+			m.canceling = false
+			m.finishedAway = m.blurred
 			if ev.Error != "" {
 				m.appendHistory(styleDiffDel.Render(fmt.Sprintf("\nTask failed: %s\n\n", ev.Error)))
 			} else if ev.Result != nil {
@@ -1165,6 +1186,7 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.changes.UpdateFromGit(msg.status)
 
 	case teaShellDoneMsg:
+		m.finishedAway = m.blurred
 		if msg.ShellCommand {
 			if m.shellBackgrounded && msg.ProcID != "" {
 				m.currentShellProc = nil
@@ -1236,6 +1258,11 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusNotice = ""
 
 	case spinner.TickMsg:
+		// Let the tick lapse while the window is in the background; FocusMsg
+		// starts a new one.
+		if m.blurred {
+			break
+		}
 		var spCmd tea.Cmd
 		m.spinner, spCmd = m.spinner.Update(msg)
 		cmds = append(cmds, spCmd)
@@ -1265,42 +1292,34 @@ const (
 	maxInputRows = 10
 )
 
-// inputDisplayRows reports how many terminal rows the textarea's content needs
-// once soft-wrapped at its content width.
-func inputDisplayRows(ta textarea.Model) int {
-	width := ta.Width()
-	if width < 1 {
-		width = 1
-	}
-	rows := 0
-	for _, line := range strings.Split(ta.Value(), "\n") {
-		needed := (VisualLen(line) + width - 1) / width
-		if needed < 1 {
-			needed = 1
-		}
-		rows += needed
-	}
-	if rows < 1 {
-		rows = 1
-	}
-	return rows
+// newChatInput builds the chat input box. The textarea sizes itself to its
+// content between minInputRows and maxInputRows, counting its own soft wraps,
+// and leaves the caret to the terminal's real cursor (placed in View).
+// MaxHeight only caps the Enter key's newline, which fastllm handles itself;
+// pastes and Ctrl+J are limited by the textarea's own line cap and CharLimit.
+func newChatInput() textarea.Model {
+	ta := textarea.New()
+	ta.Placeholder = "Ask a question, enter a task, or type /help (Tab switches to Shell Mode)..."
+	ta.Prompt = "❯ "
+	ta.CharLimit = 8192
+	ta.ShowLineNumbers = false
+	ta.DynamicHeight = true
+	ta.MinHeight = minInputRows
+	ta.MaxHeight = maxInputRows
+	ta.SetHeight(minInputRows)
+	ta.SetVirtualCursor(false)
+	ta.Focus()
+	return ta
 }
 
-// syncInputHeight grows or shrinks the input box to fit its content and gives
-// the viewport back exactly the rows the box did not take, so the frame height
-// never changes.
+// syncInputHeight gives the viewport back exactly the rows the input box does
+// not take whenever the box has grown or shrunk, so the frame height never
+// changes.
 func (m *teaModel) syncInputHeight() {
-	desired := inputDisplayRows(m.input)
-	if desired < minInputRows {
-		desired = minInputRows
-	}
-	if desired > maxInputRows {
-		desired = maxInputRows
-	}
-	if desired == m.input.Height() {
+	if m.input.Height() == m.inputRows {
 		return
 	}
-	m.input.SetHeight(desired)
+	m.inputRows = m.input.Height()
 	m.resizeViewport()
 }
 
@@ -1316,7 +1335,7 @@ func (m *teaModel) resizeViewport() {
 	if vpHeight < 3 {
 		vpHeight = 3
 	}
-	m.viewport.Height = vpHeight
+	m.viewport.SetHeight(vpHeight)
 }
 
 func (m *teaModel) clearStatusAfter(d time.Duration) tea.Cmd {
@@ -1358,11 +1377,14 @@ func (m *teaModel) resolvePermission(allow, grant bool) {
 }
 
 func (m *teaModel) cancelActiveOperation() {
-	canceledAgent := m.cancelTurn != nil
-	if m.cancelTurn != nil {
+	canceledShell := m.shellExecuting || m.cancelShell != nil
+	// With a shell command running beside an agent turn, the first cancel
+	// stops the command the user started last; the next stops the turn.
+	canceledAgent := m.cancelTurn != nil && !canceledShell
+	if canceledAgent {
+		m.canceling = true
 		m.cancelTurn()
 	}
-	canceledShell := m.shellExecuting || m.cancelShell != nil
 	if m.cancelShell != nil {
 		m.cancelShell()
 		m.cancelShell = nil
@@ -1377,8 +1399,8 @@ func (m *teaModel) cancelActiveOperation() {
 	}
 	m.shellExecuting = false
 	switch {
-	case canceledAgent && canceledShell:
-		m.statusNotice = "Canceled active operations."
+	case canceledShell && m.cancelTurn != nil:
+		m.statusNotice = "Canceled shell command. Esc again cancels the agent turn."
 	case canceledAgent:
 		m.statusNotice = "Canceled active agent turn."
 	case canceledShell:
@@ -1390,8 +1412,13 @@ func (m *teaModel) handleShellSubmit(cmdStr string) tea.Cmd {
 	if m.processMgr == nil {
 		m.processMgr = NewProcessManager()
 	}
-	if m.isExecuting || m.shellExecuting {
-		m.statusNotice = "An operation is already running — Esc cancels it."
+	// A shell command may run beside an agent turn, but only one runs in the
+	// foreground at a time. Keep the refused command in the box.
+	if m.shellExecuting {
+		if m.mode == modeShell {
+			m.input.SetValue(cmdStr)
+		}
+		m.statusNotice = "A shell command is already running — Esc cancels it, Ctrl+B backgrounds it."
 		return m.clearStatusAfter(3 * time.Second)
 	}
 	trimmed := strings.TrimSpace(cmdStr)
@@ -1753,8 +1780,8 @@ func (m *teaModel) updatePromptAndPlaceholder() {
 func setFirstLinePrompt(ta *textarea.Model, prompt string) {
 	width := lipgloss.Width(prompt)
 	indent := strings.Repeat(" ", width)
-	ta.SetPromptFunc(width, func(line int) string {
-		if line == 0 {
+	ta.SetPromptFunc(width, func(info textarea.PromptInfo) string {
+		if info.LineNumber == 0 {
 			return prompt
 		}
 		return indent
@@ -2093,26 +2120,29 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 		case "/bg":
 			return m.handleBgSlashCommand(inputVal)
 
+		case "/find":
+			m.openSearch(strings.TrimSpace(strings.TrimPrefix(inputVal, parts[0])))
+			return nil
+
 		case "/copy", "/yank":
 			m.appendHistory(styleUserPrompt.Render("❯ "+inputVal) + "\n")
-			target := m.lastResponse
-			if len(parts) > 1 && parts[1] == "all" {
-				target = m.historyText.String()
+			target, what := m.lastResponse, "response"
+			if len(parts) > 1 {
+				switch parts[1] {
+				case "all":
+					target, what = m.historyText.String(), "transcript"
+				case "code":
+					target, what = lastCodeBlock(m.lastResponse), "code block"
+				}
 			}
 			if strings.TrimSpace(target) == "" {
 				m.statusNotice = "Nothing to copy yet."
 				m.appendHistory(styleMuted.Render("Nothing to copy yet.\n\n"))
-			} else {
-				err := clipboard.WriteAll(StripANSI(target))
-				if err != nil {
-					m.statusNotice = "Copy error: " + err.Error()
-					m.appendHistory(styleDiffDel.Render(fmt.Sprintf("Copy error: %v\n\n", err)))
-				} else {
-					m.statusNotice = "✓ Copied to clipboard."
-					m.appendHistory(styleStatusNotice.Render("✓ Copied response to system clipboard.\n\n"))
-				}
+				return m.clearStatusAfter(3 * time.Second)
 			}
-			return m.clearStatusAfter(3 * time.Second)
+			cmd := m.copyText(StripANSI(target), what)
+			m.appendHistory(styleStatusNotice.Render(m.statusNotice) + "\n\n")
+			return cmd
 
 		case "/dir":
 			m.appendHistory(styleUserPrompt.Render("❯ "+inputVal) + "\n")
@@ -2536,7 +2566,7 @@ func (m *teaModel) renderSkillsModal() string {
 				row += "  " + truncateText(skillSummary(skill.Description, 160), descriptionWidth)
 			}
 			if i == m.skillCursor {
-				row = lipgloss.NewStyle().Bold(true).Foreground(tuiColorDarkBg).Background(tuiColorCyan).Width(contentWidth).Render("› " + strings.TrimPrefix(row, "  "))
+				row = lipgloss.NewStyle().Bold(true).Foreground(tuiColorBrandFg).Background(tuiColorCyan).Width(contentWidth).Render("› " + strings.TrimPrefix(row, "  "))
 			}
 			lines = append(lines, row)
 		}
@@ -2553,8 +2583,7 @@ func (m *teaModel) renderSkillsModal() string {
 		Padding(0, 1).
 		Width(contentWidth).
 		Render(strings.Join(lines, "\n"))
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box,
-		lipgloss.WithWhitespaceBackground(tuiColorDarkBg))
+	return box
 }
 
 func (m *teaModel) renderModelsModal() string {
@@ -2668,8 +2697,7 @@ func (m *teaModel) renderModelsModal() string {
 		Width(contentWidth).
 		Render(strings.Join(lines, "\n"))
 
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box,
-		lipgloss.WithWhitespaceBackground(tuiColorDarkBg))
+	return box
 }
 
 func (m *teaModel) openDiffModal(fileIdx int) {
@@ -2751,7 +2779,7 @@ func (m *teaModel) openDiffModal(fileIdx int) {
 		vpHeight = 3
 	}
 
-	m.diffViewport = viewport.New(vpWidth, vpHeight)
+	m.diffViewport = viewport.New(viewport.WithWidth(vpWidth), viewport.WithHeight(vpHeight))
 	m.diffViewport.SetContent(highlighted)
 	m.diffViewport.GotoTop()
 	m.diffReady = true
@@ -2903,9 +2931,9 @@ func (m *teaModel) renderDiffModal() string {
 	if vpHeight < 3 {
 		vpHeight = 3
 	}
-	if m.diffViewport.Width != vpWidth || m.diffViewport.Height != vpHeight {
-		m.diffViewport.Width = vpWidth
-		m.diffViewport.Height = vpHeight
+	if m.diffViewport.Width() != vpWidth || m.diffViewport.Height() != vpHeight {
+		m.diffViewport.SetWidth(vpWidth)
+		m.diffViewport.SetHeight(vpHeight)
 	}
 
 	badge := styleDiffHdr.Render("[Modified]")
@@ -2976,8 +3004,7 @@ func (m *teaModel) renderDiffModal() string {
 		Width(modalWidth).
 		Render(strings.Join(lines, "\n"))
 
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box,
-		lipgloss.WithWhitespaceBackground(tuiColorDarkBg))
+	return box
 }
 
 func truncateText(value string, width int) string {
@@ -2995,29 +3022,207 @@ func truncateText(value string, width int) string {
 }
 
 // View implements tea.Model
-func (m *teaModel) View() string {
+func (m *teaModel) View() tea.View {
+	v := tea.NewView(m.render())
+	v.AltScreen = true // Clean full-screen TUI buffer
+	v.MouseMode = tea.MouseModeCellMotion
+	v.ReportFocus = true
+	v.WindowTitle = m.windowTitle()
+	v.ProgressBar = m.progressBar()
+	v.Cursor = m.terminalCursor()
+	v.BackgroundColor, v.ForegroundColor = m.terminalColors()
+	return v
+}
+
+// terminalColorWait is how long to wait for the terminal to report its
+// background before painting the theme's over it anyway.
+const terminalColorWait = 700 * time.Millisecond
+
+// teaTermColorsTimeoutMsg ends the wait for the terminal's background colour.
+type teaTermColorsTimeoutMsg struct{}
+
+// terminalColors paints the whole terminal in the theme's background and text
+// colours, so a theme looks the same whatever the terminal's own scheme;
+// Bubble Tea restores the terminal's colours on exit. The terminal theme is
+// left alone: following the terminal's scheme is its point.
+func (m *teaModel) terminalColors() (bg, fg color.Color) {
+	if !m.termColorsKnown || currentTheme.ANSI16 {
+		return nil, nil
+	}
+	return tuiColorBg, lipgloss.Color(currentTheme.Text)
+}
+
+// terminalCursor places the terminal's own cursor at the textarea's caret.
+func (m *teaModel) terminalCursor() *tea.Cursor {
+	if m.inputOrigin == nil || m.modalOpen() {
+		return nil
+	}
+	c := m.input.Cursor()
+	if c == nil {
+		return nil
+	}
+	c.Position.X += m.inputOrigin.X
+	c.Position.Y += m.inputOrigin.Y
+	return c
+}
+
+// windowTitle names the workspace in the terminal tab and says what fastllm
+// is doing, so a background tab still shows when it needs attention.
+func (m *teaModel) windowTitle() string {
+	suffix := "fastllm " + SymDot + " " + filepath.Base(m.workingDir)
+	switch {
+	case m.pendingPermission != nil:
+		return "! approval needed " + SymDot + " " + suffix
+	case m.pendingPlan != "" && !m.isExecuting:
+		return "! plan ready " + SymDot + " " + suffix
+	case m.isExecuting:
+		status := fmt.Sprintf("turn %d", m.activeTurn)
+		if m.activeTool != "" {
+			status += " " + SymDot + " " + m.activeTool
+		}
+		return status + " " + SymDot + " " + suffix
+	case m.shellExecuting:
+		return "shell " + SymDot + " " + suffix
+	case m.turnFailed:
+		return "failed " + SymDot + " " + suffix
+	case m.finishedAway:
+		return "done " + SymDot + " " + suffix
+	}
+	return suffix
+}
+
+// progressBar drives the terminal's native progress indicator (the tab and,
+// on Windows, the taskbar button): busy while working, yellow when waiting on
+// the user, red after a failed turn.
+func (m *teaModel) progressBar() *tea.ProgressBar {
+	switch {
+	case m.pendingPermission != nil, m.pendingPlan != "" && !m.isExecuting:
+		return tea.NewProgressBar(tea.ProgressBarWarning, 100)
+	case m.isExecuting, m.shellExecuting:
+		return tea.NewProgressBar(tea.ProgressBarIndeterminate, 0)
+	case m.turnFailed:
+		return tea.NewProgressBar(tea.ProgressBarError, 100)
+	}
+	return nil
+}
+
+// newlineKey names the key that inserts a newline in the input. Shift+Enter
+// only reaches the program when the terminal disambiguates keys; Ctrl+J works
+// everywhere (Alt+Enter is Windows Terminal's full-screen toggle).
+func (m *teaModel) newlineKey() string {
+	if m.keyDisambiguation {
+		return "Shift+Enter"
+	}
+	return "Ctrl+J"
+}
+
+// syncInputStyles rebuilds the textarea's styles when the theme changes, so its
+// selection highlight uses the active palette.
+func (m *teaModel) syncInputStyles() {
+	if m.inputStylesTheme == currentTheme.Name {
+		return
+	}
+	m.inputStylesTheme = currentTheme.Name
+	styles := m.input.Styles()
+	styles.Focused.Selection = lipgloss.NewStyle().Background(tuiColorTrack).Foreground(tuiColorWhite)
+	styles.Blurred.Selection = styles.Focused.Selection
+	styles.Cursor.Color = tuiColorCyan
+	styles.Cursor.Shape = tea.CursorBar
+	styles.Cursor.Blink = true
+	m.input.SetStyles(styles)
+}
+
+// lastCodeBlock returns the body of the last fenced code block in text, or ""
+// when it has none.
+func lastCodeBlock(text string) string {
+	var block []string
+	var last string
+	inside := false
+	for _, line := range strings.Split(text, "\n") {
+		fence := strings.HasPrefix(strings.TrimSpace(line), "```")
+		switch {
+		case fence && !inside:
+			inside, block = true, nil
+		case fence && inside:
+			inside, last = false, strings.Join(block, "\n")
+		case inside:
+			block = append(block, line)
+		}
+	}
+	return last
+}
+
+// writeClipboard writes the local clipboard; tests replace it.
+var writeClipboard = clipboard.WriteAll
+
+// copyText puts text on the clipboard twice over: the local clipboard, and the
+// terminal's own (OSC 52), which reaches the user's machine even over SSH,
+// where the local clipboard belongs to the remote host or does not exist.
+func (m *teaModel) copyText(text, what string) tea.Cmd {
+	if err := writeClipboard(text); err != nil {
+		m.statusNotice = "✓ Copied " + what + " through the terminal."
+	} else {
+		m.statusNotice = "✓ Copied " + what + " to the clipboard."
+	}
+	return tea.Batch(tea.SetClipboard(text), m.clearStatusAfter(3*time.Second))
+}
+
+// render draws the whole frame: the active modal, or the chat layout.
+func (m *teaModel) render() string {
 	if !m.ready {
 		return "Initializing fastllm..."
 	}
-	if m.diffModal {
+	m.hits.reset()
+	m.syncInputStyles()
+	frame := m.renderChat()
+	if box := m.renderModal(); box != "" {
+		return m.overlayModal(frame, box)
+	}
+	return frame
+}
+
+// modalOpen reports whether a modal owns the keyboard and mouse.
+func (m *teaModel) modalOpen() bool {
+	return m.diffModal || m.modelsModal || m.skillsModal ||
+		m.sessionsModal != nil || m.themeModal != nil || m.filesModal != nil
+}
+
+// renderModal draws the open modal's box, or returns "" when none is open.
+func (m *teaModel) renderModal() string {
+	switch {
+	case m.diffModal:
 		return m.renderDiffModal()
-	}
-	if m.modelsModal {
+	case m.modelsModal:
 		return m.renderModelsModal()
-	}
-	if m.sessionsModal != nil {
+	case m.sessionsModal != nil:
 		return m.renderSessionsModal()
-	}
-	if m.themeModal != nil {
+	case m.themeModal != nil:
 		return m.renderThemeModal()
-	}
-	if m.skillsModal {
+	case m.skillsModal:
 		return m.renderSkillsModal()
-	}
-	if m.filesModal != nil {
+	case m.filesModal != nil:
 		return m.renderFilesModal()
 	}
+	return ""
+}
 
+// overlayModal composites box over the centre of frame so the conversation
+// stays visible around it. While it is open the box is the only click target.
+func (m *teaModel) overlayModal(frame, box string) string {
+	w, h := lipgloss.Width(box), lipgloss.Height(box)
+	x := max((max(m.width, lipgloss.Width(frame))-w)/2, 0)
+	y := max((max(m.height, lipgloss.Height(frame))-h)/2, 0)
+	m.hits.reset()
+	m.hits.add(hitModal, x, y, w, h)
+	return lipgloss.NewCompositor(
+		lipgloss.NewLayer(frame),
+		lipgloss.NewLayer(box).X(x).Y(y).Z(1),
+	).Render()
+}
+
+// renderChat draws the conversation layout: header, transcript, input box,
+// sidebar and status bar.
+func (m *teaModel) renderChat() string {
 	var sb strings.Builder
 
 	// 1. Top Header Bar
@@ -3068,6 +3273,11 @@ func (m *teaModel) View() string {
 	}
 
 	headerLeft := lipgloss.JoinHorizontal(lipgloss.Center, brand, " ", modeBadge, " ", metaBadge, serversBadge, agentBadge)
+	modeX := lipgloss.Width(brand) + 1
+	if m.mode == modeAgent {
+		m.hits.add(hitMode, modeX, 0, lipgloss.Width(modeBadge), 1)
+	}
+	m.hits.add(hitModel, modeX+lipgloss.Width(modeBadge)+1, 0, lipgloss.Width(metaBadge), 1)
 	leftWidth := lipgloss.Width(headerLeft)
 	rightWidth := lipgloss.Width(rightInfo)
 	gap := m.frameWidth() - leftWidth - rightWidth - 2
@@ -3099,7 +3309,7 @@ func (m *teaModel) View() string {
 	}
 
 	// 3. Bottom Input Box with Rounded Border
-	var borderCol lipgloss.Color = tuiColorBorder
+	var borderCol color.Color = tuiColorBorder
 	if m.mode == modeShell {
 		borderCol = tuiColorYellow
 	}
@@ -3115,13 +3325,30 @@ func (m *teaModel) View() string {
 		}
 		inputContent = styleMuted.Render("Attached: ") + strings.Join(pills, " ") + "\n" + inputContent
 	}
+	// The textarea's first cell sits inside the box border, below the
+	// header, rule, transcript, dropdown and any attachment line.
+	textareaShown := true
 	if m.pendingPermission != nil {
 		inputContent = FormatPermissionPrompt(m.pendingPermission.ToolName, m.pendingPermission.Summary) +
 			"\n" + FormatPermissionKeyLegend(m.pendingPermission.scope().Describe())
 		borderCol = tuiColorYellow
+		textareaShown = false
 	} else if m.pendingPlan != "" && !m.isExecuting {
 		inputContent = m.renderPlanApproval()
 		borderCol = tuiColorCyan
+		textareaShown = false
+	} else if m.search != nil {
+		inputContent = m.renderSearchBar()
+		borderCol = tuiColorCyan
+		textareaShown = false
+	}
+	m.inputOrigin = nil
+	if textareaShown {
+		y := 2 + lipgloss.Height(strings.Join(left, "\n")) + 1
+		if len(m.pendingAttachments) > 0 {
+			y++
+		}
+		m.inputOrigin = &tea.Position{X: 1, Y: y}
 	}
 	inputBox := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -3134,7 +3361,9 @@ func (m *teaModel) View() string {
 		// Pad the left column to its full width so the sidebar lines up on
 		// every row, including the input box's.
 		body = lipgloss.NewStyle().Width(m.conversationWidth()).Render(body)
-		body = lipgloss.JoinHorizontal(lipgloss.Top, body, m.renderSidebar(lipgloss.Height(body)))
+		// The header and its rule take the first two rows.
+		sidebar := m.renderSidebar(m.conversationWidth(), 2, lipgloss.Height(body))
+		body = lipgloss.JoinHorizontal(lipgloss.Top, body, sidebar)
 	}
 	sb.WriteString(body + "\n")
 
@@ -3142,13 +3371,16 @@ func (m *teaModel) View() string {
 	// Hints drop to a short form rather than wrapping: the full string is ~97
 	// columns, so on a narrower terminal it silently became a second row and
 	// pushed the frame past the terminal height.
-	hints := "Tab: Shell  " + SymDot + "  Enter: Send  " + SymDot + "  Shift+Tab: Permissions  " + SymDot + "  /help"
+	hints := "Tab: Shell  " + SymDot + "  Enter: Send  " + SymDot + "  " + m.newlineKey() + ": Newline  " + SymDot + "  Shift+Tab: Permissions  " + SymDot + "  /help"
 	shortHints := "Tab: Shell  " + SymDot + "  Enter: Send  " + SymDot + "  /help"
 	if m.mode == modeShell {
 		hints = "Tab: Agent  " + SymDot + "  Enter: Run  " + SymDot + "  exit: Leave Shell  " + SymDot + "  Ctrl+B: Bg"
 		shortHints = "Tab: Agent  " + SymDot + "  Enter: Run  " + SymDot + "  exit"
 	}
-	if m.isExecuting {
+	if m.search != nil {
+		hints = "Enter/↓: Next  " + SymDot + "  ↑: Previous  " + SymDot + "  Esc: Close find"
+		shortHints = "Enter: Next  " + SymDot + "  ↑: Prev  " + SymDot + "  Esc"
+	} else if m.isExecuting {
 		hints = "Esc / Ctrl+C: Cancel"
 		shortHints = hints
 	} else if m.shellExecuting {
@@ -3193,11 +3425,7 @@ func (r *Runner) RunBubbleTea(req RunRequest) error {
 		return err
 	}
 
-	p := tea.NewProgram(
-		model,
-		tea.WithAltScreen(), // Clean full-screen TUI buffer
-		tea.WithMouseCellMotion(),
-	)
+	p := tea.NewProgram(model)
 	teaModelProg = p
 
 	_, err = p.Run()

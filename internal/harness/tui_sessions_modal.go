@@ -9,8 +9,8 @@ import (
 	"time"
 	"unicode"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // sessionsPicker is the state of the /sessions menu. Printable keys always go
@@ -109,7 +109,7 @@ func (p *sessionsPicker) highlighted() *InteractiveSession {
 	return &p.all[p.visible[p.cursor]]
 }
 
-func (m *teaModel) handleSessionsModalKey(msg tea.KeyMsg) tea.Cmd {
+func (m *teaModel) handleSessionsModalKey(msg tea.KeyPressMsg) tea.Cmd {
 	p := m.sessionsModal
 	switch {
 	case p.confirmDelete:
@@ -118,17 +118,17 @@ func (m *teaModel) handleSessionsModalKey(msg tea.KeyMsg) tea.Cmd {
 		return m.handleSessionsRenameKey(msg)
 	}
 
-	switch msg.Type {
-	case tea.KeyCtrlC:
+	switch msg.String() {
+	case "ctrl+c":
 		m.closeSessionsModal()
-	case tea.KeyEsc:
+	case "esc":
 		if p.filter != "" {
 			p.filter = ""
 			m.refilterSessions(p)
 		} else {
 			m.closeSessionsModal()
 		}
-	case tea.KeyEnter:
+	case "enter":
 		target := p.highlighted()
 		m.closeSessionsModal()
 		if target == nil || target.ID == m.activeSessionID() {
@@ -142,25 +142,25 @@ func (m *teaModel) handleSessionsModalKey(msg tea.KeyMsg) tea.Cmd {
 			return nil
 		}
 		return m.resumeSession(loaded)
-	case tea.KeyUp:
+	case "up":
 		if p.cursor > 0 {
 			p.cursor--
 		}
-	case tea.KeyDown:
+	case "down":
 		if p.cursor < len(p.visible)-1 {
 			p.cursor++
 		}
-	case tea.KeyHome:
+	case "home":
 		p.cursor = 0
-	case tea.KeyEnd:
+	case "end":
 		p.cursor = len(p.visible) - 1
 		if p.cursor < 0 {
 			p.cursor = 0
 		}
-	case tea.KeyTab:
+	case "tab":
 		p.hereOnly = !p.hereOnly
 		m.refilterSessions(p)
-	case tea.KeyDelete, tea.KeyCtrlD:
+	case "delete", "ctrl+d":
 		target := p.highlighted()
 		switch {
 		case target == nil:
@@ -170,33 +170,35 @@ func (m *teaModel) handleSessionsModalKey(msg tea.KeyMsg) tea.Cmd {
 			p.notice = ""
 			p.confirmDelete = true
 		}
-	case tea.KeyF2, tea.KeyCtrlR:
+	case "f2", "ctrl+r":
 		if target := p.highlighted(); target != nil {
 			p.notice = ""
 			p.renaming = true
 			p.renameBuf = target.Title
 		}
-	case tea.KeyBackspace:
+	case "backspace":
 		if runes := []rune(p.filter); len(runes) > 0 {
 			p.filter = string(runes[:len(runes)-1])
 			m.refilterSessions(p)
 		}
-	case tea.KeySpace:
-		p.filter += " "
-		m.refilterSessions(p)
-	case tea.KeyRunes:
-		p.filter += printableRunes(msg.Runes)
-		m.refilterSessions(p)
+	default:
+		if typed := printableRunes([]rune(msg.Text)); typed != "" {
+			p.filter += typed
+			m.refilterSessions(p)
+		}
 	}
 	return nil
 }
 
-func (m *teaModel) handleSessionsDeleteKey(msg tea.KeyMsg) tea.Cmd {
+func (m *teaModel) handleSessionsDeleteKey(msg tea.KeyPressMsg) tea.Cmd {
 	p := m.sessionsModal
-	confirmed := msg.Type == tea.KeyEnter ||
-		(msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && (msg.Runes[0] == 'y' || msg.Runes[0] == 'Y'))
-	cancelled := msg.Type == tea.KeyEsc || msg.Type == tea.KeyCtrlC ||
-		(msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && (msg.Runes[0] == 'n' || msg.Runes[0] == 'N'))
+	var confirmed, cancelled bool
+	switch msg.String() {
+	case "enter", "y", "Y":
+		confirmed = true
+	case "esc", "ctrl+c", "n", "N":
+		cancelled = true
+	}
 	if !confirmed && !cancelled {
 		return nil
 	}
@@ -221,20 +223,16 @@ func (m *teaModel) handleSessionsDeleteKey(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-func (m *teaModel) handleSessionsRenameKey(msg tea.KeyMsg) tea.Cmd {
+func (m *teaModel) handleSessionsRenameKey(msg tea.KeyPressMsg) tea.Cmd {
 	p := m.sessionsModal
-	switch msg.Type {
-	case tea.KeyEsc, tea.KeyCtrlC:
+	switch msg.String() {
+	case "esc", "ctrl+c":
 		p.renaming = false
-	case tea.KeyBackspace:
+	case "backspace":
 		if runes := []rune(p.renameBuf); len(runes) > 0 {
 			p.renameBuf = string(runes[:len(runes)-1])
 		}
-	case tea.KeySpace:
-		p.renameBuf += " "
-	case tea.KeyRunes:
-		p.renameBuf += printableRunes(msg.Runes)
-	case tea.KeyEnter:
+	case "enter":
 		target := p.highlighted()
 		title := strings.TrimSpace(p.renameBuf)
 		if target == nil || title == "" {
@@ -258,6 +256,8 @@ func (m *teaModel) handleSessionsRenameKey(msg tea.KeyMsg) tea.Cmd {
 		target.Title = title
 		target.CustomTitle = true
 		p.notice = "Renamed to " + strconv.Quote(title) + "."
+	default:
+		p.renameBuf += printableRunes([]rune(msg.Text))
 	}
 	return nil
 }
@@ -397,8 +397,7 @@ func (m *teaModel) renderSessionsModal() string {
 		Padding(0, 1).
 		Width(contentWidth).
 		Render(strings.Join(lines, "\n"))
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box,
-		lipgloss.WithWhitespaceBackground(tuiColorDarkBg))
+	return box
 }
 
 // relativeAge renders how long ago t was, coarsely: "just now", "5m ago".

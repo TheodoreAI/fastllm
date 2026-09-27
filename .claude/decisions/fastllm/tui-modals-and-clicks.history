@@ -1,0 +1,4 @@
+- decided_at: 2026-09-27T00:09:20+00:00
+  event: initial
+  value: Modals are overlaid on the chat with a lipgloss Compositor (renderModal returns only the box); clicks resolve through a per-frame hitMap of invisible lipgloss layers (tui_hits.go) registered during render; clicking outside a modal acts as Esc
+  reason: Full-screen modals hid the chat and theme previews; hand-counted click offsets (modelStart := 7+1+9+1) had drifted after the header gained the dir pill. Considered drawing the hit layers too (rejected: re-drawn ANSI could subtly change output) and keeping offsets (fragile).

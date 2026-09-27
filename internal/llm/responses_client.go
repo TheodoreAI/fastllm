@@ -328,7 +328,13 @@ type responsesOutputItem struct {
 type responsesResponse struct {
 	OutputText string                `json:"output_text"`
 	Output     []responsesOutputItem `json:"output"`
-	Usage      struct {
+	// Status is "incomplete" when generation stopped early, with the reason
+	// in IncompleteDetails ("max_output_tokens" for the output limit).
+	Status            string `json:"status"`
+	IncompleteDetails struct {
+		Reason string `json:"reason"`
+	} `json:"incomplete_details"`
+	Usage struct {
 		InputTokens  int `json:"input_tokens"`
 		OutputTokens int `json:"output_tokens"`
 		TotalTokens  int `json:"total_tokens"`
@@ -415,7 +421,7 @@ func (c *ResponsesClient) ChatWithUsage(ctx context.Context, model string, messa
 		return ChatResult{}, err
 	}
 
-	result := ChatResult{}
+	result := ChatResult{Truncated: rr.Status == "incomplete" && rr.IncompleteDetails.Reason == "max_output_tokens"}
 	if rr.Usage.InputTokens > 0 || rr.Usage.OutputTokens > 0 {
 		result.Usage = Usage{
 			PromptTokens:     rr.Usage.InputTokens,

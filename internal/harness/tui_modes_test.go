@@ -7,7 +7,7 @@ import (
 
 	"fastllm/internal/llm"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 // pumpEvents feeds a turn's events through Update until the turn finishes, as
@@ -34,14 +34,14 @@ func TestShiftTabCyclesModesAndClearsGrants(t *testing.T) {
 	m.permissionController().Grant("write_file")
 	want := []PermissionMode{PermissionEdit, PermissionFull, PermissionPlan, PermissionAgent}
 	for _, mode := range want {
-		m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+		m.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
 		if m.permissionMode != mode || m.permissionController().Mode != mode {
 			t.Fatalf("Shift+Tab gave %q (controller %q), want %q", m.permissionMode, m.permissionController().Mode, mode)
 		}
 		if m.permissionController().HasGrant("write_file") {
 			t.Fatalf("session grant survived switching to %s", mode)
 		}
-		if !strings.Contains(stripANSI(m.View()), "◈ "+strings.ToUpper(mode.Label())) {
+		if !strings.Contains(stripANSI(m.render()), "◈ "+strings.ToUpper(mode.Label())) {
 			t.Fatalf("header does not show %s", mode.Label())
 		}
 	}
@@ -52,7 +52,7 @@ func TestShiftTabCyclesModesAndClearsGrants(t *testing.T) {
 func TestModeCannotChangeDuringATurn(t *testing.T) {
 	m := permissionTestModel(t)
 	m.isExecuting = true
-	m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
 	if m.permissionMode != PermissionAgent {
 		t.Fatalf("Shift+Tab changed the mode mid-turn to %q", m.permissionMode)
 	}
@@ -102,16 +102,16 @@ func TestPlanApprovalSwitchesModeAndStartsTheWork(t *testing.T) {
 	if m.pendingPlan != "1. create notes.txt" || m.permissionMode != PermissionPlan {
 		t.Fatalf("after the plan: pending=%q mode=%q", m.pendingPlan, m.permissionMode)
 	}
-	if !strings.Contains(stripANSI(m.View()), "Plan ready") {
+	if !strings.Contains(stripANSI(m.render()), "Plan ready") {
 		t.Fatal("approval choices are not shown")
 	}
 	// Ordinary keys do not type into the prompt or start anything.
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
 	if m.isExecuting || m.pendingPlan == "" {
 		t.Fatal("an unrelated key resolved the plan")
 	}
 
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	m.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})
 	if m.permissionMode != PermissionEdit || m.pendingPlan != "" || !m.isExecuting {
 		t.Fatalf("approve-to-edit: mode=%q pending=%q executing=%v", m.permissionMode, m.pendingPlan, m.isExecuting)
 	}
@@ -130,7 +130,7 @@ func TestKeepPlanningLeavesModeUnchanged(t *testing.T) {
 	m.permissionMode = PermissionPlan
 	m.handleAgentSubmit("add notes")
 	pumpEvents(t, m)
-	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if m.permissionMode != PermissionPlan || m.pendingPlan != "" || m.isExecuting {
 		t.Fatalf("esc: mode=%q pending=%q executing=%v", m.permissionMode, m.pendingPlan, m.isExecuting)
 	}

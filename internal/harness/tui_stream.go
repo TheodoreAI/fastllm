@@ -3,7 +3,7 @@ package harness
 import (
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
 // streamBuffer accumulates streamed assistant text for one turn and decides how
@@ -120,7 +120,6 @@ func (m *teaModel) retractStreamedText() {
 	m.historyText.Reset()
 	m.historyText.WriteString(history)
 	if m.ready {
-		m.viewport.SetContent(history)
-		m.viewport.GotoBottom()
+		m.syncTranscript(true)
 	}
 }

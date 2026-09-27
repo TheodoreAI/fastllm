@@ -1,0 +1,4 @@
+- decided_at: 2026-09-26T23:44:41+00:00
+  event: initial
+  value: Bubble Tea v2 (charm.land/bubbletea/v2 v2.0.10, bubbles/v2 v2.2.1, lipgloss/v2 v2.0.6); keys matched via KeyPressMsg.String(), paste via tea.PasteMsg, alt screen + mouse mode set on the tea.View returned by View()
+  reason: v1 on Windows reads console input per key and never flags pastes, so multi-line pastes submitted at the first newline; v2 decodes bracketed paste on Windows Terminal. Considered: burst-coalescing Enter keys in v1 (heuristic, timing-dependent).

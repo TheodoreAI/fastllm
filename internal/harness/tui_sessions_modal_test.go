@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/bubbles/v2/textarea"
+	tea "charm.land/bubbletea/v2"
 	"fastllm/internal/llm"
-	"github.com/charmbracelet/bubbles/textarea"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // sessionsModalFixture builds a model in dirHere with an active session and
@@ -71,12 +71,16 @@ func visibleIDs(m *teaModel) []string {
 
 func typeKeys(m *teaModel, text string) {
 	for _, r := range text {
-		m.handleSessionsModalKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m.handleSessionsModalKey(tea.KeyPressMsg{Code: r, Text: string(rune(r))})
 	}
 }
 
-func key(m *teaModel, k tea.KeyType) tea.Cmd {
-	return m.handleSessionsModalKey(tea.KeyMsg{Type: k})
+func key(m *teaModel, code rune, mods ...tea.KeyMod) tea.Cmd {
+	msg := tea.KeyPressMsg{Code: code}
+	for _, mod := range mods {
+		msg.Mod |= mod
+	}
+	return m.handleSessionsModalKey(msg)
 }
 
 func TestSessionsModalOrdersCurrentDirectoryFirst(t *testing.T) {
@@ -102,7 +106,7 @@ func TestSessionsModalFilterAndEscape(t *testing.T) {
 	if got := strings.Join(visibleIDs(m), ","); got != "here-old,else-new" {
 		t.Fatalf("title filter = %s", got)
 	}
-	key(m, tea.KeyEsc)
+	key(m, tea.KeyEscape)
 	if m.sessionsModal == nil || m.sessionsModal.filter != "" || len(m.sessionsModal.visible) != 4 {
 		t.Fatal("first Esc should clear the filter and keep the menu open")
 	}
@@ -111,13 +115,13 @@ func TestSessionsModalFilterAndEscape(t *testing.T) {
 	if got := strings.Join(visibleIDs(m), ","); got != "else-old" {
 		t.Fatalf("id filter = %s", got)
 	}
-	key(m, tea.KeyEsc)
+	key(m, tea.KeyEscape)
 	typeKeys(m, filepath.Base(dirElse))
 	if got := strings.Join(visibleIDs(m), ","); got != "else-new,else-old" {
 		t.Fatalf("directory filter = %s", got)
 	}
-	key(m, tea.KeyEsc)
-	key(m, tea.KeyEsc)
+	key(m, tea.KeyEscape)
+	key(m, tea.KeyEscape)
 	if m.sessionsModal != nil {
 		t.Fatal("second Esc should close the menu")
 	}
@@ -159,7 +163,7 @@ func TestSessionsModalDeleteConfirmAndGuard(t *testing.T) {
 	m, _, _ := sessionsModalFixture(t)
 	m.openSessionsModal()
 
-	key(m, tea.KeyCtrlD) // cursor is on the active session
+	key(m, 'd', tea.ModCtrl) // cursor is on the active session
 	if m.sessionsModal.confirmDelete {
 		t.Fatal("deleting the active session must be refused")
 	}
@@ -168,7 +172,7 @@ func TestSessionsModalDeleteConfirmAndGuard(t *testing.T) {
 	}
 
 	key(m, tea.KeyDown) // here-old
-	key(m, tea.KeyCtrlD)
+	key(m, 'd', tea.ModCtrl)
 	typeKeys(m, "n")
 	if _, err := m.sessionStore.Load("here-old"); err != nil {
 		t.Fatal("n should cancel the delete")
@@ -177,7 +181,7 @@ func TestSessionsModalDeleteConfirmAndGuard(t *testing.T) {
 		t.Fatal("the confirm answer must not leak into the filter")
 	}
 
-	key(m, tea.KeyCtrlD)
+	key(m, 'd', tea.ModCtrl)
 	typeKeys(m, "y")
 	if _, err := m.sessionStore.Load("here-old"); err == nil {
 		t.Fatal("y should delete the session")
@@ -193,7 +197,7 @@ func TestSessionsModalRenameActiveSurvivesAutosave(t *testing.T) {
 	m.sessionMessages = m.activeSession.Messages
 	m.openSessionsModal()
 
-	key(m, tea.KeyCtrlR)
+	key(m, 'r', tea.ModCtrl)
 	for range []rune(m.sessionsModal.renameBuf) {
 		key(m, tea.KeyBackspace)
 	}
@@ -215,7 +219,7 @@ func TestSessionsModalRenameInactive(t *testing.T) {
 	m, _, _ := sessionsModalFixture(t)
 	m.openSessionsModal()
 	key(m, tea.KeyEnd) // else-old
-	key(m, tea.KeyCtrlR)
+	key(m, 'r', tea.ModCtrl)
 	typeKeys(m, " v2")
 	key(m, tea.KeyEnter)
 	saved, _ := m.sessionStore.Load("else-old")
@@ -290,8 +294,8 @@ func TestSessionsModalDeleteAndF2Keys(t *testing.T) {
 func TestSessionsModalIgnoresControlRunes(t *testing.T) {
 	m, _, _ := sessionsModalFixture(t)
 	m.openSessionsModal()
-	m.handleSessionsModalKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{0}})
-	m.handleSessionsModalKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{4}})
+	m.handleSessionsModalKey(tea.KeyPressMsg{Code: 0, Text: string(rune(0))})
+	m.handleSessionsModalKey(tea.KeyPressMsg{Code: 4, Text: string(rune(4))})
 	if m.sessionsModal.filter != "" {
 		t.Fatalf("control runes leaked into the filter: %q", m.sessionsModal.filter)
 	}

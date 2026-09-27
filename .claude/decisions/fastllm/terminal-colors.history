@@ -1,0 +1,4 @@
+- decided_at: 2026-09-27T00:57:32+00:00
+  event: initial
+  value: View paints terminal background/foreground from the theme (Theme.Bg, Theme.Text) except the ANSI16 'terminal' theme; waits for BackgroundColorMsg or a 700ms timeout first; Theme.DarkBg renamed Bg
+  reason: Themes looked different on different terminal schemes; painting before the background reply would make the terminal report the theme's own colour and break light-terminal detection.
