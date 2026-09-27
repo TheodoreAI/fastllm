@@ -1,5 +1,6 @@
 fastllm.exe
 fastllm.exe~
+fastllm-cli.exe
 /fastllm
 .fastllm.launched
 fastllm.db
