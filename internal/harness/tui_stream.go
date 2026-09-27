@@ -120,7 +120,6 @@ func (m *teaModel) retractStreamedText() {
 	m.historyText.Reset()
 	m.historyText.WriteString(history)
 	if m.ready {
-		m.viewport.SetContent(history)
-		m.viewport.GotoBottom()
+		m.syncTranscript(true)
 	}
 }

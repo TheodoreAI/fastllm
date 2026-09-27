@@ -44,7 +44,7 @@ var (
 	tuiColorRed     color.Color
 	tuiColorPurple  color.Color
 	tuiColorMuted   color.Color
-	tuiColorDarkBg  color.Color
+	tuiColorBg      color.Color
 	tuiColorCardBg  color.Color
 	tuiColorBorder  color.Color
 	tuiColorTrack   color.Color
@@ -310,6 +310,18 @@ type teaModel struct {
 	keyDisambiguation bool
 	// inputStylesTheme is the theme the textarea styles were last built for.
 	inputStylesTheme string
+	// inputRows is the input box height the viewport was last sized for.
+	inputRows int
+	// inputOrigin is where the textarea's first cell was drawn in the last
+	// frame, for placing the terminal cursor; nil when the box showed
+	// something else (a prompt, the find bar) or no frame was drawn.
+	inputOrigin *tea.Position
+	// search is the open find bar (tui_search.go); nil when closed.
+	search *transcriptSearch
+	// termColorsKnown is set once the terminal has reported its background
+	// (or did not answer in time). Painting the theme's background before
+	// then would make the terminal report the theme's colour back.
+	termColorsKnown bool
 
 	// Diff modal viewer state
 	diffModal          bool
@@ -379,13 +391,7 @@ func newTeaModel(runner *Runner, req RunRequest) (*teaModel, error) {
 		permissionMode = NormalizeMode(req.PermissionMode)
 	}
 
-	ta := textarea.New()
-	ta.Placeholder = "Ask a question, enter a task, or type /help (Tab switches to Shell Mode)..."
-	ta.Focus()
-	ta.Prompt = "❯ "
-	ta.CharLimit = 8192
-	ta.SetHeight(2)
-	ta.ShowLineNumbers = false
+	ta := newChatInput()
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
@@ -449,8 +455,7 @@ func (m *teaModel) formatWelcome() string {
 func (m *teaModel) appendHistory(text string) {
 	m.historyText.WriteString(trimPaddedTail(text))
 	if m.ready {
-		m.viewport.SetContent(m.historyText.String())
-		m.viewport.GotoBottom()
+		m.syncTranscript(true)
 	}
 }
 
@@ -567,6 +572,7 @@ func (m *teaModel) Init() tea.Cmd {
 		m.input.Focus(),
 		m.spinner.Tick,
 		tea.RequestBackgroundColor,
+		tea.Tick(terminalColorWait, func(time.Time) tea.Msg { return teaTermColorsTimeoutMsg{} }),
 		m.refreshGitStatusCmd(),
 		m.waitForGitWatch(),
 	)
@@ -593,7 +599,7 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if !m.ready {
 			m.viewport = viewport.New(viewport.WithWidth(m.conversationWidth()), viewport.WithHeight(3))
-			m.viewport.SetContent(m.historyText.String())
+			m.syncTranscript(false)
 			m.ready = true
 			m.resizeViewport()
 			m.viewport.GotoBottom()
@@ -610,6 +616,13 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.pendingPlan != "" || m.pendingPermission != nil || m.modalOpen() {
 			return m, nil
 		}
+		if m.search != nil {
+			m.addSearchText(msg.Content)
+			return m, nil
+		}
+
+	case teaTermColorsTimeoutMsg:
+		m.termColorsKnown = true
 
 	case tea.FocusMsg:
 		m.blurred = false
@@ -621,6 +634,7 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.blurred = true
 
 	case tea.BackgroundColorMsg:
+		m.termColorsKnown = true
 		// Follow a light terminal unless the user picked a theme themselves.
 		if !msg.IsDark() && !themeFromPreference && !currentTheme.Light {
 			// The greeting was drawn in the dark default; redraw it if it is
@@ -695,6 +709,9 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.filesModal != nil {
 			return m, m.handleFilesModalKey(msg)
+		}
+		if m.search != nil && !m.modalOpen() {
+			return m, m.handleSearchKey(msg)
 		}
 		if m.modelsModal {
 			switch msg.String() {
@@ -844,6 +861,10 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+j":
 			// Ctrl+J is universal terminal newline / linefeed
 			m.input.InsertString("\n")
+			return m, nil
+
+		case "ctrl+f":
+			m.openSearch("")
 			return m, nil
 
 		case "ctrl+o":
@@ -1271,42 +1292,34 @@ const (
 	maxInputRows = 10
 )
 
-// inputDisplayRows reports how many terminal rows the textarea's content needs
-// once soft-wrapped at its content width.
-func inputDisplayRows(ta textarea.Model) int {
-	width := ta.Width()
-	if width < 1 {
-		width = 1
-	}
-	rows := 0
-	for _, line := range strings.Split(ta.Value(), "\n") {
-		needed := (VisualLen(line) + width - 1) / width
-		if needed < 1 {
-			needed = 1
-		}
-		rows += needed
-	}
-	if rows < 1 {
-		rows = 1
-	}
-	return rows
+// newChatInput builds the chat input box. The textarea sizes itself to its
+// content between minInputRows and maxInputRows, counting its own soft wraps,
+// and leaves the caret to the terminal's real cursor (placed in View).
+// MaxHeight only caps the Enter key's newline, which fastllm handles itself;
+// pastes and Ctrl+J are limited by the textarea's own line cap and CharLimit.
+func newChatInput() textarea.Model {
+	ta := textarea.New()
+	ta.Placeholder = "Ask a question, enter a task, or type /help (Tab switches to Shell Mode)..."
+	ta.Prompt = "❯ "
+	ta.CharLimit = 8192
+	ta.ShowLineNumbers = false
+	ta.DynamicHeight = true
+	ta.MinHeight = minInputRows
+	ta.MaxHeight = maxInputRows
+	ta.SetHeight(minInputRows)
+	ta.SetVirtualCursor(false)
+	ta.Focus()
+	return ta
 }
 
-// syncInputHeight grows or shrinks the input box to fit its content and gives
-// the viewport back exactly the rows the box did not take, so the frame height
-// never changes.
+// syncInputHeight gives the viewport back exactly the rows the input box does
+// not take whenever the box has grown or shrunk, so the frame height never
+// changes.
 func (m *teaModel) syncInputHeight() {
-	desired := inputDisplayRows(m.input)
-	if desired < minInputRows {
-		desired = minInputRows
-	}
-	if desired > maxInputRows {
-		desired = maxInputRows
-	}
-	if desired == m.input.Height() {
+	if m.input.Height() == m.inputRows {
 		return
 	}
-	m.input.SetHeight(desired)
+	m.inputRows = m.input.Height()
 	m.resizeViewport()
 }
 
@@ -2107,6 +2120,10 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 		case "/bg":
 			return m.handleBgSlashCommand(inputVal)
 
+		case "/find":
+			m.openSearch(strings.TrimSpace(strings.TrimPrefix(inputVal, parts[0])))
+			return nil
+
 		case "/copy", "/yank":
 			m.appendHistory(styleUserPrompt.Render("❯ "+inputVal) + "\n")
 			target, what := m.lastResponse, "response"
@@ -2549,7 +2566,7 @@ func (m *teaModel) renderSkillsModal() string {
 				row += "  " + truncateText(skillSummary(skill.Description, 160), descriptionWidth)
 			}
 			if i == m.skillCursor {
-				row = lipgloss.NewStyle().Bold(true).Foreground(tuiColorDarkBg).Background(tuiColorCyan).Width(contentWidth).Render("› " + strings.TrimPrefix(row, "  "))
+				row = lipgloss.NewStyle().Bold(true).Foreground(tuiColorBrandFg).Background(tuiColorCyan).Width(contentWidth).Render("› " + strings.TrimPrefix(row, "  "))
 			}
 			lines = append(lines, row)
 		}
@@ -3012,7 +3029,41 @@ func (m *teaModel) View() tea.View {
 	v.ReportFocus = true
 	v.WindowTitle = m.windowTitle()
 	v.ProgressBar = m.progressBar()
+	v.Cursor = m.terminalCursor()
+	v.BackgroundColor, v.ForegroundColor = m.terminalColors()
 	return v
+}
+
+// terminalColorWait is how long to wait for the terminal to report its
+// background before painting the theme's over it anyway.
+const terminalColorWait = 700 * time.Millisecond
+
+// teaTermColorsTimeoutMsg ends the wait for the terminal's background colour.
+type teaTermColorsTimeoutMsg struct{}
+
+// terminalColors paints the whole terminal in the theme's background and text
+// colours, so a theme looks the same whatever the terminal's own scheme;
+// Bubble Tea restores the terminal's colours on exit. The terminal theme is
+// left alone: following the terminal's scheme is its point.
+func (m *teaModel) terminalColors() (bg, fg color.Color) {
+	if !m.termColorsKnown || currentTheme.ANSI16 {
+		return nil, nil
+	}
+	return tuiColorBg, lipgloss.Color(currentTheme.Text)
+}
+
+// terminalCursor places the terminal's own cursor at the textarea's caret.
+func (m *teaModel) terminalCursor() *tea.Cursor {
+	if m.inputOrigin == nil || m.modalOpen() {
+		return nil
+	}
+	c := m.input.Cursor()
+	if c == nil {
+		return nil
+	}
+	c.Position.X += m.inputOrigin.X
+	c.Position.Y += m.inputOrigin.Y
+	return c
 }
 
 // windowTitle names the workspace in the terminal tab and says what fastllm
@@ -3075,6 +3126,9 @@ func (m *teaModel) syncInputStyles() {
 	styles := m.input.Styles()
 	styles.Focused.Selection = lipgloss.NewStyle().Background(tuiColorTrack).Foreground(tuiColorWhite)
 	styles.Blurred.Selection = styles.Focused.Selection
+	styles.Cursor.Color = tuiColorCyan
+	styles.Cursor.Shape = tea.CursorBar
+	styles.Cursor.Blink = true
 	m.input.SetStyles(styles)
 }
 
@@ -3271,13 +3325,30 @@ func (m *teaModel) renderChat() string {
 		}
 		inputContent = styleMuted.Render("Attached: ") + strings.Join(pills, " ") + "\n" + inputContent
 	}
+	// The textarea's first cell sits inside the box border, below the
+	// header, rule, transcript, dropdown and any attachment line.
+	textareaShown := true
 	if m.pendingPermission != nil {
 		inputContent = FormatPermissionPrompt(m.pendingPermission.ToolName, m.pendingPermission.Summary) +
 			"\n" + FormatPermissionKeyLegend(m.pendingPermission.scope().Describe())
 		borderCol = tuiColorYellow
+		textareaShown = false
 	} else if m.pendingPlan != "" && !m.isExecuting {
 		inputContent = m.renderPlanApproval()
 		borderCol = tuiColorCyan
+		textareaShown = false
+	} else if m.search != nil {
+		inputContent = m.renderSearchBar()
+		borderCol = tuiColorCyan
+		textareaShown = false
+	}
+	m.inputOrigin = nil
+	if textareaShown {
+		y := 2 + lipgloss.Height(strings.Join(left, "\n")) + 1
+		if len(m.pendingAttachments) > 0 {
+			y++
+		}
+		m.inputOrigin = &tea.Position{X: 1, Y: y}
 	}
 	inputBox := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -3306,7 +3377,10 @@ func (m *teaModel) renderChat() string {
 		hints = "Tab: Agent  " + SymDot + "  Enter: Run  " + SymDot + "  exit: Leave Shell  " + SymDot + "  Ctrl+B: Bg"
 		shortHints = "Tab: Agent  " + SymDot + "  Enter: Run  " + SymDot + "  exit"
 	}
-	if m.isExecuting {
+	if m.search != nil {
+		hints = "Enter/↓: Next  " + SymDot + "  ↑: Previous  " + SymDot + "  Esc: Close find"
+		shortHints = "Enter: Next  " + SymDot + "  ↑: Prev  " + SymDot + "  Esc"
+	} else if m.isExecuting {
 		hints = "Esc / Ctrl+C: Cancel"
 		shortHints = hints
 	} else if m.shellExecuting {

@@ -864,11 +864,7 @@ func TestPasteInsertsTextInsteadOfSubmitting(t *testing.T) {
 func TestInputBoxGrowsAndKeepsTypedTextVisible(t *testing.T) {
 	const width, height = 80, 30
 	tmp := t.TempDir()
-	ta := textarea.New()
-	ta.Prompt = "> "
-	ta.SetHeight(minInputRows)
-	ta.ShowLineNumbers = false
-	ta.Focus()
+	ta := newChatInput()
 	m := &teaModel{
 		runner: NewRunner(&mockLLM{}, tmp, "test-model"), workingDir: tmp,
 		modelName: "test-model", input: ta, viewport: viewport.New(viewport.WithWidth(width), viewport.WithHeight(10)),

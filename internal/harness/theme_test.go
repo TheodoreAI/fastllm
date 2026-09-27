@@ -41,7 +41,7 @@ func TestBuiltinThemesAreComplete(t *testing.T) {
 		for role, value := range map[string]string{
 			"Muted": th.Muted, "Border": th.Border, "Frame": th.Frame, "Text": th.Text, "Value": th.Value,
 			"Accent": th.Accent, "Accent2": th.Accent2, "Purple": th.Purple, "Ok": th.Ok, "Warn": th.Warn,
-			"Error": th.Error, "DarkBg": th.DarkBg, "CardBg": th.CardBg, "Track": th.Track, "BrandFg": th.BrandFg,
+			"Error": th.Error, "Bg": th.Bg, "CardBg": th.CardBg, "Track": th.Track, "BrandFg": th.BrandFg,
 		} {
 			if !hexColor.MatchString(value) {
 				t.Errorf("theme %s role %s = %q is not #RRGGBB", th.Name, role, value)
