@@ -330,7 +330,7 @@ func (m *teaModel) renderFilesModal() string {
 		Width(modalWidth).
 		Render(sb.String())
 
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, contentBox)
+	return contentBox
 }
 
 func padLeft(s string, width int) string {

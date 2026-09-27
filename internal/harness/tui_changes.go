@@ -3,10 +3,12 @@ package harness
 import (
 	"fastllm/internal/gitrepo"
 	"fmt"
+	"path"
 	"path/filepath"
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"charm.land/lipgloss/v2/tree"
 )
 
 // The changes column only appears when the terminal leaves the conversation a
@@ -96,19 +98,6 @@ func (c *sessionChanges) HeaderRows() int {
 		headerRows = 3
 	}
 	return headerRows
-}
-
-// FileAtRow returns the fileChange corresponding to a visual row (0-indexed from top of column).
-func (c *sessionChanges) FileAtRow(rowY int) (fileChange, int, bool) {
-	if len(c.files) == 0 {
-		return fileChange{}, -1, false
-	}
-	hdr := c.HeaderRows()
-	fileIdx := rowY - hdr
-	if fileIdx < 0 || fileIdx >= len(c.files) {
-		return fileChange{}, -1, false
-	}
-	return c.files[fileIdx], fileIdx, true
 }
 
 // UpdateFromGit updates the changes column with accurate working tree and git status.
@@ -211,13 +200,14 @@ func (c *sessionChanges) Render(width, height int) string {
 	if inner < 1 || height < 1 {
 		return ""
 	}
-	return renderSidebarColumn(c.Rows(inner, height), inner, height)
+	rows, _ := c.Rows(inner, height)
+	return renderSidebarColumn(rows, inner, height)
 }
 
 // Rows builds the section's rows at inner width, using at most height of
-// them. The sidebar stacks it under the Session and Context sections.
-func (c *sessionChanges) Rows(inner, height int) []string {
-	var rows []string
+// them. The sidebar stacks it under the Session and Context sections. fileAt
+// runs parallel to rows: the index into c.files a row shows, or -1.
+func (c *sessionChanges) Rows(inner, height int) (rows []string, fileAt []int) {
 	count, added, removed := c.Totals()
 
 	headerTitle := "Changes"
@@ -268,22 +258,100 @@ func (c *sessionChanges) Rows(inner, height int) []string {
 		} else {
 			rows = append(rows, styleMuted.Render("No files changed yet."))
 		}
-	} else {
-		listRows := height - len(rows)
-		shown := c.files
-		if len(shown) > listRows {
-			// Give up one list row to the "… N more" line.
-			shown = shown[:max(listRows-1, 0)]
-		}
-		for idx, f := range shown {
-			rows = append(rows, formatChangeRow(f, inner, idx == c.cursor))
-		}
-		if hidden := len(c.files) - len(shown); hidden > 0 {
-			rows = append(rows, styleMuted.Render(fmt.Sprintf("… %d more", hidden)))
-		}
 	}
 
-	return rows
+	fileAt = make([]int, len(rows))
+	for i := range fileAt {
+		fileAt[i] = -1
+	}
+	if count > 0 {
+		list, listAt := c.fileRows(inner, height-len(rows))
+		rows = append(rows, list...)
+		fileAt = append(fileAt, listAt...)
+	}
+	return rows, fileAt
+}
+
+// changeGroup is the changed files under one directory, in list order.
+type changeGroup struct {
+	dir     string
+	indexes []int
+}
+
+// groups buckets the files by directory, keeping groups in the order their
+// first file appears so the most recently touched directory stays on top.
+func (c *sessionChanges) groups() []changeGroup {
+	var groups []changeGroup
+	byDir := map[string]int{}
+	for i, f := range c.files {
+		dir := path.Dir(f.Path)
+		g, ok := byDir[dir]
+		if !ok {
+			g = len(groups)
+			byDir[dir] = g
+			groups = append(groups, changeGroup{dir: dir})
+		}
+		groups[g].indexes = append(groups[g].indexes, i)
+	}
+	return groups
+}
+
+// fileRows lists the files in at most listRows rows. Files sharing a
+// directory are drawn as a tree under it, which leaves the narrow column room
+// for the file names; when everything sits in the workspace root the list
+// stays flat.
+func (c *sessionChanges) fileRows(inner, listRows int) (rows []string, fileAt []int) {
+	groups := c.groups()
+	if len(groups) == 1 && groups[0].dir == "." {
+		shown := len(c.files)
+		if shown > listRows {
+			// Give up one list row to the "… N more" line.
+			shown = max(listRows-1, 0)
+		}
+		for idx := 0; idx < shown; idx++ {
+			rows = append(rows, formatChangeRow(c.files[idx], inner, idx == c.cursor))
+			fileAt = append(fileAt, idx)
+		}
+		return c.appendHidden(rows, fileAt, shown)
+	}
+
+	budget := listRows
+	if len(c.files)+len(groups) > listRows {
+		budget = max(listRows-1, 0) // keep a row for "… N more"
+	}
+	const enumWidth = 4 // "├── "
+	shown := 0
+	for _, g := range groups {
+		// A directory is only worth its header row with at least one file.
+		if budget < 2 {
+			break
+		}
+		take := min(len(g.indexes), budget-1)
+		dir := styleMuted.Render(truncatePathLeft(sanitizeUntrusted(g.dir), inner-1) + "/")
+		t := tree.Root(dir).
+			Enumerator(tree.RoundedEnumerator).
+			EnumeratorStyle(lipgloss.NewStyle().Foreground(tuiColorBorder).PaddingRight(1))
+		for _, idx := range g.indexes[:take] {
+			f := c.files[idx]
+			t.Child(formatChangeRowLabel(f, path.Base(f.Path), inner-enumWidth, idx == c.cursor))
+		}
+		lines := strings.Split(t.String(), "\n")
+		rows = append(rows, lines...)
+		fileAt = append(fileAt, -1)
+		fileAt = append(fileAt, g.indexes[:take]...)
+		budget -= 1 + take
+		shown += take
+	}
+	return c.appendHidden(rows, fileAt, shown)
+}
+
+// appendHidden adds the "… N more" row when fewer than all files are shown.
+func (c *sessionChanges) appendHidden(rows []string, fileAt []int, shown int) ([]string, []int) {
+	if hidden := len(c.files) - shown; hidden > 0 {
+		rows = append(rows, styleMuted.Render(fmt.Sprintf("… %d more", hidden)))
+		fileAt = append(fileAt, -1)
+	}
+	return rows, fileAt
 }
 
 // renderSidebarColumn lays rows out as exactly height rows of a "│ " separator
@@ -305,6 +373,11 @@ func renderSidebarColumn(rows []string, inner, height int) string {
 }
 
 func formatChangeRow(f fileChange, width int, selected bool) string {
+	return formatChangeRowLabel(f, f.Path, width, selected)
+}
+
+// formatChangeRowLabel draws a change row showing label in place of the path.
+func formatChangeRowLabel(f fileChange, label string, width int, selected bool) string {
 	marker := styleDiffHdr.Render("M")
 	if f.Staged {
 		marker = styleDiffAdd.Render("S")
@@ -322,15 +395,15 @@ func formatChangeRow(f fileChange, width int, selected bool) string {
 	}
 	counts := formatLineCounts(f.Added, f.Removed)
 	pathWidth := width - 3 - VisualLen(counts) - 1
-	path := truncatePathLeft(sanitizeUntrusted(f.Path), pathWidth)
+	name := truncatePathLeft(sanitizeUntrusted(label), pathWidth)
 	if selected {
-		path = ColorBrightWhite(StyleBold(path))
+		name = ColorBrightWhite(StyleBold(name))
 	}
-	gap := width - 3 - VisualLen(path) - VisualLen(counts)
+	gap := width - 3 - VisualLen(name) - VisualLen(counts)
 	if gap < 1 {
 		gap = 1
 	}
-	return prefix + marker + " " + path + strings.Repeat(" ", gap) + counts
+	return prefix + marker + " " + name + strings.Repeat(" ", gap) + counts
 }
 
 func formatLineCounts(added, removed int) string {

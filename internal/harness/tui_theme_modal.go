@@ -178,8 +178,7 @@ func (m *teaModel) renderThemeModal() string {
 		Padding(0, 1).
 		Width(contentWidth).
 		Render(strings.Join(lines, "\n"))
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box,
-		lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Background(tuiColorDarkBg)))
+	return box
 }
 
 // themeSwatches previews a theme's main colours as blocks. They are drawn in

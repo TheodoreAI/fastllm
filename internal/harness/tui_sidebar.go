@@ -3,6 +3,7 @@ package harness
 import (
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -14,17 +15,22 @@ import (
 
 const sidebarLabelWidth = 10 // "workspace" plus one space
 
-// renderSidebar draws the sidebar as exactly height rows of changesColumnWidth.
-// It records where the Changes list starts so a click can find the file.
-func (m *teaModel) renderSidebar(height int) string {
+// renderSidebar draws the sidebar as exactly height rows of changesColumnWidth
+// with its top-left corner at (x, y), and registers each file row it draws as
+// a click target.
+func (m *teaModel) renderSidebar(x, y, height int) string {
 	inner := changesColumnWidth - 2
 	if inner < 1 || height < 1 {
 		return ""
 	}
 	top := m.sidebarTopRows(inner, height)
-	m.sidebarFileRowOffset = len(top)
-	rows := append(top, m.changes.Rows(inner, height-len(top))...)
-	return renderSidebarColumn(rows, inner, height)
+	changes, fileAt := m.changes.Rows(inner, height-len(top))
+	for i, idx := range fileAt {
+		if idx >= 0 && len(top)+i < height {
+			m.hits.add(hitChangeFile+strconv.Itoa(idx), x, y+len(top)+i, changesColumnWidth, 1)
+		}
+	}
+	return renderSidebarColumn(append(top, changes...), inner, height)
 }
 
 // sidebarTopRows returns the Session and Context sections, or nothing when the

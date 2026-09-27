@@ -397,8 +397,7 @@ func (m *teaModel) renderSessionsModal() string {
 		Padding(0, 1).
 		Width(contentWidth).
 		Render(strings.Join(lines, "\n"))
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box,
-		lipgloss.WithWhitespaceStyle(lipgloss.NewStyle().Background(tuiColorDarkBg)))
+	return box
 }
 
 // relativeAge renders how long ago t was, coarsely: "just now", "5m ago".

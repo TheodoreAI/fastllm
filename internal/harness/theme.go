@@ -38,9 +38,16 @@ type Theme struct {
 	// ANSI16 prints text with the terminal's own 16 colours instead of the
 	// palette, so it follows whatever scheme the terminal is set to.
 	ANSI16 bool
+	// Light marks a palette meant for a light terminal background.
+	Light bool
 }
 
-const defaultThemeName = "nord"
+const (
+	defaultThemeName = "nord"
+	// defaultLightThemeName replaces the default when the terminal reports a
+	// light background and the user has not chosen a theme.
+	defaultLightThemeName = "github-light"
+)
 
 var zincPalette = Theme{
 	Muted: "#71717A", Border: "#27272A", Frame: "#52525B", Text: "#D4D4D8", Value: "#FAFAFA",
@@ -134,6 +141,27 @@ var builtinThemes = []Theme{
 		Ok: "#05FFA1", Warn: "#FFE600", Error: "#FF3366",
 		DarkBg: "#140B24", CardBg: "#1A102F", Track: "#341C5B", BrandFg: "#1A102F",
 	},
+	{
+		Name: "github-light", Description: "GitHub light mode, for light terminals", Light: true,
+		Muted: "#6E7781", Border: "#D0D7DE", Frame: "#D0D7DE", Text: "#24292F", Value: "#1F2328",
+		Accent: "#0969DA", Accent2: "#1B7C83", Purple: "#8250DF",
+		Ok: "#1A7F37", Warn: "#9A6700", Error: "#CF222E",
+		DarkBg: "#F6F8FA", CardBg: "#EAEEF2", Track: "#D0D7DE", BrandFg: "#FFFFFF",
+	},
+	{
+		Name: "catppuccin-latte", Description: "Latte pastels, for light terminals", Light: true,
+		Muted: "#8C8FA1", Border: "#BCC0CC", Frame: "#BCC0CC", Text: "#5C5F77", Value: "#4C4F69",
+		Accent: "#8839EF", Accent2: "#EA76CB", Purple: "#7287FD",
+		Ok: "#40A02B", Warn: "#DF8E1D", Error: "#D20F39",
+		DarkBg: "#DCE0E8", CardBg: "#E6E9EF", Track: "#CCD0DA", BrandFg: "#EFF1F5",
+	},
+	{
+		Name: "solarized-light", Description: "Solarized on its cream base, for light terminals", Light: true,
+		Muted: "#93A1A1", Border: "#93A1A1", Frame: "#93A1A1", Text: "#657B83", Value: "#586E75",
+		Accent: "#268BD2", Accent2: "#2AA198", Purple: "#6C71C4",
+		Ok: "#859900", Warn: "#B58900", Error: "#DC322F",
+		DarkBg: "#EEE8D5", CardBg: "#EEE8D5", Track: "#E4DDC8", BrandFg: "#FDF6E3",
+	},
 }
 
 func withName(t Theme, name, description string) Theme {
@@ -169,6 +197,9 @@ var ansi16Codes = [roleCount]string{
 var (
 	currentTheme Theme
 	themeSeqs    [roleCount]string
+	// themeFromPreference is set when the active theme came from the saved
+	// preference, which the terminal's background never overrides.
+	themeFromPreference bool
 	// colorProfile reports what the terminal can display; tests override it.
 	colorProfile = termenv.ColorProfile
 )
@@ -219,6 +250,10 @@ func ApplyTheme(name string) error {
 	tuiColorWhite = lipgloss.Color(t.Value)
 	tuiColorBrandFg = lipgloss.Color(t.BrandFg)
 	buildStyles()
+	diffBg = darkDiffBackgrounds
+	if t.Light {
+		diffBg = lightDiffBackgrounds
+	}
 
 	hexes := [roleCount]string{
 		roleMuted: t.Muted, roleFrame: t.Frame, roleText: t.Text, roleValue: t.Value,
@@ -260,12 +295,14 @@ var preferencesPath = func() string {
 // when none is saved or the saved name is unknown.
 func LoadThemePreference() {
 	name := defaultThemeName
+	themeFromPreference = false
 	if path := preferencesPath(); path != "" {
 		if data, err := os.ReadFile(path); err == nil {
 			var prefs themePreferences
 			if json.Unmarshal(data, &prefs) == nil {
 				if _, ok := FindTheme(prefs.Theme); ok {
 					name = prefs.Theme
+					themeFromPreference = true
 				}
 			}
 		}

@@ -6,6 +6,7 @@ import (
 	"fastllm/internal/llm"
 	"fmt"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -184,9 +185,10 @@ func TestSessionChangesCleanAndSynced(t *testing.T) {
 	}
 }
 
-func TestSessionChangesFileAtRow(t *testing.T) {
+// fileAt must name the file each row draws, and nothing for header rows.
+func TestSessionChangesRowsMapFiles(t *testing.T) {
 	var c sessionChanges
-	status := gitrepo.RepoStatus{
+	c.UpdateFromGit(gitrepo.RepoStatus{
 		IsRepo:   true,
 		Branch:   "main",
 		Upstream: "origin/main",
@@ -195,44 +197,64 @@ func TestSessionChangesFileAtRow(t *testing.T) {
 			{Path: "file2.go", Staged: "M", Added: 10, Removed: 2},
 			{Path: "file3.go", Unstaged: "?", Added: 20, Removed: 0},
 		},
-	}
-	c.UpdateFromGit(status)
+	})
 
+	rows, fileAt := c.Rows(34, 20)
+	if len(rows) != len(fileAt) {
+		t.Fatalf("rows and fileAt differ in length: %d vs %d", len(rows), len(fileAt))
+	}
 	hdr := c.HeaderRows()
-	if hdr < 2 {
-		t.Fatalf("expected header rows >= 2, got %d", hdr)
+	for r := 0; r < hdr; r++ {
+		if fileAt[r] != -1 {
+			t.Fatalf("header row %d maps to file %d", r, fileAt[r])
+		}
+	}
+	for i, want := range []string{"file1.go", "file2.go", "file3.go"} {
+		row := hdr + i
+		if fileAt[row] != i || !strings.Contains(StripANSI(rows[row]), want) {
+			t.Fatalf("row %d = %q (file %d); want %s as file %d", row, StripANSI(rows[row]), fileAt[row], want, i)
+		}
+	}
+}
+
+// Files in subdirectories are grouped under their directory, and each file
+// row still maps to its own index. A "… N more" row is never a file.
+func TestSessionChangesGroupsByDirectory(t *testing.T) {
+	var c sessionChanges
+	c.files = []fileChange{
+		{Path: "internal/harness/tui_tea.go", Added: 3, Status: "M"},
+		{Path: "cmd/main.go", Added: 1, Status: "M"},
+		{Path: "internal/harness/theme.go", Added: 2, Status: "M"},
 	}
 
-	// Click in header row should not resolve to a file
-	for r := 0; r < hdr; r++ {
-		_, _, ok := c.FileAtRow(r)
-		if ok {
-			t.Fatalf("row %d in header unexpectedly resolved to file", r)
+	rows, fileAt := c.Rows(34, 20)
+	plain := make([]string, len(rows))
+	for i, r := range rows {
+		plain[i] = StripANSI(r)
+	}
+	text := strings.Join(plain, "\n")
+	for _, want := range []string{"internal/harness/", "cmd/", "tui_tea.go", "theme.go", "main.go"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("grouped list is missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "internal/harness/tui_tea.go") {
+		t.Fatalf("a grouped file still shows its full path:\n%s", text)
+	}
+	for r, idx := range fileAt {
+		if idx < 0 {
+			continue
+		}
+		if name := path.Base(c.files[idx].Path); !strings.Contains(plain[r], name) {
+			t.Fatalf("row %d %q maps to file %d (%s)", r, plain[r], idx, name)
 		}
 	}
 
-	// First file row
-	f1, idx1, ok1 := c.FileAtRow(hdr)
-	if !ok1 || idx1 != 0 || f1.Path != "file1.go" {
-		t.Fatalf("expected file 0 file1.go, got ok=%v idx=%d file=%+v", ok1, idx1, f1)
-	}
-
-	// Second file row
-	f2, idx2, ok2 := c.FileAtRow(hdr + 1)
-	if !ok2 || idx2 != 1 || f2.Path != "file2.go" {
-		t.Fatalf("expected file 1 file2.go, got ok=%v idx=%d file=%+v", ok2, idx2, f2)
-	}
-
-	// Third file row
-	f3, idx3, ok3 := c.FileAtRow(hdr + 2)
-	if !ok3 || idx3 != 2 || f3.Path != "file3.go" {
-		t.Fatalf("expected file 2 file3.go, got ok=%v idx=%d file=%+v", ok3, idx3, f3)
-	}
-
-	// Out of bounds row
-	_, _, ok4 := c.FileAtRow(hdr + 3)
-	if ok4 {
-		t.Fatal("expected out of bounds row to return ok=false")
+	// Too short for everything: the overflow line is not clickable.
+	rows, fileAt = c.Rows(34, c.HeaderRows()+3)
+	last := len(rows) - 1
+	if !strings.Contains(StripANSI(rows[last]), "more") || fileAt[last] != -1 {
+		t.Fatalf("expected a non-file '… N more' last row, got %q (file %d)", StripANSI(rows[last]), fileAt[last])
 	}
 }
 
@@ -329,16 +351,9 @@ func TestMouseClickChangesColumnOpensModal(t *testing.T) {
 	}
 
 	// Terminal width = 140 (>= changesColumnMinFrame so the sidebar is shown).
-	// The sidebar spans X in [frameWidth - changesColumnWidth, frameWidth).
-	// Row Y in terminal: header is row 0, divider is row 1, the sidebar begins
-	// at row 2 with the Session and Context sections above the Changes list.
-	// Drawing a frame records how many rows those sections take.
-	_ = m.render()
-	if m.sidebarFileRowOffset == 0 {
-		t.Fatal("expected the Session and Context sections above the Changes list")
-	}
+	// Click on the sidebar row that actually shows main.go.
 	clickX := 120
-	clickY := 2 + m.sidebarFileRowOffset + m.changes.HeaderRows() // First file row
+	clickY := frameRowContaining(t, m.render(), m.conversationWidth(), "main.go")
 
 	mouseMsg := tea.MouseClickMsg{X: clickX, Y: clickY, Button: tea.MouseLeft}
 
