@@ -2,12 +2,11 @@ package harness
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
-	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -16,7 +15,6 @@ import (
 	"fastllm/internal/config"
 	"fastllm/internal/execution"
 	"fastllm/internal/files"
-	"fastllm/internal/gitrepo"
 	"fastllm/internal/llm"
 	"fastllm/internal/media"
 )
@@ -676,15 +674,12 @@ func countApproxTokens(messages []llm.Message) int {
 }
 
 func (r *Runner) executeListFiles(ctx context.Context, root, requestedPath string) string {
-	all, err := gitrepo.ListFiles(ctx, root)
-	if errors.Is(err, gitrepo.ErrNotARepo) {
-		all, err = walkFiles(root)
-	}
+	all, err := workspaceFiles(ctx, root)
 	if err != nil {
 		return "Error listing files: " + err.Error()
 	}
 
-	prefix := path.Clean(strings.Trim(requestedPath, "/"))
+	prefix := cleanPrefix(requestedPath)
 	var matched []string
 	for _, f := range all {
 		if prefix == "" || prefix == "." || f == prefix || strings.HasPrefix(f, prefix+"/") {
@@ -720,15 +715,12 @@ func (r *Runner) executeSearchFiles(ctx context.Context, root, pattern, requeste
 		return "Error: invalid regular expression: " + err.Error()
 	}
 
-	all, err := gitrepo.ListFiles(ctx, root)
-	if errors.Is(err, gitrepo.ErrNotARepo) {
-		all, err = walkFiles(root)
-	}
+	all, err := workspaceFiles(ctx, root)
 	if err != nil {
 		return "Error listing files: " + err.Error()
 	}
 
-	prefix := path.Clean(strings.Trim(requestedPath, "/"))
+	prefix := cleanPrefix(requestedPath)
 	var matches []string
 	const maxMatches = 150
 	const maxFileBytes = 1024 * 1024
@@ -747,11 +739,11 @@ scan:
 		if err != nil || info.IsDir() || info.Size() > maxFileBytes {
 			continue
 		}
-		file, err := os.Open(fullPath)
-		if err != nil {
+		data, err := os.ReadFile(fullPath)
+		if err != nil || looksBinary(data) {
 			continue
 		}
-		scanner := bufio.NewScanner(file)
+		scanner := bufio.NewScanner(bytes.NewReader(data))
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		lineNum := 0
 		for scanner.Scan() {
@@ -760,12 +752,10 @@ scan:
 			if re.MatchString(line) {
 				matches = append(matches, fmt.Sprintf("%s:%d: %s", f, lineNum, files.ClipMatch(line, re)))
 				if len(matches) >= maxMatches {
-					file.Close()
 					break scan
 				}
 			}
 		}
-		file.Close()
 	}
 
 	if len(matches) == 0 {
@@ -787,15 +777,12 @@ func (r *Runner) executeGlobFiles(ctx context.Context, root, patternValue, reque
 	if err != nil {
 		return "Error: invalid glob pattern: " + err.Error()
 	}
-	all, err := gitrepo.ListFiles(ctx, root)
-	if errors.Is(err, gitrepo.ErrNotARepo) {
-		all, err = walkFiles(root)
-	}
+	all, err := workspaceFiles(ctx, root)
 	if err != nil {
 		return "Error listing files: " + err.Error()
 	}
 
-	prefix := path.Clean(strings.Trim(strings.ReplaceAll(requestedPath, "\\", "/"), "/"))
+	prefix := cleanPrefix(requestedPath)
 	var matches []string
 	for _, file := range all {
 		if prefix != "" && prefix != "." && file != prefix && !strings.HasPrefix(file, prefix+"/") {
@@ -825,8 +812,17 @@ func (r *Runner) executeGlobFiles(ctx context.Context, root, patternValue, reque
 }
 
 func compileGlob(glob string) (*regexp.Regexp, error) {
+	pattern, err := globRegexp(glob)
+	if err != nil {
+		return nil, err
+	}
+	return regexp.Compile("^" + pattern + "$")
+}
+
+// globRegexp translates a glob into an unanchored regular expression: * and ?
+// stay within one path segment, ** crosses them.
+func globRegexp(glob string) (string, error) {
 	var b strings.Builder
-	b.WriteString("^")
 	for i := 0; i < len(glob); i++ {
 		switch glob[i] {
 		case '*':
@@ -846,7 +842,7 @@ func compileGlob(glob string) (*regexp.Regexp, error) {
 		case '[':
 			end := strings.IndexByte(glob[i+1:], ']')
 			if end < 0 {
-				return nil, fmt.Errorf("unterminated character class")
+				return "", fmt.Errorf("unterminated character class")
 			}
 			end += i + 1
 			class := glob[i+1 : end]
@@ -861,8 +857,7 @@ func compileGlob(glob string) (*regexp.Regexp, error) {
 			b.WriteString(regexp.QuoteMeta(string(glob[i])))
 		}
 	}
-	b.WriteString("$")
-	return regexp.Compile(b.String())
+	return b.String(), nil
 }
 
 func (r *Runner) executeRunCommand(ctx context.Context, root, command string, timeout time.Duration) string {
@@ -920,27 +915,4 @@ func writePlanSection(builder *strings.Builder, title string, steps []string) {
 		}
 	}
 	writeCheckpointSection(builder, title, rendered)
-}
-
-func walkFiles(root string) ([]string, error) {
-	var filesList []string
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			name := d.Name()
-			if name == ".git" || name == "node_modules" || name == "dist" || name == "build" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		rel, err := filepath.Rel(root, p)
-		if err != nil {
-			return err
-		}
-		filesList = append(filesList, filepath.ToSlash(rel))
-		return nil
-	})
-	return filesList, err
 }

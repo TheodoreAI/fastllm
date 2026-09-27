@@ -1364,12 +1364,14 @@ func (m *teaModel) resolvePermission(allow, grant bool) {
 }
 
 func (m *teaModel) cancelActiveOperation() {
-	canceledAgent := m.cancelTurn != nil
-	if m.cancelTurn != nil {
+	canceledShell := m.shellExecuting || m.cancelShell != nil
+	// With a shell command running beside an agent turn, the first cancel
+	// stops the command the user started last; the next stops the turn.
+	canceledAgent := m.cancelTurn != nil && !canceledShell
+	if canceledAgent {
 		m.canceling = true
 		m.cancelTurn()
 	}
-	canceledShell := m.shellExecuting || m.cancelShell != nil
 	if m.cancelShell != nil {
 		m.cancelShell()
 		m.cancelShell = nil
@@ -1384,8 +1386,8 @@ func (m *teaModel) cancelActiveOperation() {
 	}
 	m.shellExecuting = false
 	switch {
-	case canceledAgent && canceledShell:
-		m.statusNotice = "Canceled active operations."
+	case canceledShell && m.cancelTurn != nil:
+		m.statusNotice = "Canceled shell command. Esc again cancels the agent turn."
 	case canceledAgent:
 		m.statusNotice = "Canceled active agent turn."
 	case canceledShell:
@@ -1397,8 +1399,13 @@ func (m *teaModel) handleShellSubmit(cmdStr string) tea.Cmd {
 	if m.processMgr == nil {
 		m.processMgr = NewProcessManager()
 	}
-	if m.isExecuting || m.shellExecuting {
-		m.statusNotice = "An operation is already running — Esc cancels it."
+	// A shell command may run beside an agent turn, but only one runs in the
+	// foreground at a time. Keep the refused command in the box.
+	if m.shellExecuting {
+		if m.mode == modeShell {
+			m.input.SetValue(cmdStr)
+		}
+		m.statusNotice = "A shell command is already running — Esc cancels it, Ctrl+B backgrounds it."
 		return m.clearStatusAfter(3 * time.Second)
 	}
 	trimmed := strings.TrimSpace(cmdStr)

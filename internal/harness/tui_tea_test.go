@@ -1112,3 +1112,54 @@ func TestHistoryDoesNotIndentAfterAPaddedBlock(t *testing.T) {
 		t.Fatal("a chunk ending in a newline was changed")
 	}
 }
+
+// Shell mode keeps working while the agent runs a turn.
+func TestShellCommandRunsDuringAgentTurn(t *testing.T) {
+	m := newBusyModel(t, &mockLLM{})
+	m.processMgr = NewProcessManager()
+	t.Cleanup(m.processMgr.KillAll)
+	m.mode = modeShell
+	m.isExecuting = true
+	m.cancelTurn = func() {}
+
+	if cmd := m.handleShellSubmit("echo hi"); cmd == nil || !m.shellExecuting {
+		t.Fatalf("shell command refused during an agent turn: %q", m.statusNotice)
+	}
+	m.cancelActiveOperation()
+}
+
+// With both running, Esc stops the shell command first and the turn second.
+func TestEscCancelsShellBeforeAgentTurn(t *testing.T) {
+	m := newBusyModel(t, &mockLLM{})
+	turnCanceled, shellCanceled := false, false
+	m.isExecuting = true
+	m.cancelTurn = func() { turnCanceled = true }
+	m.shellExecuting = true
+	m.cancelShell = func() { shellCanceled = true }
+
+	esc := tea.KeyPressMsg{Code: tea.KeyEscape}
+	updated, _ := m.Update(esc)
+	m = updated.(*teaModel)
+	if !shellCanceled || turnCanceled {
+		t.Fatalf("first Esc: shell canceled=%v, turn canceled=%v", shellCanceled, turnCanceled)
+	}
+	updated, _ = m.Update(esc)
+	m = updated.(*teaModel)
+	if !turnCanceled {
+		t.Fatal("second Esc did not cancel the agent turn")
+	}
+}
+
+// A shell command refused because another is running stays in the input.
+func TestRefusedShellCommandKeepsItsText(t *testing.T) {
+	m := newBusyModel(t, &mockLLM{})
+	m.mode = modeShell
+	m.shellExecuting = true
+	m.input.SetValue("go test ./...")
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(*teaModel)
+	if got := m.input.Value(); got != "go test ./..." {
+		t.Fatalf("input after a refused command = %q", got)
+	}
+}

@@ -2,3 +2,7 @@
   event: initial
   value: Escape cancels the foreground agent turn or direct shell command, while explicitly backgrounded processes remain running; shell cancellation terminates the process tree with a direct-process fallback on Windows.
   reason: Foreground-only cancellation matches user intent without destroying persistent servers; process-tree termination prevents orphaned children, and the Windows fallback handles restricted taskkill environments.
+- decided_at: 2026-09-27T00:24:52+00:00
+  event: superseded-previous
+  value: Escape cancels the foreground shell command first when it runs beside an agent turn, then the agent turn on the next press; explicitly backgrounded processes remain running; shell cancellation terminates the process tree with a direct-process fallback on Windows.
+  reason: Shell-mode commands may now run while the agent works (one foreground shell at a time); cancelling the command the user started last matches intent, and cancelling both at once would kill a turn the user did not mean to stop.
