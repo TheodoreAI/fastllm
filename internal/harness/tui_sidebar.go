@@ -27,7 +27,11 @@ func (m *teaModel) renderSidebar(x, y, height int) string {
 	changes, fileAt := m.changes.Rows(inner, height-len(top))
 	for i, idx := range fileAt {
 		if idx >= 0 && len(top)+i < height {
-			m.hits.add(hitChangeFile+strconv.Itoa(idx), x, y+len(top)+i, changesColumnWidth, 1)
+			id := hitChangeFile + strconv.Itoa(idx)
+			m.hits.add(id, x, y+len(top)+i, changesColumnWidth, 1)
+			if id == m.hover {
+				changes[i] = styleHoverRow.Render(PadRight(clampToWidth(StripANSI(changes[i]), inner), inner))
+			}
 		}
 	}
 	return renderSidebarColumn(append(top, changes...), inner, height)
