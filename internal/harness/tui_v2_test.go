@@ -72,6 +72,40 @@ func TestClickingHeaderModelOpensModelPicker(t *testing.T) {
 	}
 }
 
+func move(m *teaModel, x, y int) *teaModel {
+	updated, _ := m.Update(tea.MouseMotionMsg{X: x, Y: y})
+	return updated.(*teaModel)
+}
+
+func TestHoverHighlightsClickTargetUnderPointer(t *testing.T) {
+	m := newWideModel(t)
+	plain := m.render()
+	x := frameColumnOf(t, plain, 0, "test-model") + 2
+
+	m = move(m, x, 0)
+	if m.hover != hitModel {
+		t.Fatalf("hover over the model pill = %q; want %q", m.hover, hitModel)
+	}
+	hovered := m.render()
+	if hovered == plain {
+		t.Fatal("hovering the model pill did not change how it is drawn")
+	}
+	if StripANSI(hovered) != StripANSI(plain) {
+		t.Fatal("hover must restyle the target, not change its text or layout")
+	}
+
+	m = move(m, x, m.height/2)
+	if m.hover != "" || m.render() != plain {
+		t.Fatalf("moving off the pill left hover %q", m.hover)
+	}
+
+	m = move(m, x, 0)
+	updated, _ := m.Update(tea.BlurMsg{})
+	if updated.(*teaModel).hover != "" {
+		t.Fatal("losing focus did not clear the hover")
+	}
+}
+
 func TestClickingModeBadgeCyclesPermissionMode(t *testing.T) {
 	m := newWideModel(t)
 	frame := m.render()

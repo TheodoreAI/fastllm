@@ -68,9 +68,14 @@ var (
 	styleDiffAdd      lipgloss.Style
 	styleDiffDel      lipgloss.Style
 	styleDiffHdr      lipgloss.Style
+	styleHoverRow     lipgloss.Style
 )
 
 func buildStyles() {
+	styleHoverRow = lipgloss.NewStyle().
+		Foreground(tuiColorCyan).
+		Background(tuiColorCardBg)
+
 	styleBrand = lipgloss.NewStyle().
 		Bold(true).
 		Foreground(tuiColorBrandFg).
@@ -290,7 +295,9 @@ type teaModel struct {
 	taint   *SessionTaint
 	changes sessionChanges
 	// hits holds the click targets of the last frame drawn (tui_hits.go).
-	hits         hitMap
+	hits hitMap
+	// hover is the ID of the click target under the pointer, or "".
+	hover        string
 	gitWatchChan <-chan struct{}
 	gitWatchStop func()
 
@@ -632,6 +639,8 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.BlurMsg:
 		m.blurred = true
+		// Terminals report no event when the pointer leaves the window.
+		m.hover = ""
 
 	case tea.BackgroundColorMsg:
 		m.termColorsKnown = true
@@ -960,6 +969,16 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseMsg:
 		click, isClick := msg.(tea.MouseClickMsg)
 		isClick = isClick && click.Button == tea.MouseLeft
+		if motion, ok := msg.(tea.MouseMotionMsg); ok {
+			if m.modalOpen() {
+				m.hover = ""
+			} else {
+				m.hover = m.hits.at(motion.X, motion.Y)
+				if motion.Button == tea.MouseNone {
+					return m, nil
+				}
+			}
+		}
 		if m.modalOpen() {
 			// A click outside the modal dismisses it, as Esc would.
 			if isClick && m.hits.at(click.X, click.Y) != hitModal {
@@ -3025,7 +3044,7 @@ func truncateText(value string, width int) string {
 func (m *teaModel) View() tea.View {
 	v := tea.NewView(m.render())
 	v.AltScreen = true // Clean full-screen TUI buffer
-	v.MouseMode = tea.MouseModeCellMotion
+	v.MouseMode = tea.MouseModeAllMotion // motion without a button held drives hover
 	v.ReportFocus = true
 	v.WindowTitle = m.windowTitle()
 	v.ProgressBar = m.progressBar()
@@ -3229,6 +3248,7 @@ func (m *teaModel) renderChat() string {
 	var modeBadge string
 	if m.mode == modeAgent {
 		modeBadge = styleAgentBadge.Foreground(permissionModeColor(m.permissionMode)).
+			Underline(m.hover == hitMode).
 			Render("◈ " + strings.ToUpper(m.permissionMode.Label()))
 	} else {
 		modeBadge = styleShellBadge.Render("❯_ SHELL")
@@ -3239,7 +3259,11 @@ func (m *teaModel) renderChat() string {
 	if dirBase == "" || dirBase == "." {
 		dirBase = m.workingDir
 	}
-	metaBadge := styleHeaderPill.Render(dirBase + " " + SymDot + " " + m.modelName)
+	metaStyle := styleHeaderPill
+	if m.hover == hitModel {
+		metaStyle = metaStyle.Foreground(tuiColorWhite).Underline(true)
+	}
+	metaBadge := metaStyle.Render(dirBase + " " + SymDot + " " + m.modelName)
 	agentBadge := ""
 	if m.runner != nil && m.runner.agents != nil {
 		if summary := m.runner.agents.Summary(); summary.Total > 0 {
