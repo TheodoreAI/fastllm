@@ -782,14 +782,29 @@ func TokenColorCode(tokType TokenType) string {
 
 // HighlightCodeLine applies syntax highlighting to a single line of code in the given language.
 func HighlightCodeLine(line, lang string) string {
+	return HighlightCodeLineBg(line, lang, "")
+}
+
+// HighlightCodeLineBg highlights line like HighlightCodeLine, restoring the
+// background sequence bg after each token's reset so a tinted line (a diff
+// addition or deletion) keeps its tint across the whole line.
+func HighlightCodeLineBg(line, lang, bg string) string {
 	if !ColorsEnabled() || line == "" {
 		return line
 	}
-	tokens := LexLine(line, lang)
-	if len(tokens) == 0 {
-		return line
-	}
+	return HighlightTokens(LexLine(line, lang), bg)
+}
 
+// HighlightTokens renders tokens with the active theme's colours. bg, when
+// non-empty, is re-emitted after every reset; see HighlightCodeLineBg.
+func HighlightTokens(tokens []Token, bg string) string {
+	if !ColorsEnabled() {
+		var sb strings.Builder
+		for _, tok := range tokens {
+			sb.WriteString(tok.Value)
+		}
+		return sb.String()
+	}
 	var sb strings.Builder
 	for _, tok := range tokens {
 		color := TokenColorCode(tok.Type)
@@ -797,6 +812,7 @@ func HighlightCodeLine(line, lang string) string {
 			sb.WriteString(color)
 			sb.WriteString(tok.Value)
 			sb.WriteString(ansiReset)
+			sb.WriteString(bg)
 		} else {
 			sb.WriteString(tok.Value)
 		}

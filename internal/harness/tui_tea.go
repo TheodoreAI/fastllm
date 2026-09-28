@@ -283,6 +283,8 @@ type teaModel struct {
 	themeModal *themePicker
 	// filesModal is the open /files browser modal; nil when closed.
 	filesModal *filesPicker
+	// editor is the open file editor (tui_editor.go); nil when closed.
+	editor *editorSession
 	// suggest is the slash-command dropdown above the input box.
 	suggest suggestState
 	// budget limits each prompt's run (budget.go); saved with the session.
@@ -336,10 +338,15 @@ type teaModel struct {
 	diffCursor         int
 	diffViewport       viewport.Model
 	diffPath           string
-	diffStaged         bool
-	diffHasStaged      bool
-	diffHasUnstaged    bool
+	diffSource         diffSource
 	diffReady          bool
+	// diffUnified is the user's choice of the single-column view; otherwise
+	// the modal is side by side when the terminal is wide enough.
+	diffUnified bool
+	// diffText is the unified diff on show, and diffShownSplit whether it
+	// was laid out side by side (and so fetched with the whole file).
+	diffText       string
+	diffShownSplit bool
 
 	// Prompt history navigation
 	promptHistory []string
@@ -619,7 +626,11 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Terminals deliver a paste as one message, newlines included; it falls
 		// through to the textarea below, which inserts it literally. Modals and
 		// prompts have no text box for it, so drop it there rather than typing
-		// into the chat input behind them.
+		// into the chat input behind them. The editor takes it.
+		if m.editorShown() {
+			m.handleEditorPaste(msg.Content)
+			return m, nil
+		}
 		if m.pendingPlan != "" || m.pendingPermission != nil || m.modalOpen() {
 			return m, nil
 		}
@@ -686,6 +697,9 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.waitForNextEvent()
 			}
 			return m, nil
+		}
+		if m.editor != nil {
+			return m, m.handleEditorKey(msg)
 		}
 		if m.skillsModal {
 			switch msg.String() {
@@ -776,7 +790,20 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.toggleStageCurrentFile()
 				return m, nil
 			case "d", "D":
-				m.toggleDiffStaged()
+				m.cycleDiffSource()
+				return m, nil
+			case "v", "V":
+				m.diffUnified = !m.diffUnified
+				m.loadDiffText()
+				return m, nil
+			case "e", "E":
+				if f, ok := m.currentDiffFile(); ok && f.Status != "D" {
+					m.closeDiffModal()
+					if err := m.openEditor(f.Path, true); err != nil {
+						m.statusNotice = "Cannot edit: " + err.Error()
+						return m, m.clearStatusAfter(4 * time.Second)
+					}
+				}
 				return m, nil
 			case "x", "X":
 				m.diffConfirmDiscard = true
@@ -978,6 +1005,10 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 			}
+		}
+		if m.editorShown() {
+			m.handleEditorMouse(msg)
+			return m, nil
 		}
 		if m.modalOpen() {
 			// A click outside the modal dismisses it, as Esc would.
@@ -1888,6 +1919,13 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 				m.statusNotice = fmt.Sprintf("Usage: %s <filepath>", cmd)
 				return m.clearStatusAfter(3 * time.Second)
 			}
+			if cmd == "/edit" {
+				if err := m.openEditor(inputVal[len(parts[0]):], false); err != nil {
+					m.statusNotice = "Cannot edit: " + err.Error()
+					return m.clearStatusAfter(4 * time.Second)
+				}
+				return nil
+			}
 			cmdName := cmd[1:]
 			cmdStr := cmdName + " " + strings.TrimSpace(inputVal[len(parts[0]):])
 			return m.handleShellSubmit(cmdStr)
@@ -2731,76 +2769,18 @@ func (m *teaModel) openDiffModal(fileIdx int) {
 		fileIdx = len(m.changes.files) - 1
 	}
 
+	if !m.diffModal {
+		// Moving between files keeps what the modal compares; opening it
+		// starts from HEAD against the working tree.
+		m.diffSource = diffSourceHead
+	}
 	m.diffModal = true
 	m.diffConfirmDiscard = false
 	m.diffCursor = fileIdx
 	m.changes.SetCursor(fileIdx)
-	f := m.changes.files[fileIdx]
-	m.diffPath = f.Path
-	m.diffStaged = f.Staged
-
-	diffText := ""
-	if m.checkpointMgr.IsGitRepo() {
-		if f.Status == "?" {
-			fullPath := filepath.Join(m.workingDir, filepath.FromSlash(f.Path))
-			if data, err := os.ReadFile(fullPath); err == nil {
-				diffText = FormatUntrackedAsDiff(f.Path, string(data))
-			} else {
-				diffText = fmt.Sprintf("Error reading untracked file %s: %v", f.Path, err)
-			}
-		} else {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			dt, err := gitrepo.Diff(ctx, m.workingDir, f.Path, m.diffStaged)
-			cancel()
-			if err != nil {
-				diffText = fmt.Sprintf("Diff error: %v", err)
-			} else {
-				diffText = dt
-			}
-		}
-	} else {
-		diffText = fmt.Sprintf("File: %s\nAdded: +%d lines\nRemoved: -%d lines", f.Path, f.Added, f.Removed)
-	}
-
-	if strings.TrimSpace(diffText) == "" {
-		if m.diffStaged {
-			diffText = "No staged diff for this file. Press 'd' to view unstaged changes."
-		} else {
-			diffText = "No diff detected for this file."
-		}
-	}
-
-	highlighted := HighlightDiffFile(diffText, f.Path)
-
-	width := m.width
-	if width < 1 {
-		width = 80
-	}
-	height := m.height
-	if height < 1 {
-		height = 24
-	}
-
-	modalWidth := width - 6
-	if modalWidth > 120 {
-		modalWidth = 120
-	}
-	if modalWidth < 40 {
-		modalWidth = 40
-	}
-	modalHeight := height - 4
-	if modalHeight < 10 {
-		modalHeight = 10
-	}
-	vpWidth := modalWidth - 4
-	vpHeight := modalHeight - 7
-	if vpHeight < 3 {
-		vpHeight = 3
-	}
-
-	m.diffViewport = viewport.New(viewport.WithWidth(vpWidth), viewport.WithHeight(vpHeight))
-	m.diffViewport.SetContent(highlighted)
-	m.diffViewport.GotoTop()
+	m.diffPath = m.changes.files[fileIdx].Path
+	m.diffViewport = viewport.New()
+	m.loadDiffText()
 	m.diffReady = true
 	m.input.Blur()
 }
@@ -2858,31 +2838,11 @@ func (m *teaModel) toggleStageCurrentFile() {
 	}
 }
 
-func (m *teaModel) toggleDiffStaged() {
-	m.diffStaged = !m.diffStaged
-	if m.diffCursor >= 0 && m.diffCursor < len(m.changes.files) {
-		f := m.changes.files[m.diffCursor]
-		diffText := ""
-		if m.checkpointMgr.IsGitRepo() {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			dt, err := gitrepo.Diff(ctx, m.workingDir, f.Path, m.diffStaged)
-			cancel()
-			if err != nil {
-				diffText = fmt.Sprintf("Diff error: %v", err)
-			} else {
-				diffText = dt
-			}
-		}
-		if strings.TrimSpace(diffText) == "" {
-			if m.diffStaged {
-				diffText = "No staged diff for this file. Press 'd' to toggle back."
-			} else {
-				diffText = "No unstaged diff for this file. Press 'd' to toggle back."
-			}
-		}
-		m.diffViewport.SetContent(HighlightDiffFile(diffText, m.diffPath))
-		m.diffViewport.GotoTop()
-	}
+// cycleDiffSource steps the diff modal through what it compares: HEAD
+// with the working tree, then the unstaged changes, then the staged ones.
+func (m *teaModel) cycleDiffSource() {
+	m.diffSource = (m.diffSource + 1) % diffSourceCount
+	m.loadDiffText()
 }
 
 func (m *teaModel) discardCurrentFile() {
@@ -2925,34 +2885,11 @@ func (m *teaModel) discardCurrentFile() {
 }
 
 func (m *teaModel) renderDiffModal() string {
-	width, height := m.width, m.height
-	if width < 1 {
-		width = 80
-	}
-	if height < 1 {
-		height = 24
-	}
-
-	modalWidth := width - 6
-	if modalWidth > 120 {
-		modalWidth = 120
-	}
-	if modalWidth < 40 {
-		modalWidth = 40
-	}
-	modalHeight := height - 4
-	if modalHeight < 10 {
-		modalHeight = 10
-	}
-
-	vpWidth := modalWidth - 4
-	vpHeight := modalHeight - 7
-	if vpHeight < 3 {
-		vpHeight = 3
-	}
-	if m.diffViewport.Width() != vpWidth || m.diffViewport.Height() != vpHeight {
+	modalWidth, vpWidth, vpHeight, split := m.diffModalGeometry()
+	if m.diffViewport.Width() != vpWidth || m.diffViewport.Height() != vpHeight || split != m.diffShownSplit {
 		m.diffViewport.SetWidth(vpWidth)
 		m.diffViewport.SetHeight(vpHeight)
+		m.layoutDiffContent()
 	}
 
 	badge := styleDiffHdr.Render("[Modified]")
@@ -3000,7 +2937,11 @@ func (m *teaModel) renderDiffModal() string {
 	queueRow := styleMuted.Render("Queue: ") + strings.Join(queueItems, "  ")
 	queueRow = clampToWidth(queueRow, vpWidth)
 
-	legend := "n/p: Next/Prev  •  s: Stage/Unstage  •  d: Toggle Staged  •  x: Discard  •  Esc/q: Close"
+	view := "v: Unified"
+	if !split {
+		view = "v: Side by side"
+	}
+	legend := "n/p: Next/Prev  •  d: " + m.diffSource.label() + "  •  " + view + "  •  e: Edit  •  s: Stage/Unstage  •  x: Discard  •  Esc/q: Close"
 	if m.diffConfirmDiscard {
 		legend = ColorRed(StyleBold("⚠️  Discard all changes in " + filepath.Base(m.diffPath) + "?  [y] Confirm   [n/Esc] Cancel"))
 	} else {
@@ -3010,10 +2951,17 @@ func (m *teaModel) renderDiffModal() string {
 	lines := []string{
 		titleRow,
 		queueRow,
-		legend,
+		clampToWidth(legend, vpWidth),
 		styleMuted.Render(strings.Repeat("─", vpWidth)),
-		m.diffViewport.View(),
 	}
+	if split {
+		before, after := m.diffSource.sides()
+		if f, ok := m.currentDiffFile(); ok && f.Status == "?" {
+			before = "(new file)"
+		}
+		lines = append(lines, SplitHeader(before, after, vpWidth))
+	}
+	lines = append(lines, m.diffViewport.View())
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -3192,6 +3140,10 @@ func (m *teaModel) render() string {
 		return "Initializing fastllm..."
 	}
 	m.hits.reset()
+	if m.editorShown() {
+		m.hits.add(hitModal, 0, 0, m.width, m.height)
+		return m.renderEditor()
+	}
 	m.syncInputStyles()
 	frame := m.renderChat()
 	if box := m.renderModal(); box != "" {
@@ -3202,8 +3154,14 @@ func (m *teaModel) render() string {
 
 // modalOpen reports whether a modal owns the keyboard and mouse.
 func (m *teaModel) modalOpen() bool {
-	return m.diffModal || m.modelsModal || m.skillsModal ||
+	return m.diffModal || m.modelsModal || m.skillsModal || m.editor != nil ||
 		m.sessionsModal != nil || m.themeModal != nil || m.filesModal != nil
+}
+
+// editorShown reports whether the editor has the screen: it gives way to a
+// permission or plan prompt, which owns the keyboard until answered.
+func (m *teaModel) editorShown() bool {
+	return m.editor != nil && m.pendingPermission == nil && (m.pendingPlan == "" || m.isExecuting)
 }
 
 // renderModal draws the open modal's box, or returns "" when none is open.

@@ -325,6 +325,37 @@ func Diff(ctx context.Context, root, path string, staged bool) (string, error) {
 	return run(ctx, root, args...)
 }
 
+// FullFileContext asks DiffHEAD for enough context lines that the diff
+// carries every line of both versions, for a side-by-side view.
+const FullFileContext = 1000000
+
+// DiffHEAD returns the diff for one path between HEAD and the working
+// tree, staged and unstaged changes together, with the given number of
+// context lines.
+func DiffHEAD(ctx context.Context, root, path string, contextLines int) (string, error) {
+	if !IsRepo(ctx, root) {
+		return "", ErrNotARepo
+	}
+	args := []string{"diff", "HEAD", "--no-color", "--no-ext-diff", "--no-textconv", "-U" + strconv.Itoa(contextLines), "--", path}
+	return run(ctx, root, args...)
+}
+
+// ShowHEAD returns path's contents as committed at HEAD. A path HEAD does
+// not have, or a repository with no commits yet, gives "" and no error:
+// every line of the working file is then new.
+func ShowHEAD(ctx context.Context, root, path string) (string, error) {
+	if !IsRepo(ctx, root) {
+		return "", ErrNotARepo
+	}
+	// "./" makes the path relative to root rather than the repository top.
+	object := "HEAD:./" + filepath.ToSlash(path)
+	if _, err := run(ctx, root, "cat-file", "-e", object); err != nil {
+		return "", nil
+	}
+	// cat-file blob never runs textconv filters.
+	return run(ctx, root, "cat-file", "blob", object)
+}
+
 // Stage runs `git add` for the given paths.
 func Stage(ctx context.Context, root string, paths []string) error {
 	if !IsRepo(ctx, root) {

@@ -96,7 +96,8 @@ func TestFormatToolCallAndResult(t *testing.T) {
 
 func TestHighlightDiff(t *testing.T) {
 	diff := "diff --git a/file b/file\n--- a/file\n+++ b/file\n@@ -1,2 +1,2 @@\n-old line\n+new line\n unchanged"
-	highlighted := HighlightDiff(diff)
+	// Word-level diffs split "old line" across styled spans; compare the text.
+	highlighted := StripANSI(HighlightDiff(diff))
 	if !strings.Contains(highlighted, "old line") || !strings.Contains(highlighted, "new line") {
 		t.Errorf("highlighted diff missing content: %s", highlighted)
 	}

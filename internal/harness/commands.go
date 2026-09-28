@@ -67,7 +67,8 @@ var commandSections = []commandSection{
 	{"Shell & Execution", []commandRow{
 		{"/shell, /sh", "Toggle interactive Shell Mode (run host terminal commands)"},
 		{"/sh <cmd>", "Execute a shell command in working dir (e.g. /sh ls -la)"},
-		{"/edit <file>", "Open file in editor ($EDITOR, or nano/notepad)"},
+		{"/edit <file>", "Edit a file in fastllm (syntax highlighting; Ctrl+D diffs vs HEAD)"},
+		{"/nano, /vim <file>", "Open a file in an external editor ($EDITOR, or nano/notepad)"},
 		{"!<cmd>, $ <cmd>", "Execute command immediately (e.g. !git status, !go test)"},
 	}},
 	{"Models & Endpoints", []commandRow{
@@ -120,7 +121,6 @@ type slashCommand struct {
 // they still match in suggestions and completion.
 var extraAliases = map[string][]string{
 	"/theme":       {"/themes"},
-	"/edit":        {"/nano", "/vim"},
 	"/discard":     {"/revert"},
 	"/permissions": {"/permission"},
 }

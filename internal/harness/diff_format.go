@@ -180,7 +180,7 @@ func renderAddedLine(sb *strings.Builder, line ParsedDiffLine, lang string, gutt
 		sb.WriteString(renderWordSpans(line.WordSpans, lang, true) + "\n")
 	} else {
 		// No paired intra-line diff: full line addition
-		code := HighlightCodeLine(line.Content, lang)
+		code := HighlightCodeLineBg(line.Content, lang, diffBg.lineAdd)
 		if !ColorsEnabled() {
 			sb.WriteString("+" + line.Content + "\n")
 		} else {
@@ -208,7 +208,7 @@ func renderDeletedLine(sb *strings.Builder, line ParsedDiffLine, lang string, gu
 		sb.WriteString(renderWordSpans(line.WordSpans, lang, false) + "\n")
 	} else {
 		// No paired intra-line diff: full line deletion
-		code := HighlightCodeLine(line.Content, lang)
+		code := HighlightCodeLineBg(line.Content, lang, diffBg.lineDel)
 		if !ColorsEnabled() {
 			sb.WriteString("-" + line.Content + "\n")
 		} else {
@@ -229,21 +229,20 @@ func renderWordSpans(spans []WordSpan, lang string, isAddition bool) string {
 
 	var sb strings.Builder
 	for _, span := range spans {
-		highlighted := HighlightCodeLine(span.Text, lang)
 		if span.Changed {
 			if isAddition {
 				// Changed word in added line: high-contrast green highlight
-				sb.WriteString(styleAddedWord(highlighted))
+				sb.WriteString(styleAddedWord(HighlightCodeLineBg(span.Text, lang, diffBg.wordAdd)))
 			} else {
 				// Changed word in deleted line: high-contrast red highlight
-				sb.WriteString(styleDeletedWord(highlighted))
+				sb.WriteString(styleDeletedWord(HighlightCodeLineBg(span.Text, lang, diffBg.wordDel)))
 			}
 		} else {
 			// Unchanged word in diff line: standard syntax highlight with subtle diff tint
 			if isAddition {
-				sb.WriteString(styleAddedLine(highlighted))
+				sb.WriteString(styleAddedLine(HighlightCodeLineBg(span.Text, lang, diffBg.lineAdd)))
 			} else {
-				sb.WriteString(styleDeletedLine(highlighted))
+				sb.WriteString(styleDeletedLine(HighlightCodeLineBg(span.Text, lang, diffBg.lineDel)))
 			}
 		}
 	}

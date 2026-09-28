@@ -207,6 +207,49 @@ func TestDiffShowsChange(t *testing.T) {
 	}
 }
 
+func TestDiffHEADIncludesStagedAndUnstagedWithFullContext(t *testing.T) {
+	dir := newTestRepo(t)
+	mustWrite(t, filepath.Join(dir, "committed.txt"), "a\nb\nc\nd\ne\nf\ng\nh\n")
+	cmd := exec.Command("git", "commit", "-qam", "more lines")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("commit: %v\n%s", err, out)
+	}
+	mustWrite(t, filepath.Join(dir, "committed.txt"), "A\nb\nc\nd\ne\nf\ng\nh\n")
+	if err := Stage(context.Background(), dir, []string{"committed.txt"}); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(dir, "committed.txt"), "A\nb\nc\nd\ne\nf\ng\nH\n")
+
+	diff, err := DiffHEAD(context.Background(), dir, "committed.txt", FullFileContext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"-a", "+A", "-h", "+H", " d"} {
+		if !strings.Contains(strings.ReplaceAll(diff, "\r", ""), "\n"+want+"\n") {
+			t.Errorf("diff missing line %q:\n%s", want, diff)
+		}
+	}
+}
+
+func TestShowHEAD(t *testing.T) {
+	dir := newTestRepo(t)
+	mustWrite(t, filepath.Join(dir, "committed.txt"), "changed\n")
+	mustWrite(t, filepath.Join(dir, "new.txt"), "new\n")
+
+	got, err := ShowHEAD(context.Background(), dir, "committed.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.ReplaceAll(got, "\r", "") != "hello\n" {
+		t.Errorf("ShowHEAD committed.txt = %q, want the committed contents", got)
+	}
+	got, err = ShowHEAD(context.Background(), dir, "new.txt")
+	if err != nil || got != "" {
+		t.Errorf("ShowHEAD on an untracked file = %q, %v; want empty, nil", got, err)
+	}
+}
+
 func TestSearchFindsMatchInTrackedAndUntrackedFiles(t *testing.T) {
 	dir := newTestRepo(t)
 	mustWrite(t, filepath.Join(dir, "untracked.go"), "package main\n\nfunc findme() {}\n")

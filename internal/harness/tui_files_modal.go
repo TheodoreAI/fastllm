@@ -189,6 +189,15 @@ func (m *teaModel) handleFilesModalKey(msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 	case "e":
 		if len(p.entries) > 0 && !p.entries[p.cursor].isDir {
+			if err := m.openEditor(p.entries[p.cursor].path, false); err != nil {
+				p.statusNotice = "Cannot edit: " + err.Error()
+				return nil
+			}
+			m.filesModal = nil
+		}
+	case "E":
+		// The external editor ($EDITOR, nano or notepad) through the shell.
+		if len(p.entries) > 0 && !p.entries[p.cursor].isDir {
 			targetPath := p.entries[p.cursor].path
 			m.closeFilesModal()
 			return m.handleShellSubmit("edit " + targetPath)
@@ -321,7 +330,7 @@ func (m *teaModel) renderFilesModal() string {
 		sb.WriteString(rowContent + "\n")
 	}
 
-	sb.WriteString("\n" + styleMuted.Render("↑/↓: Navigate  •  Enter/a: Attach to chat  •  n: New folder  •  e: Edit  •  Esc: Close"))
+	sb.WriteString("\n" + styleMuted.Render("↑/↓: Navigate  •  Enter/a: Attach to chat  •  n: New folder  •  e: Edit  •  E: External editor  •  Esc: Close"))
 
 	contentBox := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
