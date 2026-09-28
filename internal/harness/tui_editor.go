@@ -61,6 +61,12 @@ type editorSession struct {
 	marksStale bool
 	prompt     editorPrompt
 	notice     string
+	// clipboard is the editor's last copy, for Ctrl+V when the system
+	// clipboard is out of reach; clipboardLine marks a whole-line copy.
+	clipboard     string
+	clipboardLine bool
+	// dragging is set while the left button, pressed in the text, is held.
+	dragging bool
 	// returnToDiff reopens the diff modal on close, when the editor was
 	// opened from it.
 	returnToDiff bool
@@ -319,14 +325,20 @@ func (m *teaModel) handleEditorKey(msg tea.KeyPressMsg) tea.Cmd {
 	}
 
 	s.notice = ""
-	bodyHeight, _, _ := m.editorGeometry()
+	s.freeScroll = false
+	if m.editorMoveKey(key) {
+		return nil
+	}
 	switch key {
 	case "ctrl+s":
 		return m.saveEditor(false)
-	case "esc", "ctrl+c", "ctrl+q":
-		if s.dirty {
+	case "esc", "ctrl+q":
+		switch {
+		case key == "esc" && s.anchor != nil:
+			s.clearSelection()
+		case s.dirty:
 			s.prompt = editorPromptClose
-		} else {
+		default:
 			m.closeEditor()
 		}
 	case "ctrl+z":
@@ -341,33 +353,16 @@ func (m *teaModel) handleEditorKey(msg tea.KeyPressMsg) tea.Cmd {
 		s.marksStale = true
 	case "ctrl+d":
 		m.editorShowDiff()
-	case "up":
-		s.moveVertical(-1)
-	case "down":
-		s.moveVertical(1)
-	case "left":
-		s.moveLeft()
-	case "right":
-		s.moveRight()
-	case "ctrl+left", "alt+left":
-		s.moveWord(-1)
-	case "ctrl+right", "alt+right":
-		s.moveWord(1)
-	case "home":
-		s.home()
-	case "end":
-		s.end()
-	case "pgup":
-		s.moveVertical(-bodyHeight)
-		s.top = max(s.top-bodyHeight, 0)
-	case "pgdown":
-		s.moveVertical(bodyHeight)
-		s.top = min(s.top+bodyHeight, max(len(s.lines)-bodyHeight, 0))
-	case "ctrl+home":
-		s.moveTo(0, 0, false)
-	case "ctrl+end":
-		s.moveTo(len(s.lines)-1, len([]rune(s.lines[len(s.lines)-1])), false)
+	case "ctrl+a":
+		s.selectAll()
+	case "ctrl+c":
+		return m.editorCopy(false)
+	case "ctrl+x":
+		return m.editorCopy(true)
+	case "ctrl+v":
+		return m.editorPasteFromClipboard()
 	case "enter":
+		s.deleteSelection()
 		s.newline()
 		s.marksStale = true
 	case "backspace":
@@ -377,7 +372,14 @@ func (m *teaModel) handleEditorKey(msg tea.KeyPressMsg) tea.Cmd {
 		s.deleteForward()
 		s.marksStale = true
 	case "tab":
-		s.insert(s.indent)
+		if start, end, ok := s.selection(); ok && start.row != end.row {
+			s.indentLines(s.indent, false)
+		} else {
+			s.insert(s.indent)
+		}
+		s.marksStale = true
+	case "shift+tab":
+		s.indentLines(s.indent, true)
 		s.marksStale = true
 	default:
 		if msg.Text != "" && !msg.Mod.Contains(tea.ModCtrl) && !msg.Mod.Contains(tea.ModAlt) {
@@ -388,37 +390,213 @@ func (m *teaModel) handleEditorKey(msg tea.KeyPressMsg) tea.Cmd {
 	return nil
 }
 
+// editorMoveKey moves the cursor for a navigation key, reporting whether
+// key was one. With Shift the move extends the selection; without, it
+// drops it (Left and Right first collapse it to its start or end).
+func (m *teaModel) editorMoveKey(key string) bool {
+	s := m.editor
+	shifted := strings.Contains(key, "shift+")
+	move := strings.Replace(key, "shift+", "", 1)
+	bodyHeight, _, _ := m.editorGeometry()
+	var do func()
+	switch move {
+	case "up":
+		do = func() { s.moveVertical(-1) }
+	case "down":
+		do = func() { s.moveVertical(1) }
+	case "left":
+		do = s.moveLeft
+	case "right":
+		do = s.moveRight
+	case "ctrl+left", "alt+left":
+		do = func() { s.moveWord(-1) }
+	case "ctrl+right", "alt+right":
+		do = func() { s.moveWord(1) }
+	case "home":
+		do = s.home
+	case "end":
+		do = s.end
+	case "pgup":
+		do = func() {
+			s.moveVertical(-bodyHeight)
+			s.top = max(s.top-bodyHeight, 0)
+		}
+	case "pgdown":
+		do = func() {
+			s.moveVertical(bodyHeight)
+			s.top = min(s.top+bodyHeight, max(len(s.lines)-bodyHeight, 0))
+		}
+	case "ctrl+home":
+		do = func() { s.moveTo(0, 0, false) }
+	case "ctrl+end":
+		do = func() { s.moveTo(len(s.lines)-1, len([]rune(s.lines[len(s.lines)-1])), false) }
+	default:
+		return false
+	}
+	if shifted {
+		s.startSelection()
+		do()
+		return true
+	}
+	if start, end, ok := s.selection(); ok && (move == "left" || move == "right") {
+		to := start
+		if move == "right" {
+			to = end
+		}
+		s.clearSelection()
+		s.moveTo(to.row, to.col, false)
+		return true
+	}
+	s.clearSelection()
+	do()
+	return true
+}
+
+// editorClipboardMsg carries the system clipboard's text to the editor.
+type editorClipboardMsg struct {
+	text string
+	err  error
+}
+
+// editorCopy copies the selection, or the cursor's whole line when nothing
+// is selected, and with cut removes it.
+func (m *teaModel) editorCopy(cut bool) tea.Cmd {
+	s := m.editor
+	text, whole := s.selectedText(), false
+	if text == "" {
+		text, whole = s.lines[s.row]+"\n", true
+	}
+	s.clipboard, s.clipboardLine = text, whole
+	lines := strings.Count(strings.TrimSuffix(text, "\n"), "\n") + 1
+	verb := "Copied"
+	if cut {
+		verb = "Cut"
+		if whole {
+			s.deleteLine()
+		} else {
+			s.deleteSelection()
+		}
+		s.marksStale = true
+	}
+	switch {
+	case whole:
+		s.notice = verb + " the line."
+	case lines > 1:
+		s.notice = fmt.Sprintf("%s %d lines.", verb, lines)
+	default:
+		s.notice = fmt.Sprintf("%s %d characters.", verb, len([]rune(text)))
+	}
+	// The system clipboard, and OSC 52 for a terminal on another machine.
+	return tea.Batch(tea.SetClipboard(text), func() tea.Msg {
+		_ = writeClipboardText(text)
+		return nil
+	})
+}
+
+// editorPasteFromClipboard reads the system clipboard for Ctrl+V. Most
+// terminals paste on Ctrl+V themselves, which arrives as a paste instead.
+func (m *teaModel) editorPasteFromClipboard() tea.Cmd {
+	return func() tea.Msg {
+		text, err := readClipboardText()
+		return editorClipboardMsg{text: text, err: err}
+	}
+}
+
+// handleEditorClipboard pastes what editorPasteFromClipboard read, falling
+// back to the editor's own last copy when the system clipboard is out of
+// reach. A whole line copied with nothing selected pastes above the
+// cursor's line, as it does in most editors.
+func (m *teaModel) handleEditorClipboard(msg editorClipboardMsg) {
+	s := m.editor
+	if s == nil || s.prompt != editorPromptNone {
+		return
+	}
+	text := msg.text
+	if msg.err != nil || text == "" {
+		text = s.clipboard
+	}
+	if text == "" {
+		s.notice = "The clipboard is empty."
+		return
+	}
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	s.freeScroll = false
+	if _, _, selected := s.selection(); !selected && s.clipboardLine && text == s.clipboard {
+		row, col := s.row, s.col
+		s.moveTo(row, 0, false)
+		s.insert(text)
+		s.moveTo(row+strings.Count(text, "\n"), col, false)
+	} else {
+		s.insert(text)
+	}
+	s.marksStale = true
+}
+
 // handleEditorPaste inserts pasted text at the cursor.
 func (m *teaModel) handleEditorPaste(content string) {
 	if s := m.editor; s.prompt == editorPromptNone {
+		s.freeScroll = false
 		s.insert(content)
 		s.marksStale = true
 	}
 }
 
-// handleEditorMouse scrolls with the wheel and places the cursor on click.
+// editorPosAt is the buffer position under screen cell x, y, clamped to
+// the text; a drag above or below the text reaches the line past the view,
+// which scrolls it.
+func (m *teaModel) editorPosAt(x, y int) editorPos {
+	s := m.editor
+	_, gutterWidth, _ := m.editorGeometry()
+	row := min(max(s.top+y-1, 0), len(s.lines)-1)
+	return editorPos{row, runeColAt(s.lines[row], s.left+max(x-gutterWidth, 0))}
+}
+
+// handleEditorMouse scrolls the view with the wheel, places the cursor on
+// click (Shift+click extends the selection) and selects by dragging.
 func (m *teaModel) handleEditorMouse(msg tea.MouseMsg) {
 	s := m.editor
 	if s.prompt != editorPromptNone {
 		return
 	}
 	mouse := msg.Mouse()
+	bodyHeight, _, _ := m.editorGeometry()
 	switch msg.(type) {
 	case tea.MouseWheelMsg:
+		// The view scrolls on its own; the cursor stays where it was.
+		step := 0
 		switch mouse.Button {
 		case tea.MouseWheelUp:
-			s.moveVertical(-3)
+			step = -3
 		case tea.MouseWheelDown:
-			s.moveVertical(3)
+			step = 3
 		}
+		s.freeScroll = true
+		s.top = min(max(s.top+step, 0), max(len(s.lines)-bodyHeight, 0))
 	case tea.MouseClickMsg:
-		bodyHeight, gutterWidth, _ := m.editorGeometry()
 		if mouse.Button != tea.MouseLeft || mouse.Y < 1 || mouse.Y > bodyHeight {
 			return
 		}
-		row := min(s.top+mouse.Y-1, len(s.lines)-1)
-		col := runeColAt(s.lines[row], s.left+max(mouse.X-gutterWidth, 0))
-		s.moveTo(row, col, false)
+		pos := m.editorPosAt(mouse.X, mouse.Y)
+		if mouse.Mod.Contains(tea.ModShift) {
+			s.startSelection()
+		} else {
+			s.anchor = &pos
+		}
+		s.moveTo(pos.row, pos.col, false)
+		s.dragging = true
+		s.freeScroll = false
+	case tea.MouseMotionMsg:
+		if !s.dragging || mouse.Button != tea.MouseLeft {
+			return
+		}
+		pos := m.editorPosAt(mouse.X, mouse.Y)
+		s.moveTo(pos.row, pos.col, false)
+		s.freeScroll = false
+	case tea.MouseReleaseMsg:
+		s.dragging = false
+		if s.anchor != nil && *s.anchor == s.cursor() {
+			s.clearSelection()
+		}
 	}
 }
 
@@ -427,13 +605,18 @@ func (m *teaModel) renderEditor() string {
 	s := m.editor
 	width := max(m.width, 20)
 	bodyHeight, gutterWidth, codeWidth := m.editorGeometry()
-	s.scrollIntoView(bodyHeight, codeWidth)
+	if s.freeScroll {
+		s.top = min(max(s.top, 0), max(len(s.lines)-1, 0))
+	} else {
+		s.scrollIntoView(bodyHeight, codeWidth)
+	}
 	if s.marksStale {
 		if s.hasHead {
 			s.marks = computeLineMarks(s.head, s.lines)
 		}
 		s.marksStale = false
 	}
+	selStart, selEnd, selected := s.selection()
 
 	rows := make([]string, 0, bodyHeight+2)
 
@@ -465,14 +648,25 @@ func (m *teaModel) renderEditor() string {
 			}
 		}
 		number := fmt.Sprintf("%*d", numWidth, row+1)
-		cursor := -1
+		lineMarks := noLineMarks
 		if row == s.row {
 			number = ColorBrightWhite(number)
-			cursor = s.displayCol()
+			lineMarks.cursor = s.displayCol()
 		} else {
 			number = ColorGray(number)
 		}
-		code := renderEditorLine(s.tokensAt(row), s.left, codeWidth, cursor)
+		if selected && row >= selStart.row && row <= selEnd.row {
+			runes := []rune(s.lines[row])
+			if row == selStart.row {
+				lineMarks.selStart = displayWidth(runes[:selStart.col])
+			}
+			if row == selEnd.row {
+				lineMarks.selEnd = displayWidth(runes[:selEnd.col])
+			} else {
+				lineMarks.selEnd = displayWidth(runes) + 1 // the line break
+			}
+		}
+		code := renderEditorLine(s.tokensAt(row), s.left, codeWidth, lineMarks)
 		rows = append(rows, mark+" "+number+" "+ColorBorder(SymVLine)+" "+code)
 	}
 
@@ -492,13 +686,17 @@ func (m *teaModel) renderEditorStatus(width int) string {
 	}
 	left := s.notice
 	if left == "" {
-		left = styleMuted.Render("^S Save  ^Z Undo  ^Y Redo  ^D Diff vs HEAD  Esc Close")
+		left = styleMuted.Render("^S Save  ^Z/^Y Undo/Redo  ^C/^X/^V Copy/Cut/Paste  ^A All  ^D Diff vs HEAD  Esc Close")
 	}
 	endings := "LF"
 	if s.crlf {
 		endings = "CRLF"
 	}
-	right := styleMuted.Render(fmt.Sprintf("Ln %d, Col %d  %s ", s.row+1, s.displayCol()+1, endings))
+	position := fmt.Sprintf("Ln %d, Col %d", s.row+1, s.displayCol()+1)
+	if text := s.selectedText(); text != "" {
+		position += fmt.Sprintf(" (%d selected)", len([]rune(text)))
+	}
+	right := styleMuted.Render(fmt.Sprintf("%s  %s ", position, endings))
 	left = clampToWidth(" "+left, max(width-VisualLen(right)-1, 0))
 	return PadRight(left, width-VisualLen(right)) + right
 }

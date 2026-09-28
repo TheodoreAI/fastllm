@@ -74,10 +74,17 @@ func TestRenderEditorLineIsExactlyWidthAndHidesControlBytes(t *testing.T) {
 	for _, line := range []string{"", "\tif x {", "日本語のテキスト", "evil\x1b[2Jtext", strings.Repeat("y", 200)} {
 		tokens := LexLine(line, "go")
 		for _, left := range []int{0, 1, 3} {
-			out := renderEditorLine(tokens, left, 20, 2)
-			if got := ansi.StringWidth(out); got != 20 {
-				t.Errorf("line %q left %d: width %d, want 20", line, left, got)
+			for _, marks := range []editorLineMarks{
+				{cursor: 2, selStart: 0, selEnd: 0},
+				{cursor: -1, selStart: 1, selEnd: 999}, // selection through the line break
+				{cursor: 30, selStart: 0, selEnd: 5},
+			} {
+				out := renderEditorLine(tokens, left, 20, marks)
+				if got := ansi.StringWidth(out); got != 20 {
+					t.Errorf("line %q left %d marks %+v: width %d, want 20", line, left, marks, got)
+				}
 			}
+			out := renderEditorLine(tokens, left, 20, noLineMarks)
 			if strings.Contains(out, "\x1b[2J") {
 				t.Errorf("control sequence from the file reached the terminal: %q", out)
 			}

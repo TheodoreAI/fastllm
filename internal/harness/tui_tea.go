@@ -639,6 +639,10 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+	case editorClipboardMsg:
+		m.handleEditorClipboard(msg)
+		return m, nil
+
 	case teaTermColorsTimeoutMsg:
 		m.termColorsKnown = true
 

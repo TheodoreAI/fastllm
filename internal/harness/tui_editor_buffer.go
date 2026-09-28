@@ -40,10 +40,16 @@ type fileEditor struct {
 	row, col, wantCol int
 	// top is the first line shown and left the first display column.
 	top, left int
-	dirty     bool
-	undo      []editorSnap
-	redo      []editorSnap
-	lastEdit  editKind
+	// anchor is the fixed end of the selection, the cursor its moving end;
+	// nil, or equal to the cursor, means nothing is selected.
+	anchor *editorPos
+	// freeScroll lets the view scroll away from the cursor (the mouse
+	// wheel); any key brings the cursor back into view.
+	freeScroll bool
+	dirty      bool
+	undo       []editorSnap
+	redo       []editorSnap
+	lastEdit   editKind
 
 	// lang picks the lexer; states[i] is the lexer state line i starts in,
 	// valid for i < statesValid.
@@ -63,6 +69,7 @@ func newFileEditor(content, lang string) *fileEditor {
 func (e *fileEditor) setContent(content string) {
 	e.lines = strings.Split(content, "\n")
 	e.row, e.col, e.wantCol, e.top, e.left = 0, 0, 0, 0, 0
+	e.anchor = nil
 	e.dirty = false
 	e.undo, e.redo = nil, nil
 	e.lastEdit = editNone
@@ -127,6 +134,7 @@ func (e *fileEditor) restore(from, to *[]editorSnap) bool {
 	*from = (*from)[:len(*from)-1]
 	*to = append(*to, editorSnap{lines: append([]string(nil), e.lines...), row: e.row, col: e.col})
 	e.lines, e.row, e.col = snap.lines, snap.row, snap.col
+	e.anchor = nil
 	e.clampCursor()
 	e.wantCol = e.displayCol()
 	e.lastEdit = editNone
@@ -143,17 +151,164 @@ func (e *fileEditor) clampCursor() {
 	e.col = min(max(e.col, 0), len([]rune(e.lines[e.row])))
 }
 
-// insert types s at the cursor; s may hold newlines (a paste).
+// editorPos is a place in the buffer: a line and a rune offset in it.
+type editorPos struct{ row, col int }
+
+func (p editorPos) before(q editorPos) bool {
+	return p.row < q.row || p.row == q.row && p.col < q.col
+}
+
+func (e *fileEditor) cursor() editorPos { return editorPos{e.row, e.col} }
+
+// selection is the selected range, start before end, if there is one.
+func (e *fileEditor) selection() (start, end editorPos, ok bool) {
+	if e.anchor == nil || *e.anchor == e.cursor() {
+		return editorPos{}, editorPos{}, false
+	}
+	start, end = *e.anchor, e.cursor()
+	if end.before(start) {
+		start, end = end, start
+	}
+	return start, end, true
+}
+
+// startSelection anchors a selection at the cursor unless one is under way.
+func (e *fileEditor) startSelection() {
+	if e.anchor == nil {
+		p := e.cursor()
+		e.anchor = &p
+	}
+}
+
+func (e *fileEditor) clearSelection() { e.anchor = nil }
+
+func (e *fileEditor) selectAll() {
+	e.anchor = &editorPos{0, 0}
+	e.moveTo(len(e.lines)-1, len([]rune(e.lines[len(e.lines)-1])), false)
+}
+
+// selectedText is the text of the selection, or "".
+func (e *fileEditor) selectedText() string {
+	start, end, ok := e.selection()
+	if !ok {
+		return ""
+	}
+	first := []rune(e.lines[start.row])
+	if start.row == end.row {
+		return string(first[start.col:end.col])
+	}
+	parts := []string{string(first[start.col:])}
+	parts = append(parts, e.lines[start.row+1:end.row]...)
+	parts = append(parts, string([]rune(e.lines[end.row])[:end.col]))
+	return strings.Join(parts, "\n")
+}
+
+// removeSelection deletes the selected text, leaving the cursor where it
+// began. The caller has taken the undo checkpoint.
+func (e *fileEditor) removeSelection() {
+	start, end, ok := e.selection()
+	e.anchor = nil
+	if !ok {
+		return
+	}
+	head := string([]rune(e.lines[start.row])[:start.col])
+	tail := string([]rune(e.lines[end.row])[end.col:])
+	e.lines = append(e.lines[:start.row+1], e.lines[end.row+1:]...)
+	e.lines[start.row] = head + tail
+	e.row, e.col = start.row, start.col
+	e.invalidateFrom(start.row)
+	e.wantCol = e.displayCol()
+}
+
+// deleteSelection deletes the selection as one undo step; false when there
+// is none.
+func (e *fileEditor) deleteSelection() bool {
+	if _, _, ok := e.selection(); !ok {
+		e.anchor = nil
+		return false
+	}
+	e.checkpoint(editOther)
+	e.removeSelection()
+	return true
+}
+
+// deleteLine removes the cursor's line (a cut with nothing selected).
+func (e *fileEditor) deleteLine() {
+	e.checkpoint(editOther)
+	e.anchor = nil
+	if len(e.lines) == 1 {
+		e.lines[0] = ""
+	} else {
+		e.lines = append(e.lines[:e.row], e.lines[e.row+1:]...)
+	}
+	e.row = min(e.row, len(e.lines)-1)
+	e.col = runeColAt(e.lines[e.row], e.wantCol)
+	e.invalidateFrom(e.row)
+}
+
+// indentLines indents (or outdents) every line the selection touches, or
+// the cursor's line, by unit.
+func (e *fileEditor) indentLines(unit string, outdent bool) {
+	first, last := e.row, e.row
+	if start, end, ok := e.selection(); ok {
+		first, last = start.row, end.row
+		// A selection ending at column 0 does not take in that line.
+		if end.col == 0 && end.row > start.row {
+			last--
+		}
+	}
+	e.checkpoint(editOther)
+	shift := map[int]int{}
+	for row := first; row <= last; row++ {
+		line := e.lines[row]
+		if !outdent {
+			if line == "" && first != last {
+				continue
+			}
+			e.lines[row] = unit + line
+			shift[row] = len([]rune(unit))
+			continue
+		}
+		cut := 0
+		switch {
+		case strings.HasPrefix(line, unit):
+			cut = len(unit)
+		case strings.HasPrefix(line, "\t"):
+			cut = 1
+		default:
+			for cut < len(line) && cut < editorTabWidth && line[cut] == ' ' {
+				cut++
+			}
+		}
+		e.lines[row] = line[cut:]
+		shift[row] = -cut
+	}
+	e.col = max(e.col+shift[e.row], 0)
+	if e.anchor != nil {
+		e.anchor.col = max(e.anchor.col+shift[e.anchor.row], 0)
+	}
+	e.clampCursor()
+	e.wantCol = e.displayCol()
+	e.invalidateFrom(first)
+}
+
+// insert types s at the cursor, replacing the selection; s may hold
+// newlines (a paste).
 func (e *fileEditor) insert(s string) {
 	s = strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", "\n"), "\r", "\n")
-	if s == "" {
+	_, _, replacing := e.selection()
+	if s == "" && !replacing {
 		return
 	}
 	kind := editType
-	if strings.Contains(s, "\n") || len([]rune(s)) > 1 {
+	if strings.Contains(s, "\n") || len([]rune(s)) > 1 || replacing {
 		kind = editOther
 	}
 	e.checkpoint(kind)
+	e.removeSelection()
+	if s == "" {
+		return
+	}
 	line := []rune(e.lines[e.row])
 	head, tail := string(line[:e.col]), string(line[e.col:])
 	parts := strings.Split(s, "\n")
@@ -187,7 +342,7 @@ func (e *fileEditor) newline() {
 
 // backspace deletes the rune before the cursor, joining lines at column 0.
 func (e *fileEditor) backspace() {
-	if e.col == 0 && e.row == 0 {
+	if e.deleteSelection() || e.col == 0 && e.row == 0 {
 		return
 	}
 	e.checkpoint(editDelete)
@@ -208,6 +363,9 @@ func (e *fileEditor) backspace() {
 
 // deleteForward deletes the rune under the cursor, joining lines at the end.
 func (e *fileEditor) deleteForward() {
+	if e.deleteSelection() {
+		return
+	}
 	line := []rune(e.lines[e.row])
 	if e.col == len(line) {
 		if e.row == len(e.lines)-1 {
@@ -352,13 +510,47 @@ func runeColAt(line string, want int) int {
 	return len([]rune(line))
 }
 
-// renderEditorLine draws tokens from display column left, width columns
-// wide, with the cursor (a display column, or -1) in reverse video.
-func renderEditorLine(tokens []Token, left, width, cursor int) string {
+// editorLineMarks are what renderEditorLine highlights on a line, in
+// display columns: the cursor (-1 for none) and the selected columns
+// [selStart, selEnd). selEnd past the end of the text selects the line
+// break, shown as one highlighted cell.
+type editorLineMarks struct {
+	cursor, selStart, selEnd int
+}
+
+var noLineMarks = editorLineMarks{cursor: -1}
+
+// defaultSelectionBg is the selection background in the terminal's own
+// palette (bright black), for themes that print with ANSI16 colours;
+// ApplyTheme sets selectionBg from the theme otherwise.
+const defaultSelectionBg = "\033[100m"
+
+var selectionBg = defaultSelectionBg
+
+// renderEditorLine draws tokens from display column left, exactly width
+// columns wide, with the cursor in reverse video and the selection on
+// selectionBg.
+func renderEditorLine(tokens []Token, left, width int, marks editorLineMarks) string {
 	var sb strings.Builder
 	colors := ColorsEnabled()
+	selBg := ""
+	if colors {
+		selBg = selectionBg
+	}
 	col, drawn := 0, 0
 	cursorDrawn, full := false, false
+	// open is the colour sequence in force, so runs of one colour share it.
+	open := ""
+	setStyle := func(style string) {
+		if style == open {
+			return
+		}
+		if open != "" {
+			sb.WriteString(ansiReset)
+		}
+		sb.WriteString(style)
+		open = style
+	}
 	for _, tok := range tokens {
 		if full {
 			break
@@ -367,20 +559,19 @@ func renderEditorLine(tokens []Token, left, width, cursor int) string {
 		if colors && tok.Type != TokenPlain {
 			color = TokenColorCode(tok.Type)
 		}
-		open := false
 		for _, r := range tok.Value {
 			cells := runeCells(r, col)
 			start := col
 			col += cells
-			if col <= left || drawn >= width {
+			if col <= left {
 				continue
 			}
-			// A wide rune or tab straddling the left edge shows as spaces.
 			glyph := string(r)
 			if unicode.IsControl(r) && r != '\t' {
 				// Never pass the file's control bytes (escapes) to the terminal.
 				glyph = "·"
 			}
+			// A tab, or a wide rune straddling the left edge, shows as spaces.
 			if r == '\t' || start < left {
 				glyph = strings.Repeat(" ", col-max(start, left))
 			}
@@ -388,31 +579,36 @@ func renderEditorLine(tokens []Token, left, width, cursor int) string {
 				full = true
 				break
 			}
-			if start <= cursor && cursor < col {
-				if open {
-					sb.WriteString(ansiReset)
-					open = false
-				}
-				sb.WriteString(ansiInverse + glyph + ansiReset)
+			switch {
+			case start <= marks.cursor && marks.cursor < col:
+				setStyle(ansiInverse)
 				cursorDrawn = true
-			} else {
-				if color != "" && !open {
-					sb.WriteString(color)
-					open = true
-				}
-				sb.WriteString(glyph)
+			case start >= marks.selStart && start < marks.selEnd && selBg != "":
+				setStyle(selBg + color)
+			default:
+				setStyle(color)
 			}
+			sb.WriteString(glyph)
 			drawn += ansi.StringWidth(glyph)
 		}
-		if open {
-			sb.WriteString(ansiReset)
-		}
 	}
-	if cursor >= 0 && !cursorDrawn && cursor >= left && cursor-left < width {
-		sb.WriteString(strings.Repeat(" ", max(cursor-left-drawn, 0)))
-		drawn = max(drawn, cursor-left)
-		sb.WriteString(ansiInverse + " " + ansiReset)
-		drawn++
+	setStyle("")
+	// Past the text: the cursor at the end of the line, or the selected
+	// line break.
+	eol := col
+	if eol >= left && eol-left < width && drawn <= eol-left {
+		style := ""
+		switch {
+		case marks.cursor == eol && !cursorDrawn:
+			style = ansiInverse
+		case marks.selEnd > eol && marks.selStart <= eol && selBg != "":
+			style = selBg
+		}
+		if style != "" {
+			sb.WriteString(strings.Repeat(" ", eol-left-drawn))
+			sb.WriteString(style + " " + ansiReset)
+			drawn = eol - left + 1
+		}
 	}
 	if drawn < width {
 		sb.WriteString(strings.Repeat(" ", width-drawn))

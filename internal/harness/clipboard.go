@@ -230,3 +230,10 @@ func readClipboardLinux() (ClipboardMedia, bool) {
 
 	return ClipboardMedia{}, false
 }
+
+// Plain-text clipboard access for the editor. Vars, so tests do not touch
+// the machine's real clipboard.
+var (
+	writeClipboardText = clipboard.WriteAll
+	readClipboardText  = clipboard.ReadAll
+)

@@ -261,6 +261,16 @@ func ApplyTheme(name string) error {
 		roleOk: t.Ok, roleWarn: t.Warn, roleError: t.Error,
 	}
 	profile := colorProfile()
+	// The editor's selection sits on the border colour, as the files
+	// browser's selected row does.
+	selectionBg = defaultSelectionBg
+	if !t.ANSI16 && profile != termenv.Ascii {
+		if c := profile.Color(t.Border); c != nil {
+			if seq := c.Sequence(true); seq != "" {
+				selectionBg = "\033[" + seq + "m"
+			}
+		}
+	}
 	for role := colorRole(0); role < roleCount; role++ {
 		themeSeqs[role] = ansi16Codes[role]
 		if t.ANSI16 || profile == termenv.Ascii {
