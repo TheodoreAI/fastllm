@@ -1599,6 +1599,9 @@ func (m *teaModel) handleShellSubmit(cmdStr string) tea.Cmd {
 	if m.processMgr == nil {
 		m.processMgr = NewProcessManager()
 	}
+	if m.settings != nil {
+		m.processMgr.SetUserShell(m.settings.UserShell)
+	}
 	// A shell command may run beside an agent turn, but only one runs in the
 	// foreground at a time. Keep the refused command in the box.
 	if m.shellExecuting {
@@ -1962,12 +1965,20 @@ func (m *teaModel) updatePromptAndPlaceholder() {
 			dirBase = m.workingDir
 		}
 		m.input.Prompt = dirBase + " ❯ "
-		m.input.Placeholder = fmt.Sprintf("Shell (%s) — enter command ($ go test, ls)...", abbreviateHome(m.workingDir))
+		m.input.Placeholder = fmt.Sprintf("Shell %s (%s) — enter command...", m.userShellLabel(), abbreviateHome(m.workingDir))
 	} else {
 		m.input.Prompt = "❯ "
 		m.input.Placeholder = "Ask anything... (/ for commands, ! for shell)"
 	}
 	setFirstLinePrompt(&m.input, m.input.Prompt)
+}
+
+func (m *teaModel) userShellLabel() string {
+	shell := ""
+	if m.settings != nil {
+		shell = m.settings.UserShell
+	}
+	return sourceLabel(filepath.Base(execution.UserShellName(shell)))
 }
 
 // setFirstLinePrompt shows the prompt on the input's first row only and
@@ -3293,7 +3304,7 @@ func (m *teaModel) render() string {
 	}
 	if m.editorShown() {
 		m.hits.add(hitModal, 0, 0, m.width, m.height)
-		return m.renderEditor()
+		return m.fitFrame(m.renderEditor())
 	}
 	m.syncInputStyles()
 	frame := m.renderChat()

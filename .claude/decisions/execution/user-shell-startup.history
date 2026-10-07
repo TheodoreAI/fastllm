@@ -1,0 +1,4 @@
+- decided_at: 2026-10-07T17:30:56+00:00
+  event: initial
+  value: Direct user shell commands use configured user_shell or SHELL with login/interactive Bash or Zsh startup; injected agent scopes retain profile-free execution.
+  reason: User needs a macOS Bash alias/function that invokes a PR-comment script; sh -c cannot load those definitions, while persistent shell sessions would require unrelated state and PTY management.

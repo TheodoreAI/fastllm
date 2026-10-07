@@ -148,6 +148,9 @@ func decodeUTF16(data []byte, order binary.ByteOrder) string {
 type Settings struct {
 	DefaultModel string          `json:"default_model"`
 	Models       []ModelEndpoint `json:"models"`
+	// UserShell is an executable path/name for human shell-mode commands.
+	// Empty uses SHELL on Unix and Windows PowerShell on Windows.
+	UserShell string `json:"user_shell,omitempty"`
 }
 
 // DefaultSettings returns the endpoints a fresh install can actually reach.
