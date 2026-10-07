@@ -56,6 +56,17 @@ func runIn(t *testing.T, s *Scope, cmd Command) Result {
 	return result
 }
 
+const sandboxStarted = "FASTLLM-SANDBOX-COMMAND-STARTED"
+
+// A denied operation only demonstrates confinement if the shell actually ran.
+// A DLL initialization failure must never count as a successful containment test.
+func assertSandboxStarted(t *testing.T, result Result) {
+	t.Helper()
+	if !strings.Contains(result.Stdout, sandboxStarted) {
+		t.Fatalf("sandbox command did not start: exit %d\n%s", result.ExitCode, result.Output)
+	}
+}
+
 func psLiteral(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
 
 // assertShellAndGitWork checks that PowerShell and native programs start at
@@ -178,12 +189,13 @@ func TestAppContainerCannotReadOutsideTheWorkspace(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	sandboxed, local := containerScopes(t, t.TempDir())
-	read := Command{Shell: "Get-Content -LiteralPath " + psLiteral(secret)}
+	read := Command{Shell: psLiteral(sandboxStarted) + "; Get-Content -LiteralPath " + psLiteral(secret)}
 
 	if control := runIn(t, local, read); !strings.Contains(control.Stdout, "FASTLLM-SECRET-7f3a") {
 		t.Fatalf("control: local backend could not read the secret, so this test proves nothing:\n%s", control.Output)
 	}
 	result := runIn(t, sandboxed, read)
+	assertSandboxStarted(t, result)
 	if strings.Contains(result.Output, "FASTLLM-SECRET-7f3a") {
 		t.Fatal("sandbox read a file outside its workspace")
 	}
@@ -196,14 +208,14 @@ func TestAppContainerCannotWriteOutsideTheWorkspace(t *testing.T) {
 	outside := t.TempDir()
 	sandboxed, local := containerScopes(t, t.TempDir())
 	write := func(name string) Command {
-		return Command{Shell: "Set-Content -LiteralPath " + psLiteral(filepath.Join(outside, name)) + " -Value escaped"}
+		return Command{Shell: psLiteral(sandboxStarted) + "; Set-Content -LiteralPath " + psLiteral(filepath.Join(outside, name)) + " -Value escaped"}
 	}
 
 	runIn(t, local, write("control.txt"))
 	if _, err := os.Stat(filepath.Join(outside, "control.txt")); err != nil {
 		t.Fatalf("control: local backend could not write outside, so this test proves nothing: %v", err)
 	}
-	runIn(t, sandboxed, write("escape.txt"))
+	assertSandboxStarted(t, runIn(t, sandboxed, write("escape.txt")))
 	if _, err := os.Stat(filepath.Join(outside, "escape.txt")); err == nil {
 		t.Fatal("sandbox wrote a file outside its workspace")
 	}
@@ -229,7 +241,7 @@ func TestAppContainerHasNoNetwork(t *testing.T) {
 	port := strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
 	// Stop on the first error, or PowerShell reports the failed connect and
 	// then prints 'connected' anyway.
-	connect := Command{Shell: "$ErrorActionPreference = 'Stop'; $c = New-Object Net.Sockets.TcpClient; if (-not $c.ConnectAsync('127.0.0.1', " + port + ").Wait(5000)) { throw 'connect timed out' }; 'connected'; $c.Close()"}
+	connect := Command{Shell: psLiteral(sandboxStarted) + "; $ErrorActionPreference = 'Stop'; $c = New-Object Net.Sockets.TcpClient; if (-not $c.ConnectAsync('127.0.0.1', " + port + ").Wait(5000)) { throw 'connect timed out' }; 'connected'; $c.Close()"}
 	sandboxed, local := containerScopes(t, t.TempDir())
 
 	if control := runIn(t, local, connect); !strings.Contains(control.Stdout, "connected") {
@@ -242,6 +254,7 @@ func TestAppContainerHasNoNetwork(t *testing.T) {
 	}
 
 	result := runIn(t, sandboxed, connect)
+	assertSandboxStarted(t, result)
 	if strings.Contains(result.Stdout, "connected") || result.ExitCode == 0 {
 		t.Fatalf("sandbox connected to a host service:\n%s", result.Output)
 	}
@@ -298,6 +311,39 @@ func TestAppContainerKillsDescendantsWhenTheCommandExits(t *testing.T) {
 	defer windows.CloseHandle(handle)
 	if event, _ := windows.WaitForSingleObject(handle, 5000); event != windows.WAIT_OBJECT_0 {
 		t.Fatalf("descendant %d outlived its command", pid)
+	}
+}
+
+func TestAppContainerDescendantsInheritRestrictions(t *testing.T) {
+	outside := t.TempDir()
+	secret := filepath.Join(outside, "secret.txt")
+	if err := os.WriteFile(secret, []byte("DESCENDANT-SECRET"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sandboxed, local := containerScopes(t, t.TempDir())
+	child := func(target string) Command {
+		script := psLiteral(sandboxStarted) + "; Get-Content -LiteralPath " + psLiteral(secret) + "; Set-Content -LiteralPath " + psLiteral(target) + " -Value escaped"
+		args := joinCommandLine([]string{"-NoProfile", "-NonInteractive", "-Command", script})
+		shell := filepath.Join(os.Getenv("SystemRoot"), "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+		return Command{Shell: "$info = New-Object Diagnostics.ProcessStartInfo; $info.FileName = " + psLiteral(shell) + "; $info.Arguments = " + psLiteral(args) + "; $info.UseShellExecute = $false; $info.RedirectStandardOutput = $true; $info.RedirectStandardError = $true; $p = [Diagnostics.Process]::Start($info); $p.StandardOutput.ReadToEnd(); $p.StandardError.ReadToEnd(); $p.WaitForExit(); exit $p.ExitCode"}
+	}
+	controlPath := filepath.Join(outside, "control.txt")
+	control := runIn(t, local, child(controlPath))
+	assertSandboxStarted(t, control)
+	if !strings.Contains(control.Stdout, "DESCENDANT-SECRET") {
+		t.Fatalf("local descendant could not read control: %s", control.Output)
+	}
+	if _, err := os.Stat(controlPath); err != nil {
+		t.Fatalf("local descendant could not write control: %v", err)
+	}
+	escape := filepath.Join(outside, "escape.txt")
+	result := runIn(t, sandboxed, child(escape))
+	assertSandboxStarted(t, result)
+	if strings.Contains(result.Output, "DESCENDANT-SECRET") {
+		t.Fatal("descendant read outside granted workspace")
+	}
+	if _, err := os.Stat(escape); !os.IsNotExist(err) {
+		t.Fatalf("descendant wrote outside granted workspace: %v", err)
 	}
 }
 

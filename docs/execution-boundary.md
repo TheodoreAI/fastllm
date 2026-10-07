@@ -139,6 +139,19 @@ inside commands. File tools keep the host path.
 A custom environment block must carry `LOCALAPPDATA`, or process creation
 fails with an unrelated environment error.
 
+Processes select `winsta0\default` rather than inheriting a tool host's private
+desktop. Such a desktop can deny AppContainer tokens and cause PowerShell to
+exit with `STATUS_DLL_INIT_FAILED` before executing any command. This selection
+changes no ACLs or capabilities; `CREATE_NO_WINDOW` still suppresses console
+windows. Containment tests require a startup marker from the sandboxed shell,
+so an initialization failure cannot masquerade as successful containment.
+
+The Windows identity is shared across scopes and its workspace grants persist.
+Its filesystem boundary therefore includes all previously granted trees, not
+just the current agent's workspace. It does not provide isolation between agents
+or their granted workspaces. Built-in file tools still run in the trusted host
+and enforce their paths through the application permission monitor.
+
 The sandbox is opt-in: `/set sandbox on` in either terminal mode, saved with
 the session, or `-sandbox` on the command line. Child agents inherit it and
 cannot turn it off. Where no isolated backend exists, turning it on is refused

@@ -19,21 +19,23 @@ type Theme struct {
 	Name        string
 	Description string
 
-	Muted   string // labels, hints
-	Border  string // input box and modal borders
-	Frame   string // printed card frames and dividers
-	Text    string // body text
-	Value   string // emphasised values, prompts
-	Accent  string // brand, titles, highlights
-	Accent2 string // secondary accent
-	Purple  string // agent tooling
-	Ok      string // success, diff additions
-	Warn    string // warnings, shell mode
-	Error   string // errors, diff deletions
-	Bg      string // terminal background, painted behind everything
-	CardBg  string // pills, cards, status bar
-	Track   string // gauge track
-	BrandFg string // text on the brand pill
+	Muted           string // labels, hints
+	Border          string // input box and modal borders
+	Frame           string // printed card frames and dividers
+	Text            string // body text
+	Value           string // emphasised values, prompts
+	Accent          string // brand, titles, highlights
+	Accent2         string // secondary accent
+	Purple          string // agent tooling
+	Ok              string // success, diff additions
+	Warn            string // warnings, shell mode
+	Error           string // errors, diff deletions
+	Bg              string // terminal background, painted behind everything
+	CardBg          string // pills, cards, status bar
+	Track           string // gauge track
+	BrandFg         string // text on the brand pill
+	ElementBg       string // composer and selected surfaces; falls back to CardBg
+	DiffBackgrounds *diffBackgrounds
 
 	// ANSI16 prints text with the terminal's own 16 colours instead of the
 	// palette, so it follows whatever scheme the terminal is set to.
@@ -43,7 +45,7 @@ type Theme struct {
 }
 
 const (
-	defaultThemeName = "nord"
+	defaultThemeName = "exascale-readable-dark"
 	// defaultLightThemeName replaces the default when the terminal reports a
 	// light background and the user has not chosen a theme.
 	defaultLightThemeName = "github-light"
@@ -58,6 +60,17 @@ var zincPalette = Theme{
 
 // builtinThemes is in picker order.
 var builtinThemes = []Theme{
+	{
+		Name: "exascale-readable-dark", Description: "OpenCode Exascale with readable text and blue/amber diffs",
+		Muted: "#A3B9BD", Border: "#617F86", Frame: "#3F5960", Text: "#E6F5F4", Value: "#E6F5F4",
+		Accent: "#4FD6C4", Accent2: "#6AB0FF", Purple: "#C6A0F6",
+		Ok: "#6AB0FF", Warn: "#F2B25C", Error: "#F2B25C",
+		Bg: "#0F1D21", CardBg: "#16282D", ElementBg: "#1B3036", Track: "#3F5960", BrandFg: "#0F1D21",
+		DiffBackgrounds: &diffBackgrounds{
+			lineAdd: "\033[48;2;20;45;66m", lineDel: "\033[48;2;56;42;24m",
+			wordAdd: "\033[48;2;32;62;88m\033[1m", wordDel: "\033[48;2;75;55;31m\033[1m",
+		},
+	},
 	{
 		Name: "nord", Description: "Arctic frost blues on polar night",
 		Muted: "#616E88", Border: "#4C566A", Frame: "#4C566A", Text: "#D8DEE9", Value: "#ECEFF4",
@@ -253,6 +266,9 @@ func ApplyTheme(name string) error {
 	diffBg = darkDiffBackgrounds
 	if t.Light {
 		diffBg = lightDiffBackgrounds
+	}
+	if t.DiffBackgrounds != nil {
+		diffBg = *t.DiffBackgrounds
 	}
 
 	hexes := [roleCount]string{

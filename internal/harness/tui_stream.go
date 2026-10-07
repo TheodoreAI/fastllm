@@ -97,7 +97,7 @@ func trimSuffixFromHistory(history, shown string) string {
 // formatAssistantAnswer cannot be reused because it renders a whole answer at
 // once; a stream needs the label first and the body in pieces.
 func streamAnswerHeader() string {
-	return "\n" + lipgloss.NewStyle().Bold(true).Foreground(tuiColorGreen).Render(SymBullet+" ASSISTANT") + "\n"
+	return "\n" + lipgloss.NewStyle().Foreground(tuiColorCyan).Render("fastllm") + "\n"
 }
 
 // retractStreamedText removes this turn's streamed output from the transcript,

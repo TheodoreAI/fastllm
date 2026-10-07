@@ -52,7 +52,21 @@ func (m *teaModel) setPermissionMode(mode PermissionMode) error {
 }
 
 func (m *teaModel) cyclePermissionMode() tea.Cmd {
-	if err := m.setPermissionMode(m.permissionMode.Next()); err != nil {
+	return m.cycleToPermissionMode(m.permissionMode.Next())
+}
+
+func (m *teaModel) cyclePermissionModeBackward() tea.Cmd {
+	modes := []PermissionMode{PermissionPlan, PermissionAgent, PermissionEdit, PermissionFull}
+	for i, mode := range modes {
+		if mode == NormalizeMode(m.permissionMode) {
+			return m.cycleToPermissionMode(modes[(i+len(modes)-1)%len(modes)])
+		}
+	}
+	return nil
+}
+
+func (m *teaModel) cycleToPermissionMode(mode PermissionMode) tea.Cmd {
+	if err := m.setPermissionMode(mode); err != nil {
 		m.statusNotice = err.Error()
 		return m.clearStatusAfter(3 * time.Second)
 	}

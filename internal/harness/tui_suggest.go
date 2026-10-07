@@ -156,10 +156,10 @@ func (m *teaModel) handleSuggestKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return false, nil
 	}
 	item := s.items[s.cursor]
-	// Modified chords (alt+enter, shift+tab, ...) have their own strings, so
+	// Modified chords (alt+enter, ...) have their own strings, so
 	// they fall through to the input untouched.
 	switch msg.String() {
-	case "up":
+	case "up", "shift+tab":
 		if s.cursor > 0 {
 			s.cursor--
 		}
@@ -274,7 +274,7 @@ func (m *teaModel) renderSuggestions() string {
 		lines = append(lines, clampToWidth(row, inner))
 	}
 	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
+		Border(lipgloss.NormalBorder()).
 		BorderForeground(tuiColorBorder).
 		Padding(0, 1).
 		Width(m.inputBoxWidth()).

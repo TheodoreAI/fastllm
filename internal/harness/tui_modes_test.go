@@ -32,7 +32,7 @@ func TestShiftTabCyclesModesAndClearsGrants(t *testing.T) {
 	m := newBusyModel(t, &mockLLM{})
 	m.permissionMode = PermissionAgent
 	m.permissionController().Grant("write_file")
-	want := []PermissionMode{PermissionEdit, PermissionFull, PermissionPlan, PermissionAgent}
+	want := []PermissionMode{PermissionPlan, PermissionFull, PermissionEdit, PermissionAgent}
 	for _, mode := range want {
 		m.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
 		if m.permissionMode != mode || m.permissionController().Mode != mode {
@@ -41,8 +41,8 @@ func TestShiftTabCyclesModesAndClearsGrants(t *testing.T) {
 		if m.permissionController().HasGrant("write_file") {
 			t.Fatalf("session grant survived switching to %s", mode)
 		}
-		if !strings.Contains(stripANSI(m.render()), "◈ "+strings.ToUpper(mode.Label())) {
-			t.Fatalf("header does not show %s", mode.Label())
+		if !strings.Contains(stripANSI(m.render()), strings.ToUpper(mode.Label())) {
+			t.Fatalf("composer does not show %s:\n%s", mode.Label(), stripANSI(m.render()))
 		}
 	}
 }

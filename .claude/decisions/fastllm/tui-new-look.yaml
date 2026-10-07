@@ -1,0 +1,3 @@
+value: OpenCode-style home, flat panels, composer mode/model metadata, Ctrl+P registry palette, Ctrl+X leader, Tab forward and Shift+Tab reverse permissions; preserve fastllm capabilities and Bubble Tea v2.
+reason: User requested OpenCode look and feel while retaining functionality. Existing renderer minimizes migration risk compared with a framework rewrite.
+decided_at: 2026-10-07T04:23:26+00:00

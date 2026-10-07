@@ -575,6 +575,11 @@ func (s *appContainerScope) createProcess(app, line, dir *uint16, handles []wind
 	startup := windows.StartupInfoEx{ProcThreadAttributeList: attributes.List()}
 	startup.Cb = uint32(unsafe.Sizeof(startup))
 	startup.Flags = windows.STARTF_USESTDHANDLES
+	// Tool hosts can run on a private desktop whose ACL excludes AppContainer
+	// tokens. Inheriting it makes user32 initialization fail before the shell
+	// executes (STATUS_DLL_INIT_FAILED). Use the interactive desktop without
+	// widening any ACL or adding capabilities; CREATE_NO_WINDOW stays in force.
+	startup.Desktop, _ = windows.UTF16PtrFromString(`winsta0\default`)
 	startup.StdInput, startup.StdOutput, startup.StdErr = handles[0], handles[1], handles[2]
 	var pi windows.ProcessInformation
 	flags := uint32(windows.EXTENDED_STARTUPINFO_PRESENT | windows.CREATE_UNICODE_ENVIRONMENT | windows.CREATE_NO_WINDOW | windows.CREATE_SUSPENDED)

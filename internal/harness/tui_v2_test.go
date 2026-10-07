@@ -63,10 +63,11 @@ func click(m *teaModel, x, y int) *teaModel {
 	return updated.(*teaModel)
 }
 
-func TestClickingHeaderModelOpensModelPicker(t *testing.T) {
+func TestClickingComposerModelOpensModelPicker(t *testing.T) {
 	m := newWideModel(t)
 	frame := m.render()
-	m = click(m, frameColumnOf(t, frame, 0, "test-model")+2, 0)
+	y := frameRowContaining(t, frame, 0, "test-model")
+	m = click(m, frameColumnOf(t, frame, y, "test-model")+2, y)
 	if !m.modelsModal {
 		t.Fatal("clicking the model name in the header did not open the model picker")
 	}
@@ -80,9 +81,10 @@ func move(m *teaModel, x, y int) *teaModel {
 func TestHoverHighlightsClickTargetUnderPointer(t *testing.T) {
 	m := newWideModel(t)
 	plain := m.render()
-	x := frameColumnOf(t, plain, 0, "test-model") + 2
+	y := frameRowContaining(t, plain, 0, "test-model")
+	x := frameColumnOf(t, plain, y, "test-model") + 2
 
-	m = move(m, x, 0)
+	m = move(m, x, y)
 	if m.hover != hitModel {
 		t.Fatalf("hover over the model pill = %q; want %q", m.hover, hitModel)
 	}
@@ -94,12 +96,12 @@ func TestHoverHighlightsClickTargetUnderPointer(t *testing.T) {
 		t.Fatal("hover must restyle the target, not change its text or layout")
 	}
 
-	m = move(m, x, m.height/2)
+	m = move(m, 0, 0)
 	if m.hover != "" || m.render() != plain {
 		t.Fatalf("moving off the pill left hover %q", m.hover)
 	}
 
-	m = move(m, x, 0)
+	m = move(m, x, y)
 	updated, _ := m.Update(tea.BlurMsg{})
 	if updated.(*teaModel).hover != "" {
 		t.Fatal("losing focus did not clear the hover")
@@ -110,7 +112,8 @@ func TestClickingModeBadgeCyclesPermissionMode(t *testing.T) {
 	m := newWideModel(t)
 	frame := m.render()
 	before := m.permissionMode
-	m = click(m, frameColumnOf(t, frame, 0, strings.ToUpper(before.Label())), 0)
+	y := frameRowContaining(t, frame, 0, strings.ToUpper(before.Label()))
+	m = click(m, frameColumnOf(t, frame, y, strings.ToUpper(before.Label())), y)
 	if m.permissionMode == before {
 		t.Fatalf("clicking the mode badge left the mode at %q", before)
 	}
@@ -120,6 +123,7 @@ func TestClickingModeBadgeCyclesPermissionMode(t *testing.T) {
 // inside it is ignored, and a click outside it dismisses it like Esc.
 func TestModalOverlaysChatAndOutsideClickCloses(t *testing.T) {
 	m := newWideModel(t)
+	m.appendHistory("A conversation behind the dialog\n")
 	original := currentTheme.Name
 	chatRows := strings.Count(m.renderChat(), "\n") + 1
 	m.openThemeModal()

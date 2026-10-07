@@ -172,7 +172,7 @@ func (m *teaModel) renderThemeModal() string {
 		styleMuted.Render("New colours apply to new output · /cls to redraw"))
 
 	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
+		Border(lipgloss.Border{}).Background(tuiColorCardBg).
 		BorderForeground(tuiColorCyan).
 		Background(tuiColorCardBg).
 		Padding(0, 1).

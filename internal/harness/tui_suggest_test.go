@@ -213,10 +213,11 @@ func TestNoSuggestionsWhenNotApplicable(t *testing.T) {
 	}
 }
 
-func TestTabTogglesShellModeWhenNoList(t *testing.T) {
+func TestTabCyclesPermissionModeWhenNoList(t *testing.T) {
 	m := suggestModel(t)
+	before := m.permissionMode
 	send(m, tea.KeyPressMsg{Code: tea.KeyTab})
-	if m.mode != modeShell {
-		t.Fatal("Tab on an empty input should still toggle Shell Mode")
+	if m.permissionMode != before.Next() || m.mode != modeAgent {
+		t.Fatal("Tab on an empty input should cycle permissions")
 	}
 }

@@ -1,0 +1,3 @@
+value: Explicitly select the default desktop of the interactive Windows window station for AppContainer subprocesses, retaining CREATE_NO_WINDOW, zero capabilities, handle whitelist and suspended launch into a Job Object.
+reason: Inherited tool-host private desktop blocked PowerShell DLL initialization (0xC0000142). DETACHED_PROCESS did not fix it; selecting the normal desktop passed shell, process, denial and descendant tests without broadening ACLs. Wording corrected to avoid doubled path separators.
+decided_at: 2026-10-07T04:52:14+00:00

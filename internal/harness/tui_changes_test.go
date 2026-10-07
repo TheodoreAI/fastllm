@@ -349,6 +349,7 @@ func TestMouseClickChangesColumnOpensModal(t *testing.T) {
 		{Path: "main.go", Added: 3, Removed: 1, Status: "M"},
 		{Path: "util.go", Added: 8, Removed: 4, Status: "M"},
 	}
+	m.appendHistory("Changes made during this conversation\n")
 
 	// Terminal width = 140 (>= changesColumnMinFrame so the sidebar is shown).
 	// Click on the sidebar row that actually shows main.go.
