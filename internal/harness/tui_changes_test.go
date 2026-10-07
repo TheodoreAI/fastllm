@@ -280,15 +280,15 @@ func TestDiffModalNavigationAndHotkeys(t *testing.T) {
 		{Path: "beta.go", Added: 10, Removed: 0, Status: "M"},
 	}
 
-	// 1. Alt+c opens diff modal
+	// Alt+c routes the changed-file selection into Source Control.
 	updated, _ := m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModAlt})
 	m = updated.(*teaModel)
-	if !m.diffModal {
-		t.Fatal("expected diffModal to be open after Alt+c")
+	if !m.source.active || m.source.requestedPath != "alpha.go" {
+		t.Fatal("Alt+c did not open Source Control on alpha.go")
 	}
-	if m.diffCursor != 0 {
-		t.Fatalf("expected diffCursor=0, got %d", m.diffCursor)
-	}
+	m.leaveSource()
+	// /diff retains the legacy modal and its file navigation.
+	m.openDiffModal(0)
 
 	// 2. Next file with 'n'
 	updated, _ = m.Update(tea.KeyPressMsg{Code: 'n', Text: "n"})
@@ -311,25 +311,22 @@ func TestDiffModalNavigationAndHotkeys(t *testing.T) {
 		t.Fatal("expected diffModal to be closed after Esc")
 	}
 
-	// 5. Ctrl+O opens diff modal
+	// Ctrl+O also opens the Source Control workspace.
 	updated, _ = m.Update(tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
 	m = updated.(*teaModel)
-	if !m.diffModal {
-		t.Fatal("expected diffModal to be open after Ctrl+O")
-	}
-	if m.diffCursor != 0 {
-		t.Fatalf("expected diffCursor=0 after Ctrl+O, got %d", m.diffCursor)
+	if !m.source.active || m.source.requestedPath != "alpha.go" {
+		t.Fatal("Ctrl+O did not open Source Control on alpha.go")
 	}
 
 	// Close with 'q'
 	updated, _ = m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
 	m = updated.(*teaModel)
-	if m.diffModal {
-		t.Fatal("expected diffModal to be closed after 'q'")
+	if m.source.active {
+		t.Fatal("expected Source Control to return to chat after 'q'")
 	}
 }
 
-func TestMouseClickChangesColumnOpensModal(t *testing.T) {
+func TestMouseClickChangesColumnOpensSourceControl(t *testing.T) {
 	tmp := t.TempDir()
 	ta := textarea.New()
 	ta.ShowLineNumbers = false
@@ -360,14 +357,11 @@ func TestMouseClickChangesColumnOpensModal(t *testing.T) {
 
 	updated, _ := m.Update(mouseMsg)
 	m = updated.(*teaModel)
-	if !m.diffModal {
-		t.Fatal("expected mouse click on changes column to open diff modal")
+	if !m.source.active {
+		t.Fatal("expected mouse click on changes column to open Source Control")
 	}
-	if m.diffCursor != 0 {
-		t.Fatalf("expected diffCursor=0, got %d", m.diffCursor)
-	}
-	if m.diffPath != "main.go" {
-		t.Fatalf("expected diffPath='main.go', got %q", m.diffPath)
+	if m.source.requestedPath != "main.go" {
+		t.Fatalf("expected selected file main.go, got %q", m.source.requestedPath)
 	}
 }
 

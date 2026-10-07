@@ -155,6 +155,8 @@ func (m *teaModel) handleCommonKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 			return true, nil
 		}
 		switch strings.ToLower(msg.String()) {
+		case "g":
+			return true, m.openSourceControl("")
 		case "b":
 			m.toggleSidebar()
 			return true, nil

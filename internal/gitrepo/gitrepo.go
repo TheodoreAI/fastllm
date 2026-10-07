@@ -31,7 +31,7 @@ var ErrNotARepo = errors.New("gitrepo: not a git repository")
 // because the user's commits and git-lfs rely on them, and model file tools
 // cannot write .git (files.ErrGitInternals), so neither can be planted.
 func HardenedArgs(args ...string) []string {
-	return append([]string{"-c", "core.fsmonitor=false"}, args...)
+	return append([]string{"-c", "core.fsmonitor=false", "--literal-pathspecs"}, args...)
 }
 
 func run(ctx context.Context, root string, args ...string) (string, error) {
@@ -49,7 +49,7 @@ func run(ctx context.Context, root string, args ...string) (string, error) {
 	if result.Truncated {
 		return "", errors.New("git output exceeded capture limit")
 	}
-	return result.Stdout + result.Stderr, nil
+	return result.Stdout, nil
 }
 
 // IsRepo reports whether root is inside a git working tree.
@@ -67,11 +67,11 @@ func ListFiles(ctx context.Context, root string) ([]string, error) {
 	if !IsRepo(ctx, root) {
 		return nil, ErrNotARepo
 	}
-	out, err := run(ctx, root, "ls-files", "--cached", "--others", "--exclude-standard")
+	out, err := run(ctx, root, "ls-files", "--cached", "--others", "--exclude-standard", "-z")
 	if err != nil {
 		return nil, err
 	}
-	return splitLines(out), nil
+	return splitNUL(out), nil
 }
 
 // ListTrackedAndUntracked returns the same files as ListFiles, split into
@@ -80,23 +80,25 @@ func ListTrackedAndUntracked(ctx context.Context, root string) (tracked, untrack
 	if !IsRepo(ctx, root) {
 		return nil, nil, ErrNotARepo
 	}
-	out, err := run(ctx, root, "ls-files", "--cached")
+	out, err := run(ctx, root, "ls-files", "--cached", "-z")
 	if err != nil {
 		return nil, nil, err
 	}
-	tracked = splitLines(out)
-	out, err = run(ctx, root, "ls-files", "--others", "--exclude-standard")
+	tracked = splitNUL(out)
+	out, err = run(ctx, root, "ls-files", "--others", "--exclude-standard", "-z")
 	if err != nil {
 		return nil, nil, err
 	}
-	return tracked, splitLines(out), nil
+	return tracked, splitNUL(out), nil
 }
 
 // FileStatus is one entry from `git status`.
 type FileStatus struct {
-	Path     string `json:"path"`
-	Staged   string `json:"staged"`   // index status: "M", "A", "D", "R", "" = none
-	Unstaged string `json:"unstaged"` // worktree status: "M", "D", "?" (untracked), "" = none
+	Path         string `json:"path"`
+	OriginalPath string `json:"original_path,omitempty"`
+	Conflict     bool   `json:"conflict,omitempty"`
+	Staged       string `json:"staged"`   // index status: "M", "A", "D", "R", "" = none
+	Unstaged     string `json:"unstaged"` // worktree status: "M", "D", "?" (untracked), "" = none
 }
 
 // Status returns the working tree's current status, parsed from
@@ -105,40 +107,55 @@ func Status(ctx context.Context, root string) ([]FileStatus, error) {
 	if !IsRepo(ctx, root) {
 		return nil, ErrNotARepo
 	}
-	out, err := run(ctx, root, "status", "--porcelain=v2", "--untracked-files=all")
+	out, err := run(ctx, root, "status", "--porcelain=v2", "-z", "--untracked-files=all")
 	if err != nil {
 		return nil, err
 	}
 
+	return parseStatus(out), nil
+}
+
+func parseStatus(out string) []FileStatus {
 	var results []FileStatus
-	for _, line := range splitLines(out) {
+	records := strings.Split(out, "\x00")
+	for i := 0; i < len(records); i++ {
+		line := records[i]
 		if line == "" {
 			continue
 		}
 		switch line[0] {
-		case '1', '2': // ordinary / renamed-or-copied changed entry
-			fields := strings.SplitN(line, " ", 9)
-			if len(fields) < 9 {
+		case '1', '2', 'u':
+			n := 9
+			if line[0] == '2' {
+				n = 10
+			}
+			if line[0] == 'u' {
+				n = 11
+			}
+			fields := strings.SplitN(line, " ", n)
+			if len(fields) < n || len(fields[1]) != 2 {
 				continue
 			}
 			xy := fields[1]
-			path := fields[8]
-			// Renamed entries carry "path\told_path" in field 8 for
-			// type '2' — the editor only needs the current path.
-			if idx := strings.IndexByte(path, '\t'); idx != -1 {
-				path = path[:idx]
+			path := fields[n-1]
+			original := ""
+			if line[0] == '2' && i+1 < len(records) {
+				i++
+				original = records[i]
 			}
 			results = append(results, FileStatus{
-				Path:     path,
-				Staged:   statusChar(xy[0]),
-				Unstaged: statusChar(xy[1]),
+				Path:         path,
+				OriginalPath: original,
+				Conflict:     line[0] == 'u',
+				Staged:       statusChar(xy[0]),
+				Unstaged:     statusChar(xy[1]),
 			})
 		case '?': // untracked
 			path := strings.TrimPrefix(line, "? ")
 			results = append(results, FileStatus{Path: path, Unstaged: "?"})
 		}
 	}
-	return results, nil
+	return results
 }
 
 func statusChar(c byte) string {
@@ -161,11 +178,13 @@ type RepoStatus struct {
 
 // RepoFileStatus is one changed file in the repository.
 type RepoFileStatus struct {
-	Path     string `json:"path"`
-	Staged   string `json:"staged"`   // "M", "A", "D", "R", ""
-	Unstaged string `json:"unstaged"` // "M", "D", "?", ""
-	Added    int    `json:"added"`
-	Removed  int    `json:"removed"`
+	Path         string `json:"path"`
+	OriginalPath string `json:"original_path,omitempty"`
+	Conflict     bool   `json:"conflict,omitempty"`
+	Staged       string `json:"staged"`   // "M", "A", "D", "R", ""
+	Unstaged     string `json:"unstaged"` // "M", "D", "?", ""
+	Added        int    `json:"added"`
+	Removed      int    `json:"removed"`
 }
 
 // GetRepoStatus returns comprehensive repository status including branch,
@@ -174,83 +193,36 @@ func GetRepoStatus(ctx context.Context, root string) (RepoStatus, error) {
 	if !IsRepo(ctx, root) {
 		return RepoStatus{IsRepo: false}, ErrNotARepo
 	}
-	out, err := run(ctx, root, "status", "--porcelain=v2", "--branch", "--untracked-files=all")
+	out, err := run(ctx, root, "status", "--porcelain=v2", "-z", "--branch", "--untracked-files=all")
 	if err != nil {
-		return RepoStatus{IsRepo: false}, err
+		return RepoStatus{}, err
 	}
-
 	status := RepoStatus{IsRepo: true}
 	fileMap := make(map[string]*RepoFileStatus)
 	var fileList []string
-
-	for _, line := range splitLines(out) {
-		if line == "" {
-			continue
+	for _, record := range strings.Split(out, "\x00") {
+		if strings.HasPrefix(record, "# branch.head ") {
+			status.Branch = strings.TrimPrefix(record, "# branch.head ")
 		}
-		if strings.HasPrefix(line, "# ") {
-			header := strings.TrimPrefix(line, "# ")
-			parts := strings.SplitN(header, " ", 2)
-			if len(parts) == 2 {
-				key, val := parts[0], parts[1]
-				switch key {
-				case "branch.head":
-					status.Branch = val
-				case "branch.upstream":
-					status.Upstream = val
-				case "branch.ab":
-					abParts := strings.Fields(val)
-					for _, ab := range abParts {
-						if strings.HasPrefix(ab, "+") {
-							if n, err := strconv.Atoi(ab[1:]); err == nil {
-								status.Ahead = n
-							}
-						} else if strings.HasPrefix(ab, "-") {
-							if n, err := strconv.Atoi(ab[1:]); err == nil {
-								status.Behind = n
-							}
-						}
-					}
-				}
-			}
-			continue
+		if strings.HasPrefix(record, "# branch.upstream ") {
+			status.Upstream = strings.TrimPrefix(record, "# branch.upstream ")
 		}
-
-		switch line[0] {
-		case '1', '2':
-			fields := strings.SplitN(line, " ", 9)
-			if len(fields) < 9 {
-				continue
-			}
-			xy := fields[1]
-			path := fields[8]
-			if idx := strings.IndexByte(path, '\t'); idx != -1 {
-				path = path[:idx]
-			}
-			f := &RepoFileStatus{
-				Path:     path,
-				Staged:   statusChar(xy[0]),
-				Unstaged: statusChar(xy[1]),
-			}
-			fileMap[path] = f
-			fileList = append(fileList, path)
-		case '?':
-			path := strings.TrimPrefix(line, "? ")
-			f := &RepoFileStatus{
-				Path:     path,
-				Unstaged: "?",
-			}
-			fileMap[path] = f
-			fileList = append(fileList, path)
+		if strings.HasPrefix(record, "# branch.ab ") {
+			fmt.Sscanf(strings.TrimPrefix(record, "# branch.ab "), "+%d -%d", &status.Ahead, &status.Behind)
 		}
+	}
+	for _, f := range parseStatus(out) {
+		fileMap[f.Path] = &RepoFileStatus{Path: f.Path, OriginalPath: f.OriginalPath, Conflict: f.Conflict, Staged: f.Staged, Unstaged: f.Unstaged}
+		fileList = append(fileList, f.Path)
 	}
 
 	// Diff numstats for unstaged changes
-	if numstatOut, err := run(ctx, root, "diff", "--numstat", "--no-ext-diff", "--no-textconv"); err == nil {
+	if numstatOut, err := run(ctx, root, "diff", "--numstat", "-z", "--no-ext-diff", "--no-textconv"); err == nil {
 		parseNumstat(numstatOut, fileMap, false)
 	}
 
 	// Diff numstats for staged changes
-	if numstatOut, err := run(ctx, root, "diff", "--cached", "--numstat", "--no-ext-diff", "--no-textconv"); err == nil {
+	if numstatOut, err := run(ctx, root, "diff", "--cached", "--numstat", "-z", "--no-ext-diff", "--no-textconv"); err == nil {
 		parseNumstat(numstatOut, fileMap, true)
 	}
 
@@ -280,21 +252,20 @@ func GetRepoStatus(ctx context.Context, root string) (RepoStatus, error) {
 }
 
 func parseNumstat(output string, fileMap map[string]*RepoFileStatus, staged bool) {
-	for _, line := range splitLines(output) {
-		parts := strings.Split(line, "\t")
-		if len(parts) < 3 {
+	records := strings.Split(output, "\x00")
+	for i := 0; i < len(records); i++ {
+		parts := strings.SplitN(records[i], "\t", 3)
+		if len(parts) != 3 {
 			continue
 		}
 		path := parts[2]
-		f, ok := fileMap[path]
-		if !ok {
-			f = &RepoFileStatus{Path: path}
-			if staged {
-				f.Staged = "M"
-			} else {
-				f.Unstaged = "M"
-			}
-			fileMap[path] = f
+		if path == "" && i+2 < len(records) {
+			i += 2
+			path = records[i]
+		}
+		f := fileMap[path]
+		if f == nil {
+			continue
 		}
 		added, _ := strconv.Atoi(parts[0])
 		removed, _ := strconv.Atoi(parts[1])
@@ -302,7 +273,6 @@ func parseNumstat(output string, fileMap map[string]*RepoFileStatus, staged bool
 		f.Removed += removed
 	}
 }
-
 func countFileLines(s string) int {
 	if s == "" {
 		return 0
@@ -376,7 +346,11 @@ func Unstage(ctx context.Context, root string, paths []string) error {
 	if len(paths) == 0 {
 		return nil
 	}
-	_, err := run(ctx, root, append([]string{"restore", "--staged", "--"}, paths...)...)
+	args := []string{"restore", "--staged", "--"}
+	if _, err := run(ctx, root, "rev-parse", "--verify", "HEAD"); err != nil {
+		args = []string{"rm", "--cached", "-f", "--"}
+	}
+	_, err := run(ctx, root, append(args, paths...)...)
 	return err
 }
 
@@ -508,7 +482,10 @@ func SwitchBranch(ctx context.Context, root, name string) error {
 	if strings.TrimSpace(name) == "" {
 		return errors.New("gitrepo: branch name is required")
 	}
-	_, err := run(ctx, root, "switch", name)
+	if _, err := run(ctx, root, "check-ref-format", "--branch", name); err != nil {
+		return err
+	}
+	_, err := run(ctx, root, "switch", "--", name)
 	return err
 }
 
@@ -522,6 +499,9 @@ func CreateBranch(ctx context.Context, root, name string) error {
 	}
 	if strings.TrimSpace(name) == "" {
 		return errors.New("gitrepo: branch name is required")
+	}
+	if _, err := run(ctx, root, "check-ref-format", "--branch", name); err != nil {
+		return err
 	}
 	_, err := run(ctx, root, "switch", "-c", name)
 	return err

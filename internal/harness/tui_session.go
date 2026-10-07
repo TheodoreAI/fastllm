@@ -110,6 +110,9 @@ func (m *teaModel) saveSession() error {
 }
 
 func (m *teaModel) closeSession() {
+	if m.source.cancel != nil {
+		m.source.cancel()
+	}
 	if m.gitWatchStop != nil {
 		m.gitWatchStop()
 		m.gitWatchStop = nil

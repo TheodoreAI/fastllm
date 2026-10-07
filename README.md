@@ -58,6 +58,9 @@ muted text and blue/amber diffs; an existing saved theme stays selected. Use
 - **Ctrl+X**, then **N/L/M/T/B/S/C/Y/Q**, opens new session/sessions/models/themes,
   toggles the sidebar, shows status, compacts, copies the response, or exits.
   The leader expires after two seconds. `/sidebar` also toggles the sidebar.
+- **Ctrl+X then G**, `/git`, or the Source Control navigation opens the Git workspace.
+  Changed-file selections and `/changes [file]` also open it. Chat and commit drafts
+  survive workspace switches; **q** or the visible Chat action returns to chat.
 - **Enter** sends; **Ctrl+J** inserts a newline (**Shift+Enter** also works when
   the terminal reports it). **Esc** cancels a running operation or closes a dialog.
 - `/shell` toggles shell mode; `!command` and `$ command` run inline commands.
@@ -67,6 +70,24 @@ The sidebar appears when the frame has at least 120 columns. On smaller terminal
 use `/changes`, `/status`, and the palette. Long permission requests scroll with
 **PgUp/PgDn**; **Enter/n deny**, and **Esc denies and cancels the run**. Existing editor, attachment, session,
 process, permission, and budget workflows remain available.
+
+Source Control groups conflicts, staged changes, unstaged changes, untracked files,
+and the current branch's history. **↑/↓**, **Enter**, and **Tab/Shift+Tab** navigate;
+**/** filters filenames, **r** refreshes, and **e** opens the existing editor.
+Diffs compare HEAD with the index for staged files and the index with the working
+tree for unstaged files. At 100 detail columns they default to side by side;
+**v** switches formats. Below 90 terminal columns, **Back/←** returns to the sidebar.
+
+Use **s/S** to stage a file/group and **u/U** to unstage. **x/X** asks before discarding
+unstaged tracked changes, preserving the index; deleting untracked files has its own
+confirmation. Bulk discard is unavailable during conflicts. Enter a message with
+**c**, then **Ctrl+Enter** or click **Commit Staged Changes**. Commits run Git hooks
+and include only the index. **b** lists/filter local branches; **Ctrl+N** creates one
+from HEAD. Switching never stashes, discards, or forces changes. History loads 50
+commits at a time and shows read-only comparisons with the first parent (or an empty
+tree for the root commit). Repository mutations and editor saves remain disabled
+while an agent or foreground shell is active. Fetch, pull, push, merge/rebase tools,
+and hunk staging are outside this workspace.
 
 Run the checks used before committing:
 

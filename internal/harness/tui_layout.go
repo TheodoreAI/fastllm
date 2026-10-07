@@ -221,12 +221,16 @@ func (m *teaModel) renderChat() string {
 	}
 	l := m.layout()
 	if m.showHome() {
-		return m.renderHome(l)
+		frame := m.renderHome(l)
+		nav := fmt.Sprintf("fastllm · Chat  Source Control (%d) [Ctrl+X G]", len(m.changes.files))
+		m.hits.add("source:open", 16, 0, VisualLen(nav)-16, 1)
+		return m.fitFrame(lipgloss.NewCompositor(lipgloss.NewLayer(frame), lipgloss.NewLayer(styleMuted.Render(nav)).X(2)).Render())
 	}
 	// Resizing and painting use the same geometry, including attachment and approval rows.
 	m.viewport.SetWidth(max(1, m.conversationWidth()-4))
 	m.viewport.SetHeight(l.transcriptHeight)
-	title := "fastllm"
+	title := fmt.Sprintf("fastllm · Chat  Source Control (%d) [Ctrl+X G]", len(m.changes.files))
+	m.hits.add("source:open", 16, 0, VisualLen(title)-16, 1)
 	if m.activeSession != nil && m.activeSession.Title != "" {
 		title += " / " + sanitizeUntrusted(m.activeSession.Title)
 	}
@@ -272,7 +276,7 @@ func (m *teaModel) renderFooter() string {
 		hints = m.spinner.View() + " shell · ctrl+b background · esc cancel"
 	}
 	if m.leaderPending {
-		hints = "ctrl+x → n new · l sessions · m models · t themes · b sidebar · s status · c compact · y copy · q exit"
+		hints = "ctrl+x → g Source Control · n new · l sessions · m models · t themes · b sidebar · s status · c compact · y copy · q exit"
 	}
 	if m.statusNotice != "" {
 		hints = m.statusNotice
