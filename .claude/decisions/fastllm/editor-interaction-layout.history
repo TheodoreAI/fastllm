@@ -1,0 +1,4 @@
+- decided_at: 2026-10-07T18:47:56+00:00
+  event: initial
+  value: Editor uses header, text, status, and clickable action row; F1 help and modal confirmations own both keyboard and mouse; Tab indents and F6 changes source panes.
+  reason: Dense one-line prompts clipped recovery choices and source Tab routing prevented indentation. A separate action row and full-screen centered panels keep choices discoverable at 80 columns; retaining a single footer was too cramped, and replacing typing keys would break editing.

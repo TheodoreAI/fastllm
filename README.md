@@ -85,6 +85,12 @@ The editor keeps syntax colors and highlights changed lines and words against HE
 including unsaved edits. Click a previous/deleted-lines header or press **Alt+D**
 to expand read-only original text, including deletions at the end of a file.
 Wheel scrolling leaves the cursor in place; cursor navigation/editing follows it.
+The editor has clickable **Save**, **Diff**, **Help**, and **Close** controls.
+**F1** shows editor shortcuts. **Tab/Shift+Tab** indent/outdent text;
+**F6/Shift+F6** move between Source Control panes while a file is open.
+The status line shows cursor position and changes against HEAD; unsaved edits and
+save restrictions stay visible. Save/discard and disk-conflict choices open a panel
+that supports both keyboard and mouse input.
 Diffs compare HEAD with the index for staged files and the index with the working
 tree for unstaged files. At 100 detail columns they default to side by side;
 **v** switches formats. Below 90 terminal columns, **Back/←** returns to the sidebar.
