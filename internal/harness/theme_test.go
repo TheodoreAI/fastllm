@@ -155,9 +155,10 @@ func TestThemeModalPreviewCancelAndSave(t *testing.T) {
 	if m.themeModal == nil {
 		t.Fatal("/theme should open the picker")
 	}
+	next := builtinThemes[(m.themeModal.cursor+1)%len(builtinThemes)].Name
 	m.handleThemeModalKey(tea.KeyPressMsg{Code: tea.KeyDown})
-	if currentTheme.Name != builtinThemes[1].Name {
-		t.Fatalf("moving the cursor should preview %s, got %s", builtinThemes[1].Name, currentTheme.Name)
+	if currentTheme.Name != next {
+		t.Fatalf("moving the cursor should preview %s, got %s", next, currentTheme.Name)
 	}
 	m.handleThemeModalKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if m.themeModal != nil || currentTheme.Name != "nord" {
@@ -197,6 +198,8 @@ func TestThemeModalRenders(t *testing.T) {
 	m := &teaModel{input: textarea.New(), width: 100, height: 40}
 	m.openThemeModal()
 	out := StripANSI(m.renderThemeModal())
+	m.handleThemeModalKey(tea.KeyPressMsg{Code: tea.KeyEnd})
+	out += StripANSI(m.renderThemeModal())
 	for _, th := range builtinThemes {
 		if !strings.Contains(out, th.Name) {
 			t.Fatalf("picker missing %s:\n%s", th.Name, out)

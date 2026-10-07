@@ -391,7 +391,7 @@ func (m *teaModel) renderSessionsModal() string {
 	}
 
 	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
+		Border(lipgloss.Border{}).Background(tuiColorCardBg).
 		BorderForeground(tuiColorCyan).
 		Background(tuiColorCardBg).
 		Padding(0, 1).

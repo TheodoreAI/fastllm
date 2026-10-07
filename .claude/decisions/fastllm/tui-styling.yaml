@@ -1,3 +1,3 @@
-value: Native ANSI/Unicode styling with Windows VT support, rounded cards, colored diffs, structured tool blocks, no emojis; all colours come from the active theme (see tui-theme), truecolour downsampled via termenv, 16-colour fallback when not a TTY
-reason: Original zero-dependency styling kept; hue-named helpers now map to theme roles so call sites are unchanged
-decided_at: 2026-09-24T01:40:08+00:00
+value: Fullscreen TUI uses flat filled panels and accent composer rail, quiet session header, centered pixel wordmark home. Legacy ANSI REPL formatting remains separate.
+reason: User requested OpenCode styling; supersedes rounded fullscreen cards.
+decided_at: 2026-10-07T04:23:27+00:00

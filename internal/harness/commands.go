@@ -26,9 +26,10 @@ type commandRow struct {
 var commandSections = []commandSection{
 	{"Session & Control", []commandRow{
 		{"/help", "Display this command reference"},
+		{"/sidebar", "Toggle the session sidebar (Ctrl+X then B)"},
 		{"/status", "Inspect session token usage, latency, cost, and jobs"},
 		{"/sessions", "Browse, filter, resume, rename, or delete sessions"},
-		{"/theme [name]", "Pick a colour theme (nord, zinc, terminal, ...)"},
+		{"/theme [name]", "Pick a colour theme (exascale-readable-dark, nord, terminal, ...)"},
 		{"/sessions list", "Print the saved sessions table"},
 		{"/resume [id|last]", "Resume a saved session (no id opens the menu)"},
 		{"/session [id]", "Show session details"},
@@ -54,7 +55,7 @@ var commandSections = []commandSection{
 		{"/set think <level>", "Set off, low, medium, or high reasoning"},
 		{"/set commands <on|off>", "Enable or disable command/process tools"},
 		{"/set sandbox <on|off>", "Run commands isolated from this machine, with no network"},
-		{"/set permissions <mode>", "Set plan, agent, edit, or full (Shift+Tab cycles in the TUI)"},
+		{"/set permissions <mode>", "Set plan, agent, edit, or full (Tab/Shift+Tab cycles in the TUI)"},
 		{"/set output <mode>", "Set compact or expanded tool results"},
 		{"/set tokens <n|off>", "Token budget per prompt, child agents included"},
 		{"/set cost <usd|off>", "Estimated cost budget per prompt"},

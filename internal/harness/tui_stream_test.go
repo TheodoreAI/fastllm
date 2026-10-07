@@ -193,7 +193,7 @@ func TestTurnCompleteRendersAnswerWhenNothingStreamed(t *testing.T) {
 	if !strings.Contains(plain, "hello there, this is the answer") {
 		t.Fatalf("answer was not rendered:\n%q", plain)
 	}
-	if !strings.Contains(plain, "ASSISTANT") {
+	if !strings.Contains(plain, "fastllm") {
 		t.Fatalf("assistant label missing:\n%q", plain)
 	}
 }
@@ -212,7 +212,7 @@ func TestTurnCompleteRendersUnterminatedFinalLine(t *testing.T) {
 	if n := strings.Count(plain, "one line only"); n != 1 {
 		t.Fatalf("unterminated final line rendered %d times, want 1:\n%q", n, plain)
 	}
-	if !strings.Contains(plain, "ASSISTANT") {
+	if !strings.Contains(plain, "fastllm") {
 		t.Fatalf("assistant label missing:\n%q", plain)
 	}
 }

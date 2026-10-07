@@ -333,7 +333,7 @@ func (m *teaModel) renderFilesModal() string {
 	sb.WriteString("\n" + styleMuted.Render("↑/↓: Navigate  •  Enter/a: Attach to chat  •  n: New folder  •  e: Edit  •  E: External editor  •  Esc: Close"))
 
 	contentBox := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
+		Border(lipgloss.Border{}).Background(tuiColorCardBg).
 		BorderForeground(tuiColorCyan).
 		Padding(1, 2).
 		Width(modalWidth).

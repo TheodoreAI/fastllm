@@ -357,7 +357,7 @@ func (c *sessionChanges) appendHidden(rows []string, fileAt []int, shown int) ([
 // renderSidebarColumn lays rows out as exactly height rows of a "│ " separator
 // plus inner columns, padding or cutting as needed.
 func renderSidebarColumn(rows []string, inner, height int) string {
-	sep := lipgloss.NewStyle().Foreground(tuiColorBorder).Render(SymVLine) + " "
+	sep := "  "
 	var b strings.Builder
 	for i := 0; i < height; i++ {
 		row := ""
@@ -369,7 +369,7 @@ func renderSidebarColumn(rows []string, inner, height int) string {
 			b.WriteByte('\n')
 		}
 	}
-	return b.String()
+	return fillSurface(lipgloss.NewStyle().Background(tuiColorCardBg).Render(b.String()), currentTheme.CardBg)
 }
 
 func formatChangeRow(f fileChange, width int, selected bool) string {

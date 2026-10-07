@@ -47,6 +47,16 @@ func (m *teaModel) sidebarTopRows(inner, height int) []string {
 	rows = append(rows, sidebarSectionHeader("Context", inner)...)
 	rows = append(rows, m.contextRows(inner)...)
 	rows = append(rows, "")
+	if m.runner != nil && m.runner.agents != nil {
+		if summary := m.runner.agents.Summary(); summary.Total > 0 {
+			rows = append(rows, sidebarSectionHeader("Agents", inner)...)
+			rows = append(rows, styleMuted.Render(fmt.Sprintf("%d active / %d total · %s tok", summary.Pending+summary.Running, summary.Total, compactCount(summary.TotalTokens))), "")
+		}
+	}
+	if m.processMgr != nil && m.processMgr.ActiveCount() > 0 {
+		rows = append(rows, sidebarSectionHeader("Processes", inner)...)
+		rows = append(rows, styleMuted.Render(fmt.Sprintf("%d servers · /ps for details", m.processMgr.ActiveCount())), "")
+	}
 	const minChangesRows = 5
 	if height-len(rows) < minChangesRows {
 		return nil
@@ -55,10 +65,7 @@ func (m *teaModel) sidebarTopRows(inner, height int) []string {
 }
 
 func sidebarSectionHeader(title string, inner int) []string {
-	return []string{
-		styleDiffHdr.Render(title),
-		styleMuted.Render(strings.Repeat(SymHLine, inner)),
-	}
+	return []string{styleDiffHdr.Render(title)}
 }
 
 func sidebarKV(label, value string) string {

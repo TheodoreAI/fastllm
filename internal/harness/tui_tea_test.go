@@ -132,14 +132,14 @@ func TestEscapeCancelsActiveShellCommand(t *testing.T) {
 
 func TestAgentPromptDoesNotAddBlankLines(t *testing.T) {
 	got := stripANSI(formatSubmittedPrompt("okay in laymens terms"))
-	if got != "\n\u25cf YOU  okay in laymens terms\n" {
+	if got != "\n┃ okay in laymens terms\n\n" {
 		t.Fatalf("formatted prompt = %q; want labeled compact prompt", got)
 	}
 }
 
 func TestAssistantAnswerHasVisibleBoundary(t *testing.T) {
 	got := stripANSI(formatAssistantAnswer("The answer is 42.", 80))
-	if !strings.Contains(got, "\n\u25cf ASSISTANT\nThe answer is 42.\n") {
+	if !strings.Contains(got, "\nfastllm\nThe answer is 42.\n") {
 		t.Fatalf("assistant answer lacks a visible boundary: %q", got)
 	}
 }
@@ -147,7 +147,7 @@ func TestAssistantAnswerHasVisibleBoundary(t *testing.T) {
 func TestCopyTranscriptStripsANSI(t *testing.T) {
 	styled := formatSubmittedPrompt("question") + formatAssistantAnswer("answer", 80)
 	plain := StripANSI(styled)
-	if strings.Contains(plain, "\x1b[") || !strings.Contains(plain, "\u25cf YOU  question") || !strings.Contains(plain, "\u25cf ASSISTANT\nanswer") {
+	if strings.Contains(plain, "\x1b[") || !strings.Contains(plain, "┃ question") || !strings.Contains(plain, "fastllm\nanswer") {
 		t.Fatalf("unexpected plain transcript: %q", plain)
 	}
 }
@@ -167,7 +167,7 @@ func TestTaskFinishedRendersToolProvidedFinalAnswer(t *testing.T) {
 	m = updated.(*teaModel)
 
 	plain := StripANSI(m.historyText.String())
-	if !strings.Contains(plain, "\u25cf ASSISTANT\nFinished through the tool.") {
+	if !strings.Contains(plain, "fastllm\nFinished through the tool.") {
 		t.Fatalf("final answer was not rendered: %q", plain)
 	}
 	if m.lastResponse != "Finished through the tool." {
@@ -512,12 +512,13 @@ func TestPermissionPromptShowsKeyLegend(t *testing.T) {
 	m := &teaModel{
 		runner: NewRunner(&mockLLM{}, tmp, "test-model"), workingDir: tmp,
 		input: ta, viewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(6)), ready: true, width: 80,
+		height:         24,
 		permissionChan: make(chan teaPermissionRequestMsg),
 	}
 	m.pendingPermission = &teaPermissionRequestMsg{ToolName: "write_file", Summary: "path=hello.txt"}
 
 	plain := StripANSI(m.render())
-	for _, want := range []string{"Permission Required", "write_file", "[y]", "[a]", "[n]", "esc"} {
+	for _, want := range []string{"Permission required", "write_file", "[y]", "[a]", "[n]", "Esc"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("permission prompt is missing %q:\n%s", want, plain)
 		}
@@ -586,7 +587,7 @@ func TestFailedTurnIsReportedExactlyOnce(t *testing.T) {
 	m := &teaModel{
 		runner:     NewRunner(&failingLLM{err: errors.New("dial tcp 127.0.0.1:8003: connection refused")}, tmp, "test-model"),
 		workingDir: tmp, modelName: "test-model",
-		input: ta, viewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(10)), ready: true, width: 80,
+		input: ta, viewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(10)), ready: true, width: 80, height: 24,
 		maxTurns: 3, commandTimeout: time.Minute,
 		permissionMode: PermissionFull,
 		permissionChan: make(chan teaPermissionRequestMsg),
@@ -799,7 +800,7 @@ func newBusyModel(t *testing.T, client LLMClient) *teaModel {
 	tmp := t.TempDir()
 	return &teaModel{
 		runner: NewRunner(client, tmp, "test-model"), workingDir: tmp, modelName: "test-model",
-		input: ta, viewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(10)), ready: true, width: 80,
+		input: ta, viewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(10)), ready: true, width: 80, height: 24,
 		maxTurns: 2, commandTimeout: time.Minute,
 		permissionMode: PermissionFull,
 		permissionChan: make(chan teaPermissionRequestMsg),
@@ -910,7 +911,7 @@ func TestInputBoxGrowsAndKeepsTypedTextVisible(t *testing.T) {
 		m = updated.(*teaModel)
 	}
 	if !strings.Contains(StripANSI(m.render()), "END") {
-		t.Fatal("the caret line scrolled out of the input box")
+		t.Fatalf("the caret line scrolled out of the input box:\n%s", StripANSI(m.render()))
 	}
 }
 
@@ -976,7 +977,8 @@ func TestBackgroundProcessesInTUI(t *testing.T) {
 		input:      ta,
 		viewport:   viewport.New(viewport.WithWidth(120), viewport.WithHeight(10)),
 		ready:      true,
-		width:      120,
+		width:      160,
+		height:     30,
 		processMgr: pm,
 		mode:       modeShell,
 	}

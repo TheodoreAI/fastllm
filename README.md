@@ -45,6 +45,29 @@ Terminal UI:
 go run ./cmd/server
 ```
 
+The full-screen TUI follows OpenCode's home/composer/session layout with fastllm
+branding. New preferences default to **Exascale Readable Dark**, with readable
+muted text and blue/amber diffs; an existing saved theme stays selected. Use
+`/theme` to preview and choose another theme.
+
+- **Ctrl+P** opens a searchable palette containing fastllm's commands, including
+  runtime settings, shell tools, image generation, skills, and audit controls.
+  Commands needing arguments and destructive actions are staged for explicit submission.
+- **Tab / Shift+Tab** cycles permissions forward/backward through plan, agent,
+  edit, and full. Autocomplete and dialogs keep their own Tab behavior.
+- **Ctrl+X**, then **N/L/M/T/B/S/C/Y/Q**, opens new session/sessions/models/themes,
+  toggles the sidebar, shows status, compacts, copies the response, or exits.
+  The leader expires after two seconds. `/sidebar` also toggles the sidebar.
+- **Enter** sends; **Ctrl+J** inserts a newline (**Shift+Enter** also works when
+  the terminal reports it). **Esc** cancels a running operation or closes a dialog.
+- `/shell` toggles shell mode; `!command` and `$ command` run inline commands.
+  **Ctrl+B** backgrounds a running shell process; **Ctrl+F** searches the transcript.
+
+The sidebar appears when the frame has at least 120 columns. On smaller terminals,
+use `/changes`, `/status`, and the palette. Long permission requests scroll with
+**PgUp/PgDn**; **Enter/Esc still deny**. Existing editor, attachment, session,
+process, permission, and budget workflows remain available.
+
 Run the checks used before committing:
 
 ```
@@ -229,7 +252,8 @@ markers. Approval prompts go further: every hidden or control character in the
 request, including a carriage return that would overwrite the start of a
 command, is spelled out, and a warning says the raw text is what will run.
 
-In the TUI, **Shift+Tab** cycles plan → agent → edit → full. The header badge
+In the TUI, **Tab** cycles plan → agent → edit → full; **Shift+Tab** reverses.
+The composer badge
 shows the current mode. `/set permissions <mode>` works in both terminal modes.
 Neither can change the mode while a turn is running.
 
@@ -417,4 +441,3 @@ be configured from the Settings panel.
 ## License
 
 This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE) file for details.
-

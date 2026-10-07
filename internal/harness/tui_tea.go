@@ -100,13 +100,13 @@ func buildStyles() {
 		Padding(0, 1)
 
 	styleHeaderBox = lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
+		Border(lipgloss.Border{}).Background(tuiColorCardBg).
 		BorderForeground(tuiColorBorder).
 		Padding(0, 1).
 		MarginBottom(0)
 
 	styleCard = lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
+		Border(lipgloss.Border{}).Background(tuiColorCardBg).
 		BorderForeground(tuiColorBorder).
 		Background(tuiColorCardBg).
 		Padding(0, 1).
@@ -282,7 +282,12 @@ type teaModel struct {
 	// themeModal is the open /theme picker; nil when closed.
 	themeModal *themePicker
 	// filesModal is the open /files browser modal; nil when closed.
-	filesModal *filesPicker
+	filesModal       *filesPicker
+	commandPalette   *commandPicker
+	sidebarHidden    bool
+	leaderPending    bool
+	leaderGeneration uint64
+	approvalOffset   int
 	// editor is the open file editor (tui_editor.go); nil when closed.
 	editor *editorSession
 	// suggest is the slash-command dropdown above the input box.
@@ -320,7 +325,8 @@ type teaModel struct {
 	// inputStylesTheme is the theme the textarea styles were last built for.
 	inputStylesTheme string
 	// inputRows is the input box height the viewport was last sized for.
-	inputRows int
+	inputRows      int
+	chatInputWidth int
 	// inputOrigin is where the textarea's first cell was drawn in the last
 	// frame, for placing the terminal cursor; nil when the box showed
 	// something else (a prompt, the find bar) or no frame was drawn.
@@ -399,7 +405,7 @@ func newTeaModel(runner *Runner, req RunRequest) (*teaModel, error) {
 		commandTimeout = 60 * time.Second
 	}
 	// Sessions start in plan mode (read-only) unless -mode chose: nothing
-	// changes until a plan is approved or the mode is raised with Shift+Tab.
+	// changes until a plan is approved or the mode is raised with Tab.
 	permissionMode := PermissionPlan
 	if req.PermissionMode != "" {
 		permissionMode = NormalizeMode(req.PermissionMode)
@@ -456,14 +462,10 @@ func newTeaModel(runner *Runner, req RunRequest) (*teaModel, error) {
 // card: a snapshot of the model and workspace in the transcript goes stale the
 // moment either changes, so the live values live in the sidebar and header.
 func (m *teaModel) formatWelcome() string {
-	banner := "\n" + ColorCyan(StyleBold(SymBranch+" fastllm")) + ColorGray("  autonomous agent") + "\n" +
-		ColorGray("  Type ") + ColorCyan("/help") + ColorGray(" for commands  "+SymDot+"  ") +
-		ColorYellow("Tab") + ColorGray(" for shell mode  "+SymDot+"  ") +
-		ColorYellow("Shift+Tab") + ColorGray(" to change permissions")
 	if notice := untrustedConfigNotice(m.workingDir, "Run /trust to use it."); notice != "" {
-		banner += "\n\n" + notice
+		return notice + "\n\n"
 	}
-	return banner + "\n\n"
+	return ""
 }
 
 func (m *teaModel) appendHistory(text string) {
@@ -506,7 +508,7 @@ func (m *teaModel) frameWidth() int {
 // showChangesColumn reports whether the terminal is wide enough to give the
 // session's file changes their own column beside the conversation.
 func (m *teaModel) showChangesColumn() bool {
-	return m.frameWidth() >= changesColumnMinFrame
+	return !m.sidebarHidden && !m.showHome() && m.frameWidth() >= changesColumnMinFrame
 }
 
 // conversationWidth is the width of the conversation viewport: the full frame,
@@ -522,18 +524,11 @@ func (m *teaModel) conversationWidth() int {
 // dropdown. Beside the sidebar it stops one column short of the separator, so
 // the box's right border never touches it.
 func (m *teaModel) inputBoxWidth() int {
-	if m.showChangesColumn() {
-		return m.conversationWidth() - 3
-	}
-	return m.frameWidth() - 2
+	return m.layout().composerWidth
 }
 
 func (m *teaModel) contentWidth() int {
-	w := m.conversationWidth() - 3
-	if w < 40 {
-		return 76
-	}
-	return w
+	return max(1, m.conversationWidth()-4)
 }
 
 func (m *teaModel) initGitWatcher() {
@@ -602,11 +597,17 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
+	case teaLeaderTimeoutMsg:
+		if msg.generation == m.leaderGeneration {
+			m.leaderPending = false
+		}
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
 
-		m.input.SetWidth(m.inputBoxWidth() - 3)
+		m.input.SetWidth(max(1, m.inputBoxWidth()-4))
+		m.chatInputWidth = max(1, m.inputBoxWidth()-4)
 		// Width changed, so the text re-wraps: recompute the box height before
 		// handing the remaining rows to the viewport.
 		m.syncInputHeight()
@@ -680,10 +681,18 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		m.turnFailed = false
 		if m.pendingPlan != "" && !m.isExecuting {
+			m.leaderPending = false
 			return m.updatePlanApproval(msg)
 		}
 		if m.pendingPermission != nil {
+			m.leaderPending = false
 			switch msg.String() {
+			case "pgup", "up":
+				m.approvalOffset = max(0, m.approvalOffset-3)
+				return m, nil
+			case "pgdown", "down":
+				m.approvalOffset += 3
+				return m, nil
 			case "ctrl+c":
 				m.resolvePermission(false, false)
 				if m.cancelTurn != nil {
@@ -701,6 +710,9 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.waitForNextEvent()
 			}
 			return m, nil
+		}
+		if m.commandPalette != nil {
+			return m, m.handleCommandPaletteKey(msg)
 		}
 		if m.editor != nil {
 			return m, m.handleEditorKey(msg)
@@ -818,6 +830,9 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, vpCmd
 		}
 
+		if handled, cmd := m.handleCommonKey(msg); handled {
+			return m, cmd
+		}
 		if msg.Mod.Contains(tea.ModAlt) {
 			switch unicode.ToLower(msg.Code) {
 			case 'c':
@@ -879,20 +894,11 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "tab":
-			// Toggle between Agent Mode and Shell Mode
-			if m.mode == modeAgent {
-				m.mode = modeShell
-				m.statusNotice = "Engaged Shell Mode."
-			} else {
-				m.mode = modeAgent
-				m.statusNotice = "Returned to chat input."
-			}
-			m.updatePromptAndPlaceholder()
-			cmds = append(cmds, m.clearStatusAfter(2*time.Second))
+			cmds = append(cmds, m.cyclePermissionMode())
 			return m, tea.Batch(cmds...)
 
 		case "shift+tab":
-			cmds = append(cmds, m.cyclePermissionMode())
+			cmds = append(cmds, m.cyclePermissionModeBackward())
 			return m, tea.Batch(cmds...)
 
 		case "ctrl+v":
@@ -1057,7 +1063,7 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.startAgentWork(ev.Turn)
 				m.activeTool = ev.ToolCall.Name
 				m.activeArgs = summarizeArgs(ev.ToolCall.Arguments)
-				m.appendHistory(FormatToolCall(ev.ToolCall.Name, m.activeArgs) + "\n")
+				m.appendHistory("\n" + tuiToolBadge(ev.ToolCall.Name) + " " + ColorGray(sanitizeUntrusted(m.activeArgs)) + "\n")
 			}
 
 		case EventToolResult:
@@ -1085,7 +1091,7 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if m.expandedTools {
 						maxLines = 10000
 					}
-					box := FormatTerminalBox(TerminalBoxOptions{
+					box := formatTUITerminal(TerminalBoxOptions{
 						Command:     cmdText,
 						Output:      ev.ToolCall.Result,
 						Width:       m.contentWidth(),
@@ -1271,7 +1277,7 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.shellTracker != nil {
 				m.shellTracker.Record(cmdToRender, output, exitCode, msg.Duration)
 			}
-			terminalBox := FormatTerminalBox(TerminalBoxOptions{
+			terminalBox := formatTUITerminal(TerminalBoxOptions{
 				Command:     cmdToRender,
 				Output:      output,
 				Width:       m.contentWidth(),
@@ -1353,7 +1359,7 @@ const (
 // pastes and Ctrl+J are limited by the textarea's own line cap and CharLimit.
 func newChatInput() textarea.Model {
 	ta := textarea.New()
-	ta.Placeholder = "Ask a question, enter a task, or type /help (Tab switches to Shell Mode)..."
+	ta.Placeholder = "Ask anything... (/ for commands, ! for shell)"
 	ta.Prompt = "❯ "
 	ta.CharLimit = 8192
 	ta.ShowLineNumbers = false
@@ -1384,12 +1390,7 @@ func (m *teaModel) resizeViewport() {
 	// One spare row is deliberate: it absorbs a history line that happens to be
 	// wider than the viewport and wraps, so an over-wide line costs a row of
 	// slack instead of pushing the frame past the bottom of the terminal.
-	const headerRows, statusRows, boxBorderRows, spareRow = 2, 1, 2, 1
-	vpHeight := m.height - headerRows - statusRows - boxBorderRows - spareRow - m.input.Height() - m.suggestionRows()
-	if vpHeight < 3 {
-		vpHeight = 3
-	}
-	m.viewport.SetHeight(vpHeight)
+	m.viewport.SetHeight(m.layout().transcriptHeight)
 }
 
 func (m *teaModel) clearStatusAfter(d time.Duration) tea.Cmd {
@@ -1413,6 +1414,7 @@ func (m *teaModel) waitForNextEvent() tea.Cmd {
 }
 
 func (m *teaModel) resolvePermission(allow, grant bool) {
+	m.approvalOffset = 0
 	request := m.pendingPermission
 	if request == nil {
 		return
@@ -1526,7 +1528,7 @@ func (m *teaModel) handleShellSubmit(cmdStr string) tea.Cmd {
 		started := time.Now()
 		bp, err := m.processMgr.Start(bgCmd, m.workingDir)
 		if err != nil {
-			box := FormatTerminalBox(TerminalBoxOptions{
+			box := formatTUITerminal(TerminalBoxOptions{
 				Command:     cmdStr,
 				Output:      fmt.Sprintf("Failed to start background process: %v", err),
 				Width:       m.contentWidth(),
@@ -1540,7 +1542,7 @@ func (m *teaModel) handleShellSubmit(cmdStr string) tea.Cmd {
 		}
 		output := fmt.Sprintf("◈ Started background process: %s (PID: %d)\n  Command: %s\n  Inspect logs: /logs %s (or logs %s)  •  Stop: /kill %s",
 			bp.ID, bp.PID, bp.Command, bp.ID, bp.ID, bp.ID)
-		box := FormatTerminalBox(TerminalBoxOptions{
+		box := formatTUITerminal(TerminalBoxOptions{
 			Command:     cmdStr,
 			Output:      output,
 			Width:       m.contentWidth(),
@@ -1557,7 +1559,7 @@ func (m *teaModel) handleShellSubmit(cmdStr string) tea.Cmd {
 	if path, ok := parseDirectoryChange(cmdStr); ok {
 		started := time.Now()
 		if err := m.changeWorkingDirectory(path); err != nil {
-			box := FormatTerminalBox(TerminalBoxOptions{
+			box := formatTUITerminal(TerminalBoxOptions{
 				Command:     cmdStr,
 				Output:      fmt.Sprintf("Cannot change directory: %v", err),
 				Width:       m.contentWidth(),
@@ -1569,7 +1571,7 @@ func (m *teaModel) handleShellSubmit(cmdStr string) tea.Cmd {
 			m.appendHistory(box + "\n\n")
 			return nil
 		}
-		box := FormatTerminalBox(TerminalBoxOptions{
+		box := formatTUITerminal(TerminalBoxOptions{
 			Command:     cmdStr,
 			Output:      fmt.Sprintf("✓ Working directory changed to %s\n  (%d workspace rules discovered)", abbreviateHome(m.workingDir), len(m.rules)),
 			Width:       m.contentWidth(),
@@ -1661,7 +1663,7 @@ func (m *teaModel) handleShellSubmit(cmdStr string) tea.Cmd {
 	p, bp, err := m.processMgr.StartTracked(cmdStr, m.workingDir)
 	if err != nil {
 		started := time.Now()
-		box := FormatTerminalBox(TerminalBoxOptions{
+		box := formatTUITerminal(TerminalBoxOptions{
 			Command:     cmdStr,
 			Output:      fmt.Sprintf("Failed to run command: %v", err),
 			Width:       m.contentWidth(),
@@ -1725,7 +1727,7 @@ func (m *teaModel) handleLogsCommand(inputVal string) tea.Cmd {
 	if bp.Exited {
 		status = fmt.Sprintf("EXIT %d", bp.ExitCode)
 	}
-	box := FormatTerminalBox(TerminalBoxOptions{
+	box := formatTUITerminal(TerminalBoxOptions{
 		Command:     fmt.Sprintf("logs %s (%s · PID: %d · %s)", bp.ID, bp.Command, bp.PID, status),
 		Output:      out,
 		Width:       m.contentWidth(),
@@ -1774,7 +1776,7 @@ func (m *teaModel) handleBgSlashCommand(inputVal string) tea.Cmd {
 	}
 	output := fmt.Sprintf("◈ Started background process: %s (PID: %d)\n  Command: %s\n  Inspect logs: /logs %s (or logs %s)  •  Stop: /kill %s",
 		bp.ID, bp.PID, bp.Command, bp.ID, bp.ID, bp.ID)
-	box := FormatTerminalBox(TerminalBoxOptions{
+	box := formatTUITerminal(TerminalBoxOptions{
 		Command:     inputVal,
 		Output:      output,
 		Width:       m.contentWidth(),
@@ -1824,7 +1826,7 @@ func (m *teaModel) updatePromptAndPlaceholder() {
 		m.input.Placeholder = fmt.Sprintf("Shell (%s) — enter command ($ go test, ls)...", abbreviateHome(m.workingDir))
 	} else {
 		m.input.Prompt = "❯ "
-		m.input.Placeholder = "Ask a question, enter a task, or type /help (Tab switches to Shell Mode)..."
+		m.input.Placeholder = "Ask anything... (/ for commands, ! for shell)"
 	}
 	setFirstLinePrompt(&m.input, m.input.Prompt)
 }
@@ -1853,6 +1855,9 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 		}
 
 		switch cmd {
+		case "/sidebar":
+			m.toggleSidebar()
+			return nil
 		case "/exit", "/quit":
 			m.closeSession()
 			return tea.Quit
@@ -1893,9 +1898,13 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 				cmdStr := strings.TrimSpace(inputVal[len(parts[0]):])
 				return m.handleShellSubmit(cmdStr)
 			}
-			m.mode = modeShell
+			if m.mode == modeShell {
+				m.mode = modeAgent
+			} else {
+				m.mode = modeShell
+			}
 			m.updatePromptAndPlaceholder()
-			m.statusNotice = "Engaged Shell Mode."
+			m.statusNotice = "Shell mode toggled."
 			return m.clearStatusAfter(2 * time.Second)
 
 		case "/changes":
@@ -2387,13 +2396,11 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 }
 
 func formatSubmittedPrompt(input string) string {
-	label := lipgloss.NewStyle().Bold(true).Foreground(tuiColorCyan).Render(SymBullet + " YOU")
-	return "\n" + label + "  " + styleUserPrompt.Render(input) + "\n"
+	return "\n" + ColorCyan("┃ ") + styleUserPrompt.Render(input) + "\n\n"
 }
 
 func formatAssistantAnswer(response string, width int) string {
-	label := lipgloss.NewStyle().Bold(true).Foreground(tuiColorGreen).Render(SymBullet + " ASSISTANT")
-	return "\n" + label + "\n" + FormatMarkdownWidth(response, width) + "\n\n"
+	return streamAnswerHeader() + FormatMarkdownWidth(response, width) + "\n\n"
 }
 
 func (m *teaModel) startAgentWork(turn int) {
@@ -2401,7 +2408,7 @@ func (m *teaModel) startAgentWork(turn int) {
 		return
 	}
 	m.agentWorkStarted = true
-	label := fmt.Sprintf("AGENT WORK · TURN %d", turn)
+	label := fmt.Sprintf("Working · turn %d", turn)
 	m.appendHistory("\n" + styleMuted.Bold(true).Render(label) + "\n")
 }
 
@@ -2638,7 +2645,7 @@ func (m *teaModel) renderSkillsModal() string {
 	}
 	lines = append(lines, "", styleMuted.Render(footer))
 	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
+		Border(lipgloss.Border{}).Background(tuiColorCardBg).
 		BorderForeground(tuiColorCyan).
 		Background(tuiColorCardBg).
 		Padding(0, 1).
@@ -2751,7 +2758,7 @@ func (m *teaModel) renderModelsModal() string {
 	lines = append(lines, "", styleMuted.Render(footer))
 
 	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
+		Border(lipgloss.Border{}).Background(tuiColorCardBg).
 		BorderForeground(tuiColorCyan).
 		Background(tuiColorCardBg).
 		Padding(0, 1).
@@ -2968,7 +2975,7 @@ func (m *teaModel) renderDiffModal() string {
 	lines = append(lines, m.diffViewport.View())
 
 	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
+		Border(lipgloss.Border{}).Background(tuiColorCardBg).
 		BorderForeground(tuiColorCyan).
 		Background(tuiColorCardBg).
 		Padding(0, 1).
@@ -2995,7 +3002,7 @@ func truncateText(value string, width int) string {
 // View implements tea.Model
 func (m *teaModel) View() tea.View {
 	v := tea.NewView(m.render())
-	v.AltScreen = true // Clean full-screen TUI buffer
+	v.AltScreen = true                   // Clean full-screen TUI buffer
 	v.MouseMode = tea.MouseModeAllMotion // motion without a button held drives hover
 	v.ReportFocus = true
 	v.WindowTitle = m.windowTitle()
@@ -3095,6 +3102,17 @@ func (m *teaModel) syncInputStyles() {
 	}
 	m.inputStylesTheme = currentTheme.Name
 	styles := m.input.Styles()
+	inputBg := lipgloss.Color(composerBackground())
+	styles.Focused.Base = lipgloss.NewStyle().Background(inputBg)
+	styles.Focused.Text = lipgloss.NewStyle().Foreground(tuiColorWhite)
+	styles.Focused.Prompt = lipgloss.NewStyle().Foreground(tuiColorCyan)
+	styles.Focused.Placeholder = styleMuted
+	styles.Focused.CursorLine = lipgloss.NewStyle().Background(inputBg).Foreground(tuiColorWhite)
+	styles.Blurred.Base = styles.Focused.Base
+	styles.Blurred.CursorLine = styles.Focused.CursorLine
+	styles.Blurred.Text = styles.Focused.Text
+	styles.Blurred.Prompt = styles.Focused.Prompt
+	styles.Blurred.Placeholder = styles.Focused.Placeholder
 	styles.Focused.Selection = lipgloss.NewStyle().Background(tuiColorTrack).Foreground(tuiColorWhite)
 	styles.Blurred.Selection = styles.Focused.Selection
 	styles.Cursor.Color = tuiColorCyan
@@ -3151,7 +3169,7 @@ func (m *teaModel) render() string {
 	m.syncInputStyles()
 	frame := m.renderChat()
 	if box := m.renderModal(); box != "" {
-		return m.overlayModal(frame, box)
+		return m.overlayModal(frame, fillSurface(box, currentTheme.CardBg))
 	}
 	return frame
 }
@@ -3159,7 +3177,7 @@ func (m *teaModel) render() string {
 // modalOpen reports whether a modal owns the keyboard and mouse.
 func (m *teaModel) modalOpen() bool {
 	return m.diffModal || m.modelsModal || m.skillsModal || m.editor != nil ||
-		m.sessionsModal != nil || m.themeModal != nil || m.filesModal != nil
+		m.sessionsModal != nil || m.themeModal != nil || m.filesModal != nil || m.commandPalette != nil
 }
 
 // editorShown reports whether the editor has the screen: it gives way to a
@@ -3170,7 +3188,14 @@ func (m *teaModel) editorShown() bool {
 
 // renderModal draws the open modal's box, or returns "" when none is open.
 func (m *teaModel) renderModal() string {
+	// An approval must remain visible even if a picker was open when a
+	// running agent requested it. The picker resumes after the decision.
+	if m.pendingPermission != nil || (m.pendingPlan != "" && !m.isExecuting) {
+		return ""
+	}
 	switch {
+	case m.commandPalette != nil:
+		return m.renderCommandPalette()
 	case m.diffModal:
 		return m.renderDiffModal()
 	case m.modelsModal:
@@ -3190,218 +3215,21 @@ func (m *teaModel) renderModal() string {
 // overlayModal composites box over the centre of frame so the conversation
 // stays visible around it. While it is open the box is the only click target.
 func (m *teaModel) overlayModal(frame, box string) string {
+	box = lipgloss.NewStyle().MaxWidth(m.frameWidth()).MaxHeight(max(1, m.height)).Render(box)
 	w, h := lipgloss.Width(box), lipgloss.Height(box)
 	x := max((max(m.width, lipgloss.Width(frame))-w)/2, 0)
 	y := max((max(m.height, lipgloss.Height(frame))-h)/2, 0)
 	m.hits.reset()
 	m.hits.add(hitModal, x, y, w, h)
-	return lipgloss.NewCompositor(
+	return m.fitFrame(lipgloss.NewCompositor(
 		lipgloss.NewLayer(frame),
 		lipgloss.NewLayer(box).X(x).Y(y).Z(1),
-	).Render()
+	).Render())
 }
 
-// renderChat draws the conversation layout: header, transcript, input box,
-// sidebar and status bar.
-func (m *teaModel) renderChat() string {
-	var sb strings.Builder
-
-	// 1. Top Header Bar
-	var modeBadge string
-	if m.mode == modeAgent {
-		modeBadge = styleAgentBadge.Foreground(permissionModeColor(m.permissionMode)).
-			Underline(m.hover == hitMode).
-			Render("◈ " + strings.ToUpper(m.permissionMode.Label()))
-	} else {
-		modeBadge = styleShellBadge.Render("❯_ SHELL")
-	}
-
-	brand := styleBrand.Render("fastllm")
-	dirBase := filepath.Base(m.workingDir)
-	if dirBase == "" || dirBase == "." {
-		dirBase = m.workingDir
-	}
-	metaStyle := styleHeaderPill
-	if m.hover == hitModel {
-		metaStyle = metaStyle.Foreground(tuiColorWhite).Underline(true)
-	}
-	metaBadge := metaStyle.Render(dirBase + " " + SymDot + " " + m.modelName)
-	agentBadge := ""
-	if m.runner != nil && m.runner.agents != nil {
-		if summary := m.runner.agents.Summary(); summary.Total > 0 {
-			agentBadge = " " + styleHeaderPill.Render(fmt.Sprintf("agents %d/%d · %s tok", summary.Pending+summary.Running, summary.Total, compactCount(summary.TotalTokens)))
-		}
-	}
-	serversBadge := ""
-	if m.processMgr != nil {
-		if active := m.processMgr.ActiveCount(); active > 0 {
-			label := "server"
-			if active > 1 {
-				label = "servers"
-			}
-			serversBadge = " " + styleHeaderPill.Render(fmt.Sprintf("◈ %d %s", active, label))
-		}
-	}
-
-	var rightInfo string
-	if m.isExecuting {
-		rightInfo = fmt.Sprintf("%s Turn %d · %s", m.spinner.View(), m.activeTurn, time.Since(m.taskStarted).Round(time.Second))
-		if m.activeTool != "" {
-			rightInfo += " " + tuiToolBadge(m.activeTool)
-		}
-	} else if m.shellExecuting {
-		rightInfo = fmt.Sprintf("%s Shell command", m.spinner.View())
-	} else if m.statusNotice != "" {
-		rightInfo = styleStatusNotice.Render(m.statusNotice)
-	} else if m.latestMetrics != nil {
-		rightInfo = styleMuted.Render(fmt.Sprintf("%.1fs %s %.0f tok/s",
-			m.latestMetrics.Duration.Seconds(), SymDot, m.latestMetrics.TokensPerSecond))
-	}
-
-	headerLeft := lipgloss.JoinHorizontal(lipgloss.Center, brand, " ", modeBadge, " ", metaBadge, serversBadge, agentBadge)
-	modeX := lipgloss.Width(brand) + 1
-	if m.mode == modeAgent {
-		m.hits.add(hitMode, modeX, 0, lipgloss.Width(modeBadge), 1)
-	}
-	m.hits.add(hitModel, modeX+lipgloss.Width(modeBadge)+1, 0, lipgloss.Width(metaBadge), 1)
-	leftWidth := lipgloss.Width(headerLeft)
-	rightWidth := lipgloss.Width(rightInfo)
-	gap := m.frameWidth() - leftWidth - rightWidth - 2
-	if gap < 1 {
-		gap = 1
-	}
-	// Every full-width row must be clamped to the terminal width. A row even one
-	// column too wide is wrapped by the terminal into two, which shortens the
-	// frame and shifts everything below it. rightInfo changes on every spinner
-	// tick and whenever a status notice appears, so an unclamped header visibly
-	// jitters the whole UI up and down while a turn runs.
-	headerRow := clampToWidth(headerLeft+strings.Repeat(" ", gap)+rightInfo, m.frameWidth())
-	sb.WriteString(headerRow + "\n")
-	// The rule tees into the sidebar's separator so the two read as one frame.
-	rule := strings.Repeat(SymHLine, m.frameWidth())
-	if m.showChangesColumn() {
-		convW := m.conversationWidth()
-		rule = strings.Repeat(SymHLine, convW) + "┬" + strings.Repeat(SymHLine, m.frameWidth()-convW-1)
-	}
-	sb.WriteString(lipgloss.NewStyle().Foreground(tuiColorBorder).Render(rule) + "\n")
-
-	// 2. Left column: the conversation, then slash-command suggestions (the
-	// viewport already gave up their rows in resizeViewport), then the input
-	// box. On wide terminals the sidebar runs beside all three, down to the
-	// status bar.
-	left := []string{m.viewport.View()}
-	if dropdown := m.renderSuggestions(); dropdown != "" {
-		left = append(left, dropdown)
-	}
-
-	// 3. Bottom Input Box with Rounded Border
-	var borderCol color.Color = tuiColorBorder
-	if m.mode == modeShell {
-		borderCol = tuiColorYellow
-	}
-	inputContent := m.input.View()
-	if len(m.pendingAttachments) > 0 {
-		var pills []string
-		for _, att := range m.pendingAttachments {
-			icon := "📎"
-			if att.Type == "image" || strings.HasPrefix(att.MimeType, "image/") {
-				icon = "📷"
-			}
-			pills = append(pills, lipgloss.NewStyle().Foreground(tuiColorCyan).Bold(true).Render(fmt.Sprintf("[%s %s]", icon, att.Name)))
-		}
-		inputContent = styleMuted.Render("Attached: ") + strings.Join(pills, " ") + "\n" + inputContent
-	}
-	// The textarea's first cell sits inside the box border, below the
-	// header, rule, transcript, dropdown and any attachment line.
-	textareaShown := true
-	if m.pendingPermission != nil {
-		inputContent = FormatPermissionPrompt(m.pendingPermission.ToolName, m.pendingPermission.Summary) +
-			"\n" + FormatPermissionKeyLegend(m.pendingPermission.scope().Describe())
-		borderCol = tuiColorYellow
-		textareaShown = false
-	} else if m.pendingPlan != "" && !m.isExecuting {
-		inputContent = m.renderPlanApproval()
-		borderCol = tuiColorCyan
-		textareaShown = false
-	} else if m.search != nil {
-		inputContent = m.renderSearchBar()
-		borderCol = tuiColorCyan
-		textareaShown = false
-	}
-	m.inputOrigin = nil
-	if textareaShown {
-		y := 2 + lipgloss.Height(strings.Join(left, "\n")) + 1
-		if len(m.pendingAttachments) > 0 {
-			y++
-		}
-		m.inputOrigin = &tea.Position{X: 1, Y: y}
-	}
-	inputBox := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(borderCol).
-		Width(m.inputBoxWidth()).
-		Render(inputContent)
-	left = append(left, inputBox)
-	body := strings.Join(left, "\n")
-	if m.showChangesColumn() {
-		// Pad the left column to its full width so the sidebar lines up on
-		// every row, including the input box's.
-		body = lipgloss.NewStyle().Width(m.conversationWidth()).Render(body)
-		// The header and its rule take the first two rows.
-		sidebar := m.renderSidebar(m.conversationWidth(), 2, lipgloss.Height(body))
-		body = lipgloss.JoinHorizontal(lipgloss.Top, body, sidebar)
-	}
-	sb.WriteString(body + "\n")
-
-	// 4. Status Bar / Keymap Hints
-	// Hints drop to a short form rather than wrapping: the full string is ~97
-	// columns, so on a narrower terminal it silently became a second row and
-	// pushed the frame past the terminal height.
-	hints := "Tab: Shell  " + SymDot + "  Enter: Send  " + SymDot + "  " + m.newlineKey() + ": Newline  " + SymDot + "  Shift+Tab: Permissions  " + SymDot + "  /help"
-	shortHints := "Tab: Shell  " + SymDot + "  Enter: Send  " + SymDot + "  /help"
-	if m.mode == modeShell {
-		hints = "Tab: Agent  " + SymDot + "  Enter: Run  " + SymDot + "  exit: Leave Shell  " + SymDot + "  Ctrl+B: Bg"
-		shortHints = "Tab: Agent  " + SymDot + "  Enter: Run  " + SymDot + "  exit"
-	}
-	if m.search != nil {
-		hints = "Enter/↓: Next  " + SymDot + "  ↑: Previous  " + SymDot + "  Esc: Close find"
-		shortHints = "Enter: Next  " + SymDot + "  ↑: Prev  " + SymDot + "  Esc"
-	} else if m.isExecuting {
-		hints = "Esc / Ctrl+C: Cancel"
-		shortHints = hints
-	} else if m.shellExecuting {
-		hints = "Ctrl+B: Background  " + SymDot + "  Esc / Ctrl+C: Cancel"
-		shortHints = "Ctrl+B: Bg  " + SymDot + "  Esc: Cancel"
-	} else if suggestHints, ok := m.suggestionHints(); ok {
-		hints, shortHints = suggestHints, suggestHints
-	}
-	used, budget := m.contextUsage()
-	gauge := formatContextGauge(used, budget, 8)
-	if m.showChangesColumn() {
-		// The sidebar's Context section carries the full meter.
-		gauge = formatContextGauge(used, budget, 0)
-	}
-	if VisualLen(hints)+VisualLen(gauge)+2 > m.frameWidth() {
-		hints = shortHints
-	}
-	if VisualLen(hints)+VisualLen(gauge)+2 > m.frameWidth() {
-		gauge = formatContextGauge(used, budget, 0)
-	}
-	gap = m.frameWidth() - VisualLen(hints) - VisualLen(gauge) - 2
-	if gap < 1 {
-		gap = 1
-	}
-	status := hints + strings.Repeat(" ", gap) + gauge
-	status = PadRight(clampToWidth(status, m.frameWidth()-2), m.frameWidth()-2)
-	sb.WriteString(styleStatusBar.Render(status))
-
-	return sb.String()
-}
-
-// Global program reference for async event dispatches
+// Global program reference for async event dispatches.
 var teaModelProg *tea.Program
 
-// RunBubbleTea launches the full-screen Bubble Tea TUI
 func (r *Runner) RunBubbleTea(req RunRequest) error {
 	initConsole()
 	LoadThemePreference()

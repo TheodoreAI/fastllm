@@ -2,3 +2,7 @@
   event: initial
   value: Theme registry in internal/harness/theme.go (nord default; zinc, terminal, tokyo-night, catppuccin, gruvbox); /theme picker with live preview; choice saved to ~/.fastllm/preferences.json, not config.json
   reason: User wanted new colours without layout changes; one palette now drives both the lipgloss chrome and the ANSI text helpers; config.json can be per-project and is rewritten wholesale, so UI prefs live apart
+- decided_at: 2026-10-07T04:23:26+00:00
+  event: superseded-previous
+  value: Exascale Readable Dark is the fresh-preferences default; exact installed OpenCode palette. Preserve saved theme choices and all alternate themes.
+  reason: User accepted matching installed OpenCode theme; supersedes Nord default.
