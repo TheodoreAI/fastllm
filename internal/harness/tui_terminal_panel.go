@@ -12,7 +12,7 @@ import (
 func formatTUITerminal(opts TerminalBoxOptions) string {
 	width := max(1, opts.Width)
 	inner := max(1, width-4)
-	lines := []string{ColorCyan("$ ") + sanitizeUntrusted(opts.Command)}
+	lines := []string{ColorCyan("$ ") + StyleBold(ColorBrightWhite(sanitizeUntrusted(opts.Command)))}
 	output := strings.TrimRight(sanitizeOutput(opts.Output), "\r\n")
 	if output != "" {
 		rows := strings.Split(output, "\n")
@@ -21,7 +21,7 @@ func formatTUITerminal(opts TerminalBoxOptions) string {
 			limit = 15
 		}
 		for _, row := range rows[:min(limit, len(rows))] {
-			lines = append(lines, ColorGray(clampToWidth(row, inner)))
+			lines = append(lines, ColorBrightWhite(clampToWidth(row, inner)))
 		}
 		if len(rows) > limit {
 			lines = append(lines, ColorGray(fmt.Sprintf("… %d more lines · /set output expanded", len(rows)-limit)))

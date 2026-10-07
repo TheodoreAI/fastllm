@@ -178,6 +178,14 @@ func WatchWithErrors(ctx context.Context, root string) (changes <-chan struct{},
 				if !ok {
 					return
 				}
+				// Attribute-only events carry no content change. On macOS
+				// (kqueue NOTE_ATTRIB) our own background `git status` /
+				// `git diff` produce them on .git/index and tracked files,
+				// so counting them would make every refresh trigger the
+				// next one — an endless reload loop that flickers the UI.
+				if ev.Op == fsnotify.Chmod {
+					continue
+				}
 				if isUnderAny(ev.Name, ignoredTopLevel) {
 					continue
 				}
