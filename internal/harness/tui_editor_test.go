@@ -4,14 +4,40 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
+	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 )
+
+func TestIdleEditorViewIsStable(t *testing.T) {
+	_, sourceModel := sourceFixture(t)
+	for _, size := range [][2]int{{80, 24}, {120, 30}, {160, 45}} {
+		for _, source := range []bool{false, true} {
+			m := newEditorTestModel(t, t.TempDir())
+			if source {
+				m.source = sourceModel.source
+				m.source.pane = 1
+			}
+			m.width, m.height = size[0], size[1]
+			m.spinner = spinner.New()
+			m.editor = &editorSession{fileEditor: newFileEditor(strings.Repeat("var value = 1\n", 100), "go"), marksStale: true}
+			m.editor.rel = "example.go"
+			before := m.View()
+			for range 100 {
+				m = press(t, m, spinner.TickMsg{})
+				if after := m.View(); !reflect.DeepEqual(before, after) {
+					t.Fatalf("idle editor view changed at %dx%d", size[0], size[1])
+				}
+			}
+		}
+	}
+}
 
 func TestFileEditorTypingNewlineAndUndo(t *testing.T) {
 	e := newFileEditor("func f() {\n\treturn\n}", "go")

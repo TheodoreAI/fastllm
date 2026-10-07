@@ -11,7 +11,11 @@ import (
 )
 
 func configureProcess(cmd *exec.Cmd) (func(), func() error, error) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// Captured commands must not inherit the UI's controlling terminal. An
+	// interactive zsh otherwise suspends itself while acquiring the terminal
+	// from this background process group. A new session also creates the
+	// process group used below for cancellation.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	kill := func() error {
 		if cmd.Process == nil {
 			return os.ErrProcessDone

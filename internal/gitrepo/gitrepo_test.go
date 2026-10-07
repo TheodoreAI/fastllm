@@ -1,13 +1,44 @@
 package gitrepo
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestStatusQueriesDoNotRewriteIndex(t *testing.T) {
+	dir := newTestRepo(t)
+	index := filepath.Join(dir, ".git", "index")
+	before, err := os.ReadFile(index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Change cached stat data without changing the committed contents.
+	stamp := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(filepath.Join(dir, "committed.txt"), stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	for i, query := range []func(context.Context, string) error{
+		func(ctx context.Context, root string) error { _, err := Status(ctx, root); return err },
+		func(ctx context.Context, root string) error { _, err := GetRepoStatus(ctx, root); return err },
+	} {
+		if err := query(context.Background(), dir); err != nil {
+			t.Fatal(err)
+		}
+		after, err := os.ReadFile(index)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(before, after) {
+			t.Fatalf("background query %d rewrote the watched Git index", i)
+		}
+	}
+}
 
 // newTestRepo creates a throwaway git repo on disk with one committed
 // file and a configured user identity so `git commit` works without

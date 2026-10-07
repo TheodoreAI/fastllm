@@ -31,7 +31,10 @@ var ErrNotARepo = errors.New("gitrepo: not a git repository")
 // because the user's commits and git-lfs rely on them, and model file tools
 // cannot write .git (files.ErrGitInternals), so neither can be planted.
 func HardenedArgs(args ...string) []string {
-	return append([]string{"-c", "core.fsmonitor=false", "--literal-pathspecs"}, args...)
+	// Status and diff can refresh the index as an optional side effect, which
+	// feeds back into the Git watcher even when no files changed. Required
+	// locks for explicit mutations (add, commit, etc.) remain enabled.
+	return append([]string{"-c", "core.fsmonitor=false", "-c", "diff.autoRefreshIndex=false", "--literal-pathspecs", "--no-optional-locks"}, args...)
 }
 
 func run(ctx context.Context, root string, args ...string) (string, error) {
