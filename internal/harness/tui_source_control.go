@@ -815,6 +815,9 @@ func (m *teaModel) renderSource() string {
 	m.inputOrigin = nil
 	count := len(s.status.Files)
 	labels := []string{"Chat [q]", fmt.Sprintf("Source Control (%d)", count), "Back [←]", "Refresh [r]", "Branch [b]"}
+	if m.editor != nil {
+		labels = []string{"Chat", fmt.Sprintf("Source Control (%d)", count), "Back", "Refresh", "Branch"}
+	}
 	ids := []string{"source:chat", "", "source:back", "source:refresh", "source:branch"}
 	x := 0
 	for i, label := range labels {
@@ -943,6 +946,10 @@ func (m *teaModel) renderSource() string {
 	}
 	actions := []string{"Stage [s]", "Unstage [u]", "Discard [x]", "Open File [e]", "All: S/U/X"}
 	actionIDs := []string{"source:stage", "source:unstage", "source:discard", "source:edit", ""}
+	if m.editor != nil {
+		actions = []string{"Stage", "Unstage", "Discard", "", "F6: Switch pane"}
+		actionIDs[3] = ""
+	}
 	x = 0
 	for i, label := range actions {
 		if actionIDs[i] != "" {
@@ -951,7 +958,20 @@ func (m *teaModel) renderSource() string {
 		x += VisualLen(label) + 2
 	}
 	focus := []string{"Sidebar", "Detail", "Commit message"}[s.pane]
-	frame := m.fitFrame(nav + "\n" + styleMuted.Render("Focus: "+focus+" · Tab/Shift+Tab panes · ↑/↓ select · Enter diff · v unified/split · Esc Back/cancel") + "\n" + body + "\n" + message + "\n" + sanitizeUntrusted(notice) + "\n" + strings.Join(actions, "  "))
+	hints := "Focus: " + focus + " · Tab/Shift+Tab panes · ↑/↓ select · Enter diff · v unified/split · Esc Back/cancel"
+	if m.editor != nil {
+		if s.pane == 1 {
+			focus = "Editor"
+		}
+		hints = "Focus: " + focus + " · F6/Shift+F6 panes · F1 editor help"
+		if s.pane == 1 {
+			notice = "Editing buffer · Ctrl+S saves to disk · staging is a separate action"
+			if reason := m.sourceBusyReason(); reason != "" {
+				notice = reason
+			}
+		}
+	}
+	frame := m.fitFrame(nav + "\n" + styleMuted.Render(hints) + "\n" + body + "\n" + message + "\n" + sanitizeUntrusted(notice) + "\n" + strings.Join(actions, "  "))
 	if s.dialog != "" {
 		lines := []string{styleDiffHdr.Render(s.dialog)}
 		branchRows := map[int]int{}

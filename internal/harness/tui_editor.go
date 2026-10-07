@@ -70,6 +70,7 @@ type editorSession struct {
 	baselineError              string
 	headTokens                 *fileEditor
 	prompt                     editorPrompt
+	help                       bool
 	notice                     string
 	// clipboard is the editor's last copy, for Ctrl+V when the system
 	// clipboard is out of reach; clipboardLine marks a whole-line copy.
@@ -326,13 +327,13 @@ func (m *teaModel) editorShowDiff() {
 	m.openDiffModal(idx)
 }
 
-// editorGeometry lays out the editor: a title row, the text, a status row.
+// editorGeometry lays out a title, text, status, and action row.
 func (m *teaModel) editorGeometry() (bodyHeight, gutterWidth, codeWidth int) {
 	width, height := m.frameWidth(), max(m.height, 3)
 	if m.source.active {
 		_, width, height = m.sourceGeometry()
 	}
-	bodyHeight = max(height-2, 1)
+	bodyHeight = max(height-3, 1)
 	numWidth := 3
 	if m.editor != nil {
 		numWidth = max(numWidth, len(fmt.Sprint(len(m.editor.lines))))
@@ -344,6 +345,12 @@ func (m *teaModel) editorGeometry() (bodyHeight, gutterWidth, codeWidth int) {
 func (m *teaModel) handleEditorKey(msg tea.KeyPressMsg) tea.Cmd {
 	s := m.editor
 	key := msg.String()
+	if s.help {
+		if key == "f1" || key == "esc" || key == "ctrl+c" {
+			s.help = false
+		}
+		return nil
+	}
 	switch s.prompt {
 	case editorPromptClose:
 		switch key {
@@ -374,6 +381,11 @@ func (m *teaModel) handleEditorKey(msg tea.KeyPressMsg) tea.Cmd {
 	}
 
 	s.notice = ""
+	if key == "f1" {
+		s.help = true
+		s.dragging = false
+		return nil
+	}
 	if key == "alt+d" {
 		s.toggleNearestDeletion()
 		return nil
@@ -566,7 +578,7 @@ func (m *teaModel) editorPasteFromClipboard() tea.Cmd {
 // cursor's line, as it does in most editors.
 func (m *teaModel) handleEditorClipboard(msg editorClipboardMsg) {
 	s := m.editor
-	if s == nil || s.prompt != editorPromptNone {
+	if s == nil || s.prompt != editorPromptNone || s.help {
 		return
 	}
 	text := msg.text
@@ -592,7 +604,7 @@ func (m *teaModel) handleEditorClipboard(msg editorClipboardMsg) {
 
 // handleEditorPaste inserts pasted text at the cursor.
 func (m *teaModel) handleEditorPaste(content string) {
-	if s := m.editor; s.prompt == editorPromptNone {
+	if s := m.editor; s.prompt == editorPromptNone && !s.help {
 		s.freeScroll = false
 		s.insert(content)
 		s.marksStale = true
@@ -614,7 +626,7 @@ func (m *teaModel) editorPosAt(x, y int) editorPos {
 // click (Shift+click extends the selection) and selects by dragging.
 func (m *teaModel) handleEditorMouse(msg tea.MouseMsg) {
 	s := m.editor
-	if s.prompt != editorPromptNone {
+	if s.prompt != editorPromptNone || s.help {
 		return
 	}
 	mouse := msg.Mouse()
@@ -691,17 +703,8 @@ func (m *teaModel) renderEditor() string {
 	}
 	selStart, selEnd, selected := s.selection()
 
-	rows := make([]string, 0, bodyHeight+2)
-
-	title := ColorCyan(StyleBold(" ✎ " + sourceLabel(s.rel)))
-	if s.lang != "" {
-		title += " " + styleHeaderPill.Render(strings.ToUpper(s.lang))
-	}
-	if s.dirty {
-		title += ColorYellow("  ● modified")
-	}
-	title += " " + styleMuted.Render(s.baselineLabel())
-	rows = append(rows, PadRight(clampToWidth(title, width), width))
+	rows := make([]string, 0, bodyHeight+3)
+	rows = append(rows, m.renderEditorHeader(width))
 
 	numWidth := gutterWidth - 5
 	for i := range bodyHeight {
@@ -742,8 +745,8 @@ func (m *teaModel) renderEditor() string {
 			lineMarks.background, lineMarks.wordBackground = diffBg.lineAdd, diffBg.wordAdd
 			lineMarks.changed = s.changedWords[row]
 		}
-		if row == s.row {
-			number = ColorBrightWhite(number)
+		if row == s.row && m.editorFocused() {
+			number = ColorCyan(StyleBold(number))
 			lineMarks.cursor = s.displayCol()
 		} else {
 			number = ColorGray(number)
@@ -760,26 +763,34 @@ func (m *teaModel) renderEditor() string {
 			}
 		}
 		code := renderEditorLine(s.tokensAt(row), s.left, codeWidth, lineMarks)
-		rows = append(rows, mark+" "+number+" "+ColorBorder(SymVLine)+" "+code)
+		line := mark + " " + number + " " + ColorBorder(SymVLine) + " " + code
+		if row == s.row && m.editorFocused() && lineMarks.background == "" {
+			line = editorSurface(line, composerBackground())
+		}
+		rows = append(rows, line)
 	}
 
 	rows = append(rows, m.renderEditorStatus(width))
+	rows = append(rows, m.renderEditorActions(width, bodyHeight+2))
 	return strings.Join(rows, "\n")
 }
 
 func (m *teaModel) renderEditorStatus(width int) string {
 	s := m.editor
-	switch s.prompt {
-	case editorPromptClose:
-		return clampToWidth(ColorYellow(StyleBold(" Unsaved changes in "+sourceLabel(s.rel)+"."))+
-			styleMuted.Render("  s: Save and close  •  d: Discard  •  Esc: Keep editing"), width)
-	case editorPromptConflict:
-		return clampToWidth(ColorRed(StyleBold(" "+sourceLabel(s.rel)+" changed on disk since it was opened."))+
-			styleMuted.Render("  o: Overwrite  •  r: Reload from disk  •  Esc: Cancel"), width)
-	}
 	left := s.notice
 	if left == "" {
-		left = styleMuted.Render("^S Save  ^Z/^Y Undo/Redo  ^C/^X/^V Clipboard  Alt+D Previous/deleted  ^D Diff  Esc Close")
+		left = s.baselineLabel()
+		if s.hasHead && s.baselineError == "" {
+			added, removed := 0, 0
+			for _, c := range s.changes {
+				added += c.end - c.start
+				removed += c.oldEnd - c.oldStart
+			}
+			left = fmt.Sprintf("Compared with HEAD  +%d / -%d", added, removed)
+		}
+	}
+	if reason := m.sourceBusyReason(); reason != "" {
+		left = ColorYellow("Save unavailable: " + reason)
 	}
 	endings := "LF"
 	if s.crlf {
@@ -789,7 +800,9 @@ func (m *teaModel) renderEditorStatus(width int) string {
 	if text := s.selectedText(); text != "" {
 		position += fmt.Sprintf(" (%d selected)", len([]rune(text)))
 	}
-	right := styleMuted.Render(fmt.Sprintf("%s  %s ", position, endings))
-	left = clampToWidth(" "+left, max(width-VisualLen(right)-1, 0))
-	return PadRight(left, width-VisualLen(right)) + right
+	right := fmt.Sprintf("%s  %s", position, endings)
+	if width >= 75 && s.lang != "" {
+		right += "  " + strings.ToUpper(s.lang)
+	}
+	return editorSurface(editorSplit(" "+left, right+" ", width), currentTheme.CardBg)
 }

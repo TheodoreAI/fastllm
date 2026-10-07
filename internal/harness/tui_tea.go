@@ -770,19 +770,24 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.handleSourceKey(msg)
 		}
 		if m.editor != nil {
-			if msg.String() == "esc" && m.editor.prompt == editorPromptNone && m.source.busy && m.source.cancel != nil {
+			if msg.String() == "esc" && !m.editorDialogOpen() && m.source.busy && m.source.cancel != nil {
 				m.source.cancel()
 				return m, nil
 			}
-			if m.source.active && m.editor.prompt == editorPromptNone {
-				if msg.String() == "tab" || msg.String() == "shift+tab" {
-					return m, m.handleSourceKey(msg)
+			if m.source.active && !m.editorDialogOpen() {
+				if msg.String() == "f6" || msg.String() == "shift+f6" {
+					step := 1
+					if msg.Mod.Contains(tea.ModShift) {
+						step = 2
+					}
+					m.source.pane = (m.source.pane + step) % 3
+					return m, nil
 				}
-				if m.source.pane != 1 {
+				if m.source.pane != 1 && msg.String() != "f1" {
 					return m, m.handleSourceKey(msg)
 				}
 			}
-			if msg.String() == "esc" && m.editor.prompt == editorPromptNone && (m.isExecuting || m.shellExecuting) {
+			if msg.String() == "esc" && !m.editorDialogOpen() && (m.isExecuting || m.shellExecuting) {
 				m.cancelActiveOperation()
 				return m, nil
 			}
@@ -1089,6 +1094,11 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.MouseMsg:
+		if m.editorShown() && m.commandPalette == nil && m.source.dialog == "" {
+			if cmd, handled := m.editorChromeMouse(msg); handled {
+				return m, cmd
+			}
+		}
 		if m.source.active && m.pendingPermission == nil && m.commandPalette == nil {
 			return m, m.handleSourceMouse(msg)
 		}
@@ -3291,6 +3301,14 @@ func (m *teaModel) copyText(text, what string) tea.Cmd {
 
 // render draws the whole frame: the active modal, or the chat layout.
 func (m *teaModel) render() string {
+	frame := m.renderWorkspace()
+	if m.editorShown() && m.editorDialogOpen() && m.commandPalette == nil && m.source.dialog == "" {
+		return m.renderEditorDialog(frame)
+	}
+	return frame
+}
+
+func (m *teaModel) renderWorkspace() string {
 	if !m.ready {
 		return "Initializing fastllm..."
 	}
