@@ -81,7 +81,7 @@ func (m *teaModel) permissionPanelLines(width int) []string {
 	if hidden {
 		lines = append(lines, wrapRunes("Hidden/control characters are shown as ⟨…⟩. Approval runs the raw text. Deny unless expected.", max(1, width))...)
 	}
-	lines = append(lines, wrapRunes("[y] once · [n] deny · Enter/Esc deny", max(1, width))...)
+	lines = append(lines, wrapRunes("[y] once · [n]/Enter deny · Esc deny and cancel turn", max(1, width))...)
 	lines = append(lines, wrapRunes("[a] allow "+sanitizeUntrusted(request.scope().Describe())+" this session", max(1, width))...)
 	return lines
 }
@@ -264,6 +264,9 @@ func (m *teaModel) renderFooter() string {
 	}
 	if m.isExecuting {
 		hints = fmt.Sprintf("%s turn %d · %s · esc cancel", m.spinner.View(), m.activeTurn, time.Since(m.taskStarted).Round(time.Second))
+	}
+	if m.canceling {
+		hints = "Canceling agent turn · waiting for it to stop"
 	}
 	if m.shellExecuting {
 		hints = m.spinner.View() + " shell · ctrl+b background · esc cancel"

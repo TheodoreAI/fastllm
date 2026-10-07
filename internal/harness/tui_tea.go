@@ -157,13 +157,21 @@ func tuiToolBadge(name string) string {
 
 // Bubble Tea Messages
 type teaAgentEventMsg Event
+
+// Associate asynchronous deliveries with the run that produced them. A queued
+// completion from an older run cannot change the state of a newer run.
+type teaRunEventMsg struct {
+	event  Event
+	source <-chan Event
+}
 type teaStatusClearMsg struct{}
 type teaPermissionRequestMsg struct {
-	ToolName  string
-	Summary   string
-	Scope     GrantScope // what "for this session" would grant
-	Workspace string
-	Reply     chan permissionDecision
+	ToolName   string
+	Summary    string
+	Scope      GrantScope // what "for this session" would grant
+	Workspace  string
+	Reply      chan permissionDecision
+	runContext context.Context
 }
 
 // scope is the request's grant scope. A request built without one (older
@@ -693,13 +701,14 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "pgdown", "down":
 				m.approvalOffset += 3
 				return m, nil
-			case "ctrl+c":
+			case "ctrl+c", "esc":
 				m.resolvePermission(false, false)
 				if m.cancelTurn != nil {
+					m.canceling = true
 					m.cancelTurn()
 				}
 				return m, m.waitForNextEvent()
-			case "enter", "esc", "n", "N":
+			case "enter", "n", "N":
 				m.resolvePermission(false, false)
 				return m, m.waitForNextEvent()
 			case "y", "Y":
@@ -1052,8 +1061,17 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport, viewportCmd = m.viewport.Update(msg)
 		return m, viewportCmd
 
+	case teaRunEventMsg:
+		if msg.source != m.eventChan || !m.isExecuting {
+			return m, nil
+		}
+		return m.Update(teaAgentEventMsg(msg.event))
+
 	case teaAgentEventMsg:
 		ev := Event(msg)
+		if m.canceling && ev.Type != EventTaskFinished {
+			return m, m.waitForNextEvent()
+		}
 		switch ev.Type {
 		case EventTurnStart:
 			m.activeTurn = ev.Turn
@@ -1166,6 +1184,7 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.appendHistory(styleStatusNotice.Render(ev.Response) + "\n\n")
 
 		case EventTaskFinished:
+			wasCanceled := m.canceling
 			m.isExecuting = false
 			m.activeTool = ""
 			m.activeArgs = ""
@@ -1173,7 +1192,12 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.turnFailed = ev.Error != "" && !m.canceling
 			m.canceling = false
 			m.finishedAway = m.blurred
-			if ev.Error != "" {
+			if wasCanceled {
+				m.pendingPlan = ""
+				m.stream.Discard()
+				m.activeTurn = 0
+				m.appendHistory(styleMuted.Render("\nTask canceled.\n\n"))
+			} else if ev.Error != "" {
 				m.appendHistory(styleDiffDel.Render(fmt.Sprintf("\nTask failed: %s\n\n", ev.Error)))
 			} else if ev.Result != nil {
 				if !m.hasResponseTurn && strings.TrimSpace(ev.Result.FinalResponse) != "" {
@@ -1185,9 +1209,12 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					ev.Result.Turns, float64(ev.Result.DurationMS)/1000.0)))
 			}
 			response := m.lastResponse
+			if wasCanceled && !m.hasResponseTurn {
+				response = ""
+			}
 			var transcript []llm.Message
 			if ev.Result != nil {
-				if strings.TrimSpace(ev.Result.FinalResponse) != "" {
+				if !wasCanceled && strings.TrimSpace(ev.Result.FinalResponse) != "" {
 					response = ev.Result.FinalResponse
 				}
 				transcript = ev.Result.Transcript
@@ -1227,7 +1254,10 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case teaPermissionRequestMsg:
-		if msg.Workspace != "" && msg.Workspace != m.workingDir {
+		if m.canceling || (msg.runContext != nil && (!m.isExecuting || msg.runContext.Err() != nil)) {
+			msg.Reply <- permissionDecision{Allow: false}
+			cmds = append(cmds, m.waitForNextEvent())
+		} else if msg.Workspace != "" && msg.Workspace != m.workingDir {
 			msg.Reply <- permissionDecision{Allow: false}
 			cmds = append(cmds, m.waitForNextEvent())
 		} else if g := m.permissionController().CoveringGrant(msg.consent()); g != nil {
@@ -1400,14 +1430,15 @@ func (m *teaModel) clearStatusAfter(d time.Duration) tea.Cmd {
 }
 
 func (m *teaModel) waitForNextEvent() tea.Cmd {
+	events, permissions := m.eventChan, m.permissionChan
 	return func() tea.Msg {
 		select {
-		case ev, ok := <-m.eventChan:
+		case ev, ok := <-events:
 			if !ok {
 				return nil
 			}
-			return teaAgentEventMsg(ev)
-		case request := <-m.permissionChan:
+			return teaRunEventMsg{event: ev, source: events}
+		case request := <-permissions:
 			return request
 		}
 	}
@@ -1439,6 +1470,8 @@ func (m *teaModel) cancelActiveOperation() {
 	canceledAgent := m.cancelTurn != nil && !canceledShell
 	if canceledAgent {
 		m.canceling = true
+		m.pendingPlan = ""
+		m.activeTool, m.activeArgs = "", ""
 		m.cancelTurn()
 	}
 	if m.cancelShell != nil {
@@ -2293,6 +2326,7 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 	m.pendingPrompt = inputVal
 	m.taskStarted = time.Now()
 	m.isExecuting = true
+	m.canceling = false
 	m.hasResponseTurn = false
 	m.stream.Start()
 	m.streamHeaderShown = false
@@ -2349,13 +2383,14 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 	permissionChan := m.permissionChan
 	// Launch background task
 	go func() {
+		defer cancel()
 		defer close(events)
 		// The monitor calls this only for its Ask decisions, which exist only in
 		// agent mode; every other mode decides without asking.
 		{
 			req.Authorize = func(consent ConsentRequest) bool {
 				reply := make(chan permissionDecision, 1)
-				request := teaPermissionRequestMsg{ToolName: consent.Tool, Summary: consent.Summary, Scope: consent.Scope, Workspace: req.WorkingDir, Reply: reply}
+				request := teaPermissionRequestMsg{ToolName: consent.Tool, Summary: consent.Summary, Scope: consent.Scope, Workspace: req.WorkingDir, Reply: reply, runContext: ctx}
 				select {
 				case permissionChan <- request:
 				case <-ctx.Done():
@@ -3049,6 +3084,8 @@ func (m *teaModel) terminalCursor() *tea.Cursor {
 func (m *teaModel) windowTitle() string {
 	suffix := "fastllm " + SymDot + " " + filepath.Base(m.workingDir)
 	switch {
+	case m.canceling:
+		return "canceling " + SymDot + " " + suffix
 	case m.pendingPermission != nil:
 		return "! approval needed " + SymDot + " " + suffix
 	case m.pendingPlan != "" && !m.isExecuting:
@@ -3073,6 +3110,9 @@ func (m *teaModel) windowTitle() string {
 // on Windows, the taskbar button): busy while working, yellow when waiting on
 // the user, red after a failed turn.
 func (m *teaModel) progressBar() *tea.ProgressBar {
+	if m.canceling && !m.shellExecuting {
+		return nil
+	}
 	switch {
 	case m.pendingPermission != nil, m.pendingPlan != "" && !m.isExecuting:
 		return tea.NewProgressBar(tea.ProgressBarWarning, 100)

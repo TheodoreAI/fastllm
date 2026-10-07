@@ -6,3 +6,7 @@
   event: superseded-previous
   value: Escape cancels the foreground shell command first when it runs beside an agent turn, then the agent turn on the next press; explicitly backgrounded processes remain running; shell cancellation terminates the process tree with a direct-process fallback on Windows.
   reason: Shell-mode commands may now run while the agent works (one foreground shell at a time); cancelling the command the user started last matches intent, and cancelling both at once would kill a turn the user did not mean to stop.
+- decided_at: 2026-10-07T04:48:39+00:00
+  event: superseded-previous
+  value: Escape cancels the foreground user shell first, then the agent run; at a tool approval Escape denies and cancels the run, whereas Enter/n deny only. Cancellation blocks subsequent retries, replies, tools and turns, rejects stale run events/approvals, and displays canceling until worker completion. Explicit background processes and session-lifetime child agents remain independent.
+  reason: Keep the established shell-first behavior and Runner-owned child lifetime. Missing context checks and queued activity could revive canceled turns; stopping the UI alone would leave model/tool work running.

@@ -65,7 +65,7 @@ muted text and blue/amber diffs; an existing saved theme stays selected. Use
 
 The sidebar appears when the frame has at least 120 columns. On smaller terminals,
 use `/changes`, `/status`, and the palette. Long permission requests scroll with
-**PgUp/PgDn**; **Enter/Esc still deny**. Existing editor, attachment, session,
+**PgUp/PgDn**; **Enter/n deny**, and **Esc denies and cancels the run**. Existing editor, attachment, session,
 process, permission, and budget workflows remain available.
 
 Run the checks used before committing:
@@ -319,9 +319,11 @@ continue to reject private/local destinations. These policies govern model tools
 they do not block requests to the configured LLM endpoint.
 
 Model shells are **not OS-sandboxed** by default: they can write files and make
-network requests. `/set sandbox on` (or `-sandbox`) runs them isolated, with no
-network and no access outside the workspace, on Windows (AppContainer) and macOS
-(Seatbelt); see `docs/execution-boundary.md`. Consequently, `commands` also requires both `write` and `network`;
+network requests. `/set sandbox on` (or `-sandbox`) enables OS-enforced isolation
+on Windows (AppContainer) and macOS (Seatbelt), with no network and filesystem
+access limited to granted trees. Windows scopes share an identity with persistent
+workspace grants, so this does not isolate agents from previously granted
+workspaces; see `docs/execution-boundary.md`. Consequently, `commands` also requires both `write` and `network`;
 with either denied, foreground commands, background commands, and fused
 `then_run` commands are blocked. A blocked fused command also prevents its file
 mutation. When shells are enabled, environment filtering removes variables whose

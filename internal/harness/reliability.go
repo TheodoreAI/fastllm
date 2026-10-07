@@ -49,6 +49,9 @@ func chatWithRetryStreaming(ctx context.Context, client LLMClient, model string,
 
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return llm.ChatResult{}, err
+		}
 		var result llm.ChatResult
 		var err error
 		switch {
@@ -64,6 +67,11 @@ func chatWithRetryStreaming(ctx context.Context, client LLMClient, model string,
 			result, err = usageClient.ChatWithUsage(ctx, model, messages, tools, thinkLevel)
 		default:
 			result.Message, err = client.Chat(ctx, model, messages, tools, thinkLevel)
+		}
+		// A provider may finish concurrently with cancellation, or ignore the
+		// context. A late successful reply must not authorize another tool/turn.
+		if canceled := ctx.Err(); canceled != nil {
+			return llm.ChatResult{}, canceled
 		}
 		if err == nil {
 			return result, nil

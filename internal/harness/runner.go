@@ -207,6 +207,9 @@ func localClient(client LLMClient) (*llm.Client, bool) {
 
 // Run executes an autonomous task to completion or until max turns are reached.
 func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (*RunResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	startTime := time.Now()
 	if req.Taint == nil {
 		req.Taint = NewSessionTaint()
@@ -365,8 +368,24 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 		assumedWindow = ResolveContextWindow(nil, model)
 	}
 	overflowRetried := false
+	finishCanceled := func(err error) (*RunResult, error) {
+		result.Success = false
+		result.FinalResponse = ""
+		result.ProposedPlan = ""
+		result.Error = err.Error()
+		if why := req.meter.exhausted(); why != "" {
+			result.Error = "stopped: " + why
+		}
+		result.DurationMS = time.Since(startTime).Milliseconds()
+		result.Transcript = runTranscript(messages, "")
+		emit(Event{Type: EventTaskFinished, Result: result, Error: result.Error})
+		return result, err
+	}
 
 	for turn := 1; turn <= maxTurns; turn++ {
+		if err := ctx.Err(); err != nil {
+			return finishCanceled(err)
+		}
 		if why := req.meter.exhausted(); why != "" {
 			result.Turns = turn - 1
 			result.Error = "stopped: " + why
@@ -403,6 +422,10 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 		}
 		chatResult, err := chatWithRetryStreaming(ctx, r.LLM, routed, modelMessages, tools, req.ThinkLevel, nil, sink)
 		turnDuration := time.Since(turnStart)
+		if err := ctx.Err(); err != nil {
+			result.Turns = turn
+			return finishCanceled(err)
+		}
 		// A request the model's window cannot hold is retried once, compacted to
 		// the window the provider stated, instead of ending the run.
 		if !overflowRetried {
@@ -506,6 +529,10 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 
 		// Execute all tool calls
 		for _, call := range reply.ToolCalls {
+			if err := ctx.Err(); err != nil {
+				result.Turns = turn
+				return finishCanceled(err)
+			}
 			normalizedArgs, argErr := normalizeToolArguments(call.Function.Arguments)
 			if argErr != nil {
 				toolResult := argErr.Error()
@@ -557,6 +584,11 @@ func (r *Runner) Run(ctx context.Context, req RunRequest, onEvent func(Event)) (
 				Content:    boundToolResult(outcome.ModelView, toolResultLimit(budget)),
 				ToolCallID: call.ID,
 			})
+			if err := ctx.Err(); err != nil {
+				result.History = append(result.History, turnRec)
+				result.Turns = turn
+				return finishCanceled(err)
+			}
 		}
 
 		result.History = append(result.History, turnRec)

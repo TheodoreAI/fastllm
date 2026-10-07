@@ -43,10 +43,17 @@ func argumentFailure(err error) toolExecutionResult {
 }
 
 func (r *Runner) executeTool(execCtx toolExecutionContext, name, rawArgs string) toolExecutionResult {
+	if err := execCtx.ctx.Err(); err != nil {
+		return argumentFailure(err)
+	}
 	// Every call passes the monitor first, whether or not the tool was offered:
 	// a model can name any tool it likes.
 	if ok, refusal := admit(execCtx.request, name, rawArgs); !ok {
 		return toolExecutionResult{output: refusal}
+	}
+	// Authorization may block waiting for the user while Escape cancels the run.
+	if err := execCtx.ctx.Err(); err != nil {
+		return argumentFailure(err)
 	}
 	// Permitted is not the same as affordable: the budget is charged next.
 	if refusal := execCtx.request.meter.charge(name, rawArgs); refusal != "" {
