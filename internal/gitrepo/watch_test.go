@@ -8,6 +8,34 @@ import (
 	"time"
 )
 
+func TestBackgroundReviewDoesNotTriggerWatcher(t *testing.T) {
+	dir := newTestRepo(t)
+	stamp := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(filepath.Join(dir, "committed.txt"), stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	changes, stop, err := Watch(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	for range 3 {
+		if _, err := GetRepoStatus(ctx, dir); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Diff(ctx, dir, "committed.txt", false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	select {
+	case <-changes:
+		t.Fatal("background review generated its own Git watcher refresh")
+	case <-time.After(debounceWindow + 300*time.Millisecond):
+	}
+}
+
 // Regression test for a gap where a write landing inside a directory
 // created earlier in the same watch session went unnoticed: the mkdir
 // itself was seen (it changes root's own listing), but nothing added

@@ -1,0 +1,4 @@
+- decided_at: 2026-10-07T18:27:02+00:00
+  event: initial
+  value: Harness Git queries disable optional locks and diff.autoRefreshIndex; explicit mutations retain required locking.
+  reason: Both status and diff can write the watched index during review. A failing index-preservation test and watcher regression justify stopping writes at the source; ignoring index events would miss real staging and polling would add delay.
