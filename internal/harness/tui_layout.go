@@ -118,7 +118,7 @@ func (m *teaModel) composerContent(l chatLayout) (string, bool) {
 func (m *teaModel) composerMetadata(l chatLayout) string {
 	mode := strings.ToUpper(m.permissionMode.Label())
 	if m.mode == modeShell {
-		mode = "SHELL"
+		mode = "SHELL · " + m.userShellLabel()
 	}
 	modeStyle := lipgloss.NewStyle().Foreground(permissionModeColor(m.permissionMode)).Background(lipgloss.Color(composerBackground())).Bold(true).Underline(m.hover == hitMode)
 	modelStyle := styleMuted.Background(lipgloss.Color(composerBackground())).Underline(m.hover == hitModel)
@@ -148,7 +148,7 @@ func (m *teaModel) renderComposer(l chatLayout) string {
 		metaY := inputY + m.input.Height()
 		mode := strings.ToUpper(m.permissionMode.Label())
 		if m.mode == modeShell {
-			mode = "SHELL"
+			mode = "SHELL · " + m.userShellLabel()
 		}
 		if m.mode == modeAgent {
 			m.hits.add(hitMode, l.composerX+3, metaY, VisualLen(mode), 1)

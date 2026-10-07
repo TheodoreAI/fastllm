@@ -34,6 +34,13 @@ type ProcessManager struct {
 	scopes    map[string]*execution.Scope
 	processes map[string]trackedProcess
 	nextID    int
+	userShell string
+}
+
+func (pm *ProcessManager) SetUserShell(shell string) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	pm.userShell = shell
 }
 
 func NewProcessManager(scopes ...*execution.Scope) *ProcessManager {
@@ -94,10 +101,17 @@ func (pm *ProcessManager) StartTracked(command, dir string) (execution.Process, 
 		return nil, nil, fmt.Errorf("%d background processes are already running, the limit; stop one first (kill_process, or /kill <id>)", running)
 	}
 
-	p, err := s.Start(context.Background(), execution.Command{
-		Shell:   command,
-		Timeout: 24 * time.Hour,
-	})
+	launch := execution.Command{Shell: command, Timeout: 24 * time.Hour}
+	// An injected scope belongs to the agent execution path. Only scopes
+	// opened here for the human shell load personal startup files.
+	if pm.scope == nil {
+		launch, err = execution.UserShellCommand(pm.userShell, command)
+		if err != nil {
+			return nil, nil, err
+		}
+		launch.Timeout = 24 * time.Hour
+	}
+	p, err := s.Start(context.Background(), launch)
 	if err != nil {
 		return nil, nil, err
 	}

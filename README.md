@@ -66,6 +66,13 @@ muted text and blue/amber diffs; an existing saved theme stays selected. Use
 - `/shell` toggles shell mode; `!command` and `$ command` run inline commands.
   **Ctrl+B** backgrounds a running shell process; **Ctrl+F** searches the transcript.
 
+On macOS/Linux, user shell commands use `$SHELL` and load its startup files
+(Bash/Zsh use login and interactive initialization), so profile aliases and
+functions work in foreground and background commands. Set `"user_shell": "/bin/bash"`
+in `~/.fastllm/config.json` to select Bash explicitly; the selected shell appears
+in shell mode. Each command starts a fresh shell. Startup output/errors are shown
+with command output, and agent commands keep their existing profile-free execution.
+
 The sidebar appears when the frame has at least 120 columns. On smaller terminals,
 use `/changes`, `/status`, and the palette. Long permission requests scroll with
 **PgUp/PgDn**; **Enter/n deny**, and **Esc denies and cancels the run**. Existing editor, attachment, session,
@@ -74,6 +81,10 @@ process, permission, and budget workflows remain available.
 Source Control groups conflicts, staged changes, unstaged changes, untracked files,
 and the current branch's history. **↑/↓**, **Enter**, and **Tab/Shift+Tab** navigate;
 **/** filters filenames, **r** refreshes, and **e** opens the existing editor.
+The editor keeps syntax colors and highlights changed lines and words against HEAD,
+including unsaved edits. Click a previous/deleted-lines header or press **Alt+D**
+to expand read-only original text, including deletions at the end of a file.
+Wheel scrolling leaves the cursor in place; cursor navigation/editing follows it.
 Diffs compare HEAD with the index for staged files and the index with the working
 tree for unstaged files. At 100 detail columns they default to side by side;
 **v** switches formats. Below 90 terminal columns, **Back/←** returns to the sidebar.

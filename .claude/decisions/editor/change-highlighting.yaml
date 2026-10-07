@@ -1,0 +1,3 @@
+value: Compare the live buffer with HEAD; reuse word diffs and syntax tokens with inline tinted lines and read-only expandable original rows.
+reason: User chose inline Git-style review including staged, unstaged, and unsaved changes; a split editor adds width and buffer synchronization complexity.
+decided_at: 2026-10-07T17:30:56+00:00

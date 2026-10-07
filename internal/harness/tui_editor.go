@@ -56,12 +56,21 @@ type editorSession struct {
 	diskHash [32]byte
 	// head is the file at HEAD, for the gutter marks; hasHead is false
 	// outside a git repository.
-	head       []string
-	hasHead    bool
-	marks      []byte
-	marksStale bool
-	prompt     editorPrompt
-	notice     string
+	head                       []string
+	hasHead                    bool
+	marks                      []byte
+	marksStale                 bool
+	changes                    []editorChange
+	reviewRows                 []editorReviewRow
+	liveRows                   []int
+	changedWords, deletedWords map[int][]editorColumnRange
+	expandedChanges            map[int]bool
+	baselineID                 uint64
+	baselineLoading            bool
+	baselineError              string
+	headTokens                 *fileEditor
+	prompt                     editorPrompt
+	notice                     string
 	// clipboard is the editor's last copy, for Ctrl+V when the system
 	// clipboard is out of reach; clipboardLine marks a whole-line copy.
 	clipboard     string
@@ -176,14 +185,13 @@ func (m *teaModel) openEditor(requested string, returnToDiff bool) error {
 	}
 	if !m.source.active && m.checkpointMgr != nil && m.checkpointMgr.IsGitRepo() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		head, err := gitrepo.ShowHEAD(ctx, m.editorRoot(), rel)
+		head, err := gitrepo.HeadContents(ctx, m.editorRoot(), rel)
 		cancel()
 		if err == nil {
 			s.hasHead = true
-			if head != "" {
-				headText, _, _ := splitFileContent(head)
-				s.head = strings.Split(headText, "\n")
-			}
+			s.head = editorHeadLines(head)
+		} else {
+			s.baselineError = err.Error()
 		}
 	}
 	if !exists {
@@ -320,11 +328,11 @@ func (m *teaModel) editorShowDiff() {
 
 // editorGeometry lays out the editor: a title row, the text, a status row.
 func (m *teaModel) editorGeometry() (bodyHeight, gutterWidth, codeWidth int) {
-	width, height := max(m.width, 20), max(m.height, 5)
+	width, height := m.frameWidth(), max(m.height, 3)
 	if m.source.active {
 		_, width, height = m.sourceGeometry()
 	}
-	bodyHeight = height - 2
+	bodyHeight = max(height-2, 1)
 	numWidth := 3
 	if m.editor != nil {
 		numWidth = max(numWidth, len(fmt.Sprint(len(m.editor.lines))))
@@ -366,9 +374,17 @@ func (m *teaModel) handleEditorKey(msg tea.KeyPressMsg) tea.Cmd {
 	}
 
 	s.notice = ""
-	s.freeScroll = false
+	if key == "alt+d" {
+		s.toggleNearestDeletion()
+		return nil
+	}
 	if m.editorMoveKey(key) {
 		return nil
+	}
+	// Save, copy, ignored keys, and redraws preserve independent wheel scrolling.
+	switch key {
+	case "ctrl+a", "ctrl+x", "enter", "backspace", "delete", "tab", "shift+tab":
+		s.freeScroll = false
 	}
 	switch key {
 	case "ctrl+s":
@@ -385,11 +401,15 @@ func (m *teaModel) handleEditorKey(msg tea.KeyPressMsg) tea.Cmd {
 	case "ctrl+z":
 		if !s.undoEdit() {
 			s.notice = "Nothing to undo."
+		} else {
+			s.freeScroll = false
 		}
 		s.marksStale = true
 	case "ctrl+y", "ctrl+shift+z":
 		if !s.redoEdit() {
 			s.notice = "Nothing to redo."
+		} else {
+			s.freeScroll = false
 		}
 		s.marksStale = true
 	case "ctrl+d":
@@ -424,6 +444,7 @@ func (m *teaModel) handleEditorKey(msg tea.KeyPressMsg) tea.Cmd {
 		s.marksStale = true
 	default:
 		if msg.Text != "" && !msg.Mod.Contains(tea.ModCtrl) && !msg.Mod.Contains(tea.ModAlt) {
+			s.freeScroll = false
 			s.insert(msg.Text)
 			s.marksStale = true
 		}
@@ -458,15 +479,9 @@ func (m *teaModel) editorMoveKey(key string) bool {
 	case "end":
 		do = s.end
 	case "pgup":
-		do = func() {
-			s.moveVertical(-bodyHeight)
-			s.top = max(s.top-bodyHeight, 0)
-		}
+		do = func() { s.page(bodyHeight, -1) }
 	case "pgdown":
-		do = func() {
-			s.moveVertical(bodyHeight)
-			s.top = min(s.top+bodyHeight, max(len(s.lines)-bodyHeight, 0))
-		}
+		do = func() { s.page(bodyHeight, 1) }
 	case "ctrl+home":
 		do = func() { s.moveTo(0, 0, false) }
 	case "ctrl+end":
@@ -474,6 +489,8 @@ func (m *teaModel) editorMoveKey(key string) bool {
 	default:
 		return false
 	}
+	s.freeScroll = false
+	s.dragging = false
 	if shifted {
 		s.startSelection()
 		do()
@@ -587,8 +604,9 @@ func (m *teaModel) handleEditorPaste(content string) {
 // which scrolls it.
 func (m *teaModel) editorPosAt(x, y int) editorPos {
 	s := m.editor
+	s.ensureReview()
 	_, gutterWidth, _ := m.editorGeometry()
-	row := min(max(s.top+y-1, 0), len(s.lines)-1)
+	row := s.reviewLineAt(s.top + y - 1)
 	return editorPos{row, runeColAt(s.lines[row], s.left+max(x-gutterWidth, 0))}
 }
 
@@ -600,6 +618,7 @@ func (m *teaModel) handleEditorMouse(msg tea.MouseMsg) {
 		return
 	}
 	mouse := msg.Mouse()
+	s.ensureReview()
 	bodyHeight, _, _ := m.editorGeometry()
 	switch msg.(type) {
 	case tea.MouseWheelMsg:
@@ -612,9 +631,21 @@ func (m *teaModel) handleEditorMouse(msg tea.MouseMsg) {
 			step = 3
 		}
 		s.freeScroll = true
-		s.top = min(max(s.top+step, 0), max(len(s.lines)-bodyHeight, 0))
+		s.dragging = false
+		s.top += step
+		s.clampView(bodyHeight)
 	case tea.MouseClickMsg:
 		if mouse.Button != tea.MouseLeft || mouse.Y < 1 || mouse.Y > bodyHeight {
+			return
+		}
+		visual := s.top + mouse.Y - 1
+		if visual >= len(s.reviewRows) {
+			return
+		}
+		if row := s.reviewRows[visual]; row.line < 0 {
+			if row.oldLine < 0 {
+				s.toggleDeletion(row.change)
+			}
 			return
 		}
 		pos := m.editorPosAt(mouse.X, mouse.Y)
@@ -627,6 +658,9 @@ func (m *teaModel) handleEditorMouse(msg tea.MouseMsg) {
 		s.dragging = true
 		s.freeScroll = false
 	case tea.MouseMotionMsg:
+		if mouse.Button == tea.MouseNone {
+			s.dragging = false
+		}
 		if !s.dragging || mouse.Button != tea.MouseLeft {
 			return
 		}
@@ -644,21 +678,16 @@ func (m *teaModel) handleEditorMouse(msg tea.MouseMsg) {
 // renderEditor draws the editor over the whole screen.
 func (m *teaModel) renderEditor() string {
 	s := m.editor
-	width := max(m.width, 20)
+	width := m.frameWidth()
 	if m.source.active {
 		_, width, _ = m.sourceGeometry()
 	}
 	bodyHeight, gutterWidth, codeWidth := m.editorGeometry()
+	s.ensureReview()
 	if s.freeScroll {
-		s.top = min(max(s.top, 0), max(len(s.lines)-1, 0))
+		s.clampView(bodyHeight)
 	} else {
-		s.scrollIntoView(bodyHeight, codeWidth)
-	}
-	if s.marksStale {
-		if s.hasHead {
-			s.marks = computeLineMarks(s.head, s.lines)
-		}
-		s.marksStale = false
+		s.followCursor(bodyHeight, codeWidth)
 	}
 	selStart, selEnd, selected := s.selection()
 
@@ -671,15 +700,31 @@ func (m *teaModel) renderEditor() string {
 	if s.dirty {
 		title += ColorYellow("  ● modified")
 	}
+	title += " " + styleMuted.Render(s.baselineLabel())
 	rows = append(rows, PadRight(clampToWidth(title, width), width))
 
 	numWidth := gutterWidth - 5
 	for i := range bodyHeight {
-		row := s.top + i
-		if row >= len(s.lines) {
+		visual := s.top + i
+		if visual >= len(s.reviewRows) {
 			rows = append(rows, PadRight(ColorBorder(strings.Repeat(" ", gutterWidth-2)+SymVLine), width))
 			continue
 		}
+		review := s.reviewRows[visual]
+		if review.line < 0 {
+			if review.oldLine < 0 {
+				rows = append(rows, PadRight(clampToWidth(ColorRed(s.deletionLabel(review)), width), width))
+			} else {
+				marks := noLineMarks
+				marks.background, marks.wordBackground = diffBg.lineDel, diffBg.wordDel
+				marks.changed = s.deletedWords[review.oldLine]
+				code := renderEditorLine(s.headTokens.tokensAt(review.oldLine), s.left, codeWidth, marks)
+				gutter := ColorRed(fmt.Sprintf("- %*d │ ", numWidth, review.oldLine+1))
+				rows = append(rows, gutter+code)
+			}
+			continue
+		}
+		row := review.line
 		mark := " "
 		if row < len(s.marks) {
 			switch s.marks[row] {
@@ -693,6 +738,10 @@ func (m *teaModel) renderEditor() string {
 		}
 		number := fmt.Sprintf("%*d", numWidth, row+1)
 		lineMarks := noLineMarks
+		if row < len(s.marks) && (s.marks[row] == '+' || s.marks[row] == '~') {
+			lineMarks.background, lineMarks.wordBackground = diffBg.lineAdd, diffBg.wordAdd
+			lineMarks.changed = s.changedWords[row]
+		}
 		if row == s.row {
 			number = ColorBrightWhite(number)
 			lineMarks.cursor = s.displayCol()
@@ -730,7 +779,7 @@ func (m *teaModel) renderEditorStatus(width int) string {
 	}
 	left := s.notice
 	if left == "" {
-		left = styleMuted.Render("^S Save  ^Z/^Y Undo/Redo  ^C/^X/^V Copy/Cut/Paste  ^A All  ^D Diff vs HEAD  Esc Close")
+		left = styleMuted.Render("^S Save  ^Z/^Y Undo/Redo  ^C/^X/^V Clipboard  Alt+D Previous/deleted  ^D Diff  Esc Close")
 	}
 	endings := "LF"
 	if s.crlf {
@@ -743,67 +792,4 @@ func (m *teaModel) renderEditorStatus(width int) string {
 	right := styleMuted.Render(fmt.Sprintf("%s  %s ", position, endings))
 	left = clampToWidth(" "+left, max(width-VisualLen(right)-1, 0))
 	return PadRight(left, width-VisualLen(right)) + right
-}
-
-// computeLineMarks marks each line of cur against old: '+' added, '~'
-// changed, '-' where old lines were removed just above, 0 unchanged. It
-// matches lines by longest common subsequence after trimming the common
-// head and tail; a middle too large for that is marked changed as a block.
-func computeLineMarks(old, cur []string) []byte {
-	marks := make([]byte, len(cur))
-	prefix := 0
-	for prefix < len(old) && prefix < len(cur) && old[prefix] == cur[prefix] {
-		prefix++
-	}
-	suffix := 0
-	for suffix < len(old)-prefix && suffix < len(cur)-prefix && old[len(old)-1-suffix] == cur[len(cur)-1-suffix] {
-		suffix++
-	}
-	a, b := old[prefix:len(old)-suffix], cur[prefix:len(cur)-suffix]
-
-	markGap := func(oldGap, curStart, curEnd int) {
-		for j := curStart; j < curEnd; j++ {
-			if oldGap > 0 {
-				marks[prefix+j] = '~'
-			} else {
-				marks[prefix+j] = '+'
-			}
-		}
-		if curStart == curEnd && oldGap > 0 && len(marks) > 0 {
-			marks[min(prefix+curStart, len(marks)-1)] = '-'
-		}
-	}
-
-	const maxCells = 1 << 20
-	if len(a)*len(b) > maxCells {
-		markGap(len(a), 0, len(b))
-		return marks
-	}
-	// lcs[i][j] is the LCS length of a[i:] and b[j:].
-	width := len(b) + 1
-	lcs := make([]int32, (len(a)+1)*width)
-	for i := len(a) - 1; i >= 0; i-- {
-		for j := len(b) - 1; j >= 0; j-- {
-			if a[i] == b[j] {
-				lcs[i*width+j] = lcs[(i+1)*width+j+1] + 1
-			} else {
-				lcs[i*width+j] = max(lcs[(i+1)*width+j], lcs[i*width+j+1])
-			}
-		}
-	}
-	i, j, gapI, gapJ := 0, 0, 0, 0
-	for i < len(a) && j < len(b) {
-		switch {
-		case a[i] == b[j]:
-			markGap(i-gapI, gapJ, j)
-			i, j = i+1, j+1
-			gapI, gapJ = i, j
-		case lcs[(i+1)*width+j] >= lcs[i*width+j+1]:
-			i++
-		default:
-			j++
-		}
-	}
-	markGap(len(a)-gapI, gapJ, len(b))
-	return marks
 }

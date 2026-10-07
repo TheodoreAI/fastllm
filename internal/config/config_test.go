@@ -15,6 +15,7 @@ func TestLoadAndSaveSettings(t *testing.T) {
 	cfgPath := filepath.Join(tempDir, ".fastllm", "config.json")
 	s := DefaultSettings()
 	s.DefaultModel = "custom-model"
+	s.UserShell = "/bin/bash"
 	s.AddOrUpdateModel(ModelEndpoint{
 		ID:   "custom-model",
 		Name: "Custom Model",
@@ -34,6 +35,9 @@ func TestLoadAndSaveSettings(t *testing.T) {
 	}
 	if loaded.DefaultModel != "custom-model" {
 		t.Errorf("expected default model 'custom-model', got %q", loaded.DefaultModel)
+	}
+	if loaded.UserShell != "/bin/bash" {
+		t.Errorf("user shell setting lost: %q", loaded.UserShell)
 	}
 
 	m := loaded.FindModel("custom-model")

@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"context"
 	"runtime"
 	"strings"
 	"sync"
@@ -10,9 +11,10 @@ import (
 
 func TestProcessManager(t *testing.T) {
 	pm := NewProcessManager()
+	t.Cleanup(pm.KillAll)
 
 	cmdStr := "echo hello-async"
-	proc, err := pm.Start(cmdStr, ".")
+	p, proc, err := pm.StartTracked(cmdStr, ".")
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
@@ -20,8 +22,13 @@ func TestProcessManager(t *testing.T) {
 		t.Fatalf("invalid process record: %+v", proc)
 	}
 
-	// Wait briefly for completion
-	time.Sleep(300 * time.Millisecond)
+	// Startup files and a busy host can take longer than a fixed sleep.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	result, err := p.Wait(ctx)
+	if err != nil || result.Err() != nil {
+		t.Fatalf("process did not complete: %+v %v", result, err)
+	}
 
 	_, out, err := pm.Status(proc.ID)
 	if err != nil {

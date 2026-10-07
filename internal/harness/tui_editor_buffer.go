@@ -515,7 +515,20 @@ func runeColAt(line string, want int) int {
 // [selStart, selEnd). selEnd past the end of the text selects the line
 // break, shown as one highlighted cell.
 type editorLineMarks struct {
-	cursor, selStart, selEnd int
+	cursor, selStart, selEnd   int
+	background, wordBackground string
+	changed                    []editorColumnRange
+}
+
+type editorColumnRange struct{ start, end int }
+
+func (m editorLineMarks) changeStyle(col int) string {
+	for _, span := range m.changed {
+		if col >= span.start && col < span.end {
+			return m.wordBackground
+		}
+	}
+	return m.background
 }
 
 var noLineMarks = editorLineMarks{cursor: -1}
@@ -586,7 +599,11 @@ func renderEditorLine(tokens []Token, left, width int, marks editorLineMarks) st
 			case start >= marks.selStart && start < marks.selEnd && selBg != "":
 				setStyle(selBg + color)
 			default:
-				setStyle(color)
+				bg := ""
+				if colors {
+					bg = marks.changeStyle(start)
+				}
+				setStyle(bg + color)
 			}
 			sb.WriteString(glyph)
 			drawn += ansi.StringWidth(glyph)
@@ -611,7 +628,13 @@ func renderEditorLine(tokens []Token, left, width int, marks editorLineMarks) st
 		}
 	}
 	if drawn < width {
+		if colors && marks.background != "" {
+			sb.WriteString(marks.background)
+		}
 		sb.WriteString(strings.Repeat(" ", width-drawn))
+		if colors && marks.background != "" {
+			sb.WriteString(ansiReset)
+		}
 	}
 	return sb.String()
 }

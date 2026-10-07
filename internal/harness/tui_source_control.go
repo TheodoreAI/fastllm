@@ -84,6 +84,7 @@ type sourceEditorHeadMsg struct {
 	editor *editorSession
 	head   string
 	err    error
+	id     uint64
 }
 
 func (m *teaModel) openSourceControl(path string) tea.Cmd {
@@ -299,13 +300,17 @@ func (m *teaModel) handleSourceResult(msg tea.Msg) (bool, tea.Cmd) {
 	s := &m.source
 	switch msg := msg.(type) {
 	case sourceEditorHeadMsg:
-		if msg.editor == m.editor && msg.err == nil {
-			m.editor.hasHead = true
-			if msg.head != "" {
-				text, _, _ := splitFileContent(msg.head)
-				m.editor.head = strings.Split(text, "\n")
+		if m.editor != nil && msg.editor == m.editor && msg.id == m.editor.baselineID {
+			m.editor.baselineLoading = false
+			m.editor.baselineError = ""
+			m.editor.hasHead = msg.err == nil
+			if msg.err != nil {
+				m.editor.baselineError = msg.err.Error()
+			} else {
+				m.editor.head = editorHeadLines(msg.head)
 			}
 			m.editor.marksStale = true
+			m.editor.headTokens = nil
 		}
 		return true, nil
 	case sourceStatusMsg:
@@ -342,6 +347,9 @@ func (m *teaModel) handleSourceResult(msg tea.Msg) (bool, tea.Cmd) {
 			return true, nil
 		}
 		cmd := m.loadSourceSelection()
+		if m.editor != nil && (changed || m.editor.baselineError != "") {
+			cmd = tea.Batch(cmd, m.editorHeadCmd())
+		}
 		if changed || len(s.history) == 0 {
 			s.history = nil
 			return true, tea.Batch(cmd, m.sourceHistoryCmd(0))
@@ -760,19 +768,29 @@ func (m *teaModel) openSourceEditor() tea.Cmd {
 		return nil
 	}
 	s.pane = 1
-	editor, root, path := m.editor, s.root, e.path
+	return m.editorHeadCmd()
+}
+
+func (m *teaModel) editorHeadCmd() tea.Cmd {
+	editor := m.editor
+	if editor == nil {
+		return nil
+	}
+	editor.baselineID++
+	id, root, path := editor.baselineID, editor.root, editor.rel
+	editor.baselineLoading = true
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		head, err := gitrepo.ShowHEAD(ctx, root, path)
-		return sourceEditorHeadMsg{editor, head, err}
+		head, err := gitrepo.HeadContents(ctx, root, path)
+		return sourceEditorHeadMsg{editor: editor, head: head, err: err, id: id}
 	}
 }
 
 func (m *teaModel) sourceGeometry() (sidebar, detail, height int) {
-	width := max(1, m.width)
+	width := m.frameWidth()
 	height = max(1, m.height-5)
-	if width < 90 {
+	if m.width < 90 {
 		return width, width, height
 	}
 	sidebar = min(36, width/3)
@@ -1107,6 +1125,15 @@ func (m *teaModel) handleSourceEditorMouse(msg tea.MouseMsg, x int) {
 	mouse := msg.Mouse()
 	mouse.X -= x
 	mouse.Y -= 2
+	// All-motion events also arrive over the sidebar and toolbar. Those
+	// cannot select editor text or revive a drag after scrolling.
+	_, width, height := m.sourceGeometry()
+	if _, release := msg.(tea.MouseReleaseMsg); !release && (mouse.X < 0 || mouse.X >= width || mouse.Y < 0 || mouse.Y >= height) {
+		if _, motion := msg.(tea.MouseMotionMsg); motion {
+			m.editor.dragging = false
+		}
+		return
+	}
 	switch msg.(type) {
 	case tea.MouseClickMsg:
 		m.handleEditorMouse(tea.MouseClickMsg(mouse))
