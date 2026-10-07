@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -48,12 +49,31 @@ const debounceWindow = 300 * time.Millisecond
 // afterward — e.g. ApproveWrite's os.MkdirAll landing a model-proposed
 // file in a path that didn't exist when this watch started — is still
 // caught without waiting for an unrelated git action to force a refresh.
-func Watch(ctx context.Context, root string) (changes <-chan struct{}, stop func(), err error) {
-	gitDir := filepath.Join(root, ".git")
+func Watch(ctx context.Context, root string) (<-chan struct{}, func(), error) {
+	changes, _, stop, err := WatchWithErrors(ctx, root)
+	return changes, stop, err
+}
+
+// WatchWithErrors also reports runtime watcher failures to clients with a status area.
+func WatchWithErrors(ctx context.Context, root string) (changes <-chan struct{}, failures <-chan error, stop func(), err error) {
+	root, err = Root(ctx, root)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	gitPath, err := run(ctx, root, "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	gitDir := filepath.Clean(strings.TrimSpace(gitPath))
+	commonPath, err := run(ctx, root, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	commonDir := filepath.Clean(strings.TrimSpace(commonPath))
 
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	// Best-effort: if this fails (e.g. root isn't a repo after all, a
@@ -74,7 +94,10 @@ func Watch(ctx context.Context, root string) (changes <-chan struct{}, stop func
 	for dir := range dirs {
 		// Best-effort: a directory that no longer exists just means
 		// nothing to watch there.
-		_ = w.Add(dir)
+		if addErr := w.Add(dir); addErr != nil && dir == root {
+			w.Close()
+			return nil, nil, nil, addErr
+		}
 	}
 
 	// root itself is always watched (above) so top-level file/directory
@@ -97,9 +120,14 @@ func Watch(ctx context.Context, root string) (changes <-chan struct{}, stop func
 			}
 		}
 	}
+	delete(ignoredTopLevel, gitDir)
+	delete(ignoredTopLevel, commonDir)
 
 	watchTargets := []string{
 		gitDir,
+		commonDir,
+		filepath.Join(commonDir, "refs"),
+		filepath.Join(commonDir, "refs", "heads"),
 		filepath.Join(gitDir, "refs"),
 		filepath.Join(gitDir, "refs", "heads"),
 		filepath.Join(gitDir, "refs", "tags"),
@@ -111,7 +139,7 @@ func Watch(ctx context.Context, root string) (changes <-chan struct{}, stop func
 		// there, not a failure of the whole watcher.
 		_ = w.Add(dir)
 	}
-	_ = filepath.WalkDir(filepath.Join(gitDir, "refs"), func(path string, d fs.DirEntry, err error) error {
+	_ = filepath.WalkDir(filepath.Join(commonDir, "refs"), func(path string, d fs.DirEntry, err error) error {
 		if err == nil && d != nil && d.IsDir() {
 			_ = w.Add(path)
 		}
@@ -120,18 +148,30 @@ func Watch(ctx context.Context, root string) (changes <-chan struct{}, stop func
 	_ = w.Add(filepath.Join(gitDir, "index"))
 
 	out := make(chan struct{}, 1)
+	errOut := make(chan error, 1)
 	done := make(chan struct{})
 
 	go func() {
 		var debounce *time.Timer
+		var tick <-chan time.Time
 		defer func() {
 			if debounce != nil {
 				debounce.Stop()
 			}
 			close(out)
+			close(errOut)
+			w.Close()
 		}()
 		for {
 			select {
+			case <-ctx.Done():
+				return
+			case <-tick:
+				tick = nil
+				select {
+				case out <- struct{}{}:
+				default:
+				}
 			case <-done:
 				return
 			case ev, ok := <-w.Events:
@@ -172,34 +212,32 @@ func Watch(ctx context.Context, root string) (changes <-chan struct{}, stop func
 					}
 				}
 				if debounce == nil {
-					debounce = time.AfterFunc(debounceWindow, func() {
-						select {
-						case out <- struct{}{}:
-						default: // a notification is already pending — coalesce
-						}
-					})
+					debounce = time.NewTimer(debounceWindow)
 				} else {
+					if !debounce.Stop() {
+						select {
+						case <-debounce.C:
+						default:
+						}
+					}
 					debounce.Reset(debounceWindow)
 				}
-			case _, ok := <-w.Errors:
+				tick = debounce.C
+			case failure, ok := <-w.Errors:
 				if !ok {
 					return
 				}
-				// fsnotify surfaces watcher-internal errors (e.g. a watched
-				// path removed out from under it) on this channel — nothing
-				// actionable for a best-effort live-refresh signal, so it's
-				// dropped rather than propagated; the SSE connection stays
-				// up and a subsequent poll-on-reconnect (if the frontend
-				// ever adds one) would still catch up.
+				select {
+				case errOut <- failure:
+				default:
+				}
 			}
 		}
 	}()
 
-	stop = func() {
-		close(done)
-		w.Close()
-	}
-	return out, stop, nil
+	var once sync.Once
+	stop = func() { once.Do(func() { close(done); w.Close() }) }
+	return out, errOut, stop, nil
 }
 
 // isUnderAny reports whether path is equal to, or nested inside, any

@@ -78,9 +78,10 @@ var commandSections = []commandSection{
 		{"/models add <id> <url>", "Register a new inference endpoint in config.json"},
 	}},
 	{"Git & Checkpoints", []commandRow{
-		{"/changes [file]", "Inspect changed files list & per-file diff modal (Alt+C / Ctrl+O)"},
+		{"/git", "Open Source Control workspace (Ctrl+X then G)"},
+		{"/changes [file]", "Review changed files in Source Control (Alt+C / Ctrl+O)"},
 		{"/diff [file]", "Syntax-highlighted diff of uncommitted changes (or inspect file)"},
-		{"/discard [file|all]", "Discard uncommitted edits for a file or all files ('x' in diff modal)"},
+		{"/discard [file|all]", "Confirm discard of unstaged changes, preserving the index"},
 		{"/undo [force]", "Revert the model's file changes from the last prompt (force: even files edited since)"},
 		{"/rules", "Inspect discovered workspace instruction files"},
 		{"/skills [list|name] [task]", "List, inspect, or run an installed skill"},

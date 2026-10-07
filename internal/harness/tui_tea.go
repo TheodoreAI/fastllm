@@ -203,8 +203,15 @@ type teaShellDoneMsg struct {
 	ProcID       string
 }
 type teaGitWatchMsg struct{}
+type teaGitWatchErrorMsg struct {
+	source <-chan error
+	err    error
+}
 type teaGitRefreshMsg struct {
-	status gitrepo.RepoStatus
+	status          gitrepo.RepoStatus
+	workspace, root string
+	id              uint64
+	err             error
 }
 type teaImageDoneMsg struct {
 	Path     string
@@ -215,16 +222,20 @@ type teaImageDoneMsg struct {
 
 // teaModel holds the Bubble Tea state
 type teaModel struct {
-	runner        *Runner
-	workingDir    string
-	modelName     string
-	mode          tuiMode
-	configPath    string
-	checkpointMgr *CheckpointManager
-	processMgr    *ProcessManager
-	rules         []RuleFile
-	skills        []Skill
-	settings      *config.Settings
+	source           sourceControl
+	sourceExitEditor bool
+	gitRefreshID     uint64
+	gitRoot          string
+	runner           *Runner
+	workingDir       string
+	modelName        string
+	mode             tuiMode
+	configPath       string
+	checkpointMgr    *CheckpointManager
+	processMgr       *ProcessManager
+	rules            []RuleFile
+	skills           []Skill
+	settings         *config.Settings
 
 	// UI components
 	viewport viewport.Model
@@ -312,9 +323,10 @@ type teaModel struct {
 	// hits holds the click targets of the last frame drawn (tui_hits.go).
 	hits hitMap
 	// hover is the ID of the click target under the pointer, or "".
-	hover        string
-	gitWatchChan <-chan struct{}
-	gitWatchStop func()
+	hover          string
+	gitWatchChan   <-chan struct{}
+	gitWatchStop   func()
+	gitWatchErrors <-chan error
 
 	// blurred is set while the terminal window is in the background; the
 	// spinner stops ticking then. finishedAway records that a turn or shell
@@ -548,38 +560,55 @@ func (m *teaModel) initGitWatcher() {
 	if m.workingDir == "" {
 		return
 	}
-	ch, stop, err := gitrepo.Watch(context.Background(), m.workingDir)
+	ch, failures, stop, err := gitrepo.WatchWithErrors(context.Background(), m.workingDir)
 	if err == nil {
 		m.gitWatchChan = ch
 		m.gitWatchStop = stop
+		m.gitWatchErrors = failures
+		m.source.watchError = ""
+	} else {
+		m.source.watchError = "Live refresh unavailable: " + err.Error() + ". Use Refresh [r]."
 	}
 }
 
 func (m *teaModel) refreshGitStatusCmd() tea.Cmd {
-	root := m.workingDir
+	workspace := m.workingDir
+	m.gitRefreshID++
+	id := m.gitRefreshID
 	return func() tea.Msg {
-		if root == "" {
-			return teaGitRefreshMsg{status: gitrepo.RepoStatus{IsRepo: false}}
+		if workspace == "" {
+			return teaGitRefreshMsg{workspace: workspace, id: id, status: gitrepo.RepoStatus{IsRepo: false}}
 		}
-		status, err := gitrepo.GetRepoStatus(context.Background(), root)
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		root, err := gitrepo.Root(ctx, workspace)
 		if err != nil {
-			return teaGitRefreshMsg{status: gitrepo.RepoStatus{IsRepo: false}}
+			return teaGitRefreshMsg{workspace: workspace, id: id, err: err}
 		}
-		return teaGitRefreshMsg{status: status}
+		status, err := gitrepo.GetRepoStatus(ctx, root)
+		return teaGitRefreshMsg{workspace: workspace, root: root, id: id, status: status, err: err}
 	}
 }
 
 func (m *teaModel) waitForGitWatch() tea.Cmd {
 	ch := m.gitWatchChan
+	failures := m.gitWatchErrors
 	if ch == nil {
 		return nil
 	}
 	return func() tea.Msg {
-		_, ok := <-ch
-		if !ok {
-			return nil
+		select {
+		case failure, ok := <-failures:
+			if !ok {
+				return nil
+			}
+			return teaGitWatchErrorMsg{failures, failure}
+		case _, ok := <-ch:
+			if !ok {
+				return nil
+			}
+			return teaGitWatchMsg{}
 		}
-		return teaGitWatchMsg{}
 	}
 }
 
@@ -597,6 +626,9 @@ func (m *teaModel) Init() tea.Cmd {
 
 // Update implements tea.Model
 func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if handled, cmd := m.handleSourceResult(msg); handled {
+		return m, cmd
+	}
 	var cmds []tea.Cmd
 	// Keys can change the input on any of the many return paths below, so the
 	// dropdown catches up once, after the key has been fully handled.
@@ -632,6 +664,17 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.PasteMsg:
+		if m.source.active && m.editor == nil {
+			if m.source.pane == 2 {
+				m.source.message += msg.Content
+			} else if m.source.dialog != "" {
+				m.source.dialogText += printableRunes([]rune(msg.Content))
+			} else if m.source.queryMode != "" {
+				m.source.filter += printableRunes([]rune(msg.Content))
+				m.source.rebuild()
+			}
+			return m, nil
+		}
 		// Terminals deliver a paste as one message, newlines included; it falls
 		// through to the textarea below, which inserts it literally. Modals and
 		// prompts have no text box for it, so drop it there rather than typing
@@ -723,8 +766,43 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.commandPalette != nil {
 			return m, m.handleCommandPaletteKey(msg)
 		}
+		if m.source.active && m.editor == nil {
+			return m, m.handleSourceKey(msg)
+		}
 		if m.editor != nil {
-			return m, m.handleEditorKey(msg)
+			if msg.String() == "esc" && m.editor.prompt == editorPromptNone && m.source.busy && m.source.cancel != nil {
+				m.source.cancel()
+				return m, nil
+			}
+			if m.source.active && m.editor.prompt == editorPromptNone {
+				if msg.String() == "tab" || msg.String() == "shift+tab" {
+					return m, m.handleSourceKey(msg)
+				}
+				if m.source.pane != 1 {
+					return m, m.handleSourceKey(msg)
+				}
+			}
+			if msg.String() == "esc" && m.editor.prompt == editorPromptNone && (m.isExecuting || m.shellExecuting) {
+				m.cancelActiveOperation()
+				return m, nil
+			}
+			cmd := m.handleEditorKey(msg)
+			if m.source.active && m.editor == nil && m.source.pendingAction != "" {
+				action := m.source.pendingAction
+				m.source.pendingAction = ""
+				if action == "branch" {
+					return m, tea.Batch(cmd, m.sourceBranchesCmd())
+				}
+				m.source.cursor = m.source.pendingIndex
+				for i, e := range m.source.entries {
+					if e.key() == m.source.pendingKey {
+						m.source.cursor = i
+						break
+					}
+				}
+				return m, tea.Batch(cmd, m.loadSourceSelection())
+			}
+			return m, cmd
 		}
 		if m.skillsModal {
 			switch msg.String() {
@@ -850,8 +928,7 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if m.changes.cursor >= 0 && m.changes.cursor < len(m.changes.files) {
 						targetIdx = m.changes.cursor
 					}
-					m.openDiffModal(targetIdx)
-					return m, nil
+					return m, m.openSourceControl(m.changes.files[targetIdx].Path)
 				}
 			case 'm':
 				m.openModelsModal()
@@ -928,8 +1005,7 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.changes.cursor >= 0 && m.changes.cursor < len(m.changes.files) {
 					targetIdx = m.changes.cursor
 				}
-				m.openDiffModal(targetIdx)
-				return m, nil
+				return m, m.openSourceControl(m.changes.files[targetIdx].Path)
 			}
 
 		case "alt+enter", "shift+enter":
@@ -1013,6 +1089,9 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.MouseMsg:
+		if m.source.active && m.pendingPermission == nil && m.commandPalette == nil {
+			return m, m.handleSourceMouse(msg)
+		}
 		click, isClick := msg.(tea.MouseClickMsg)
 		isClick = isClick && click.Button == tea.MouseLeft
 		if motion, ok := msg.(tea.MouseMotionMsg); ok {
@@ -1050,9 +1129,12 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.cyclePermissionMode()
 			case strings.HasPrefix(id, hitChangeFile):
 				if idx, err := strconv.Atoi(strings.TrimPrefix(id, hitChangeFile)); err == nil {
-					m.openDiffModal(idx)
-					return m, nil
+					if idx >= 0 && idx < len(m.changes.files) {
+						return m, m.openSourceControl(m.changes.files[idx].Path)
+					}
 				}
+			case id == "source:open":
+				return m, m.openSourceControl("")
 			}
 		}
 		// Mouse-wheel events belong exclusively to the conversation viewport.
@@ -1270,9 +1352,21 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case teaGitWatchMsg:
-		cmds = append(cmds, m.refreshGitStatusCmd(), m.waitForGitWatch())
+		cmds = append(cmds, m.refreshGitStatusCmd(), m.refreshSourceCmd(), m.waitForGitWatch())
+	case teaGitWatchErrorMsg:
+		if msg.source == m.gitWatchErrors {
+			m.source.watchError = "Live refresh error: " + msg.err.Error() + ". Use Refresh [r]."
+			return m, m.waitForGitWatch()
+		}
 
 	case teaGitRefreshMsg:
+		if msg.id != 0 && (msg.workspace != m.workingDir || msg.id != m.gitRefreshID) {
+			return m, nil
+		}
+		if msg.err != nil {
+			return m, nil
+		}
+		m.gitRoot = msg.root
 		m.changes.UpdateFromGit(msg.status)
 
 	case teaShellDoneMsg:
@@ -1498,6 +1592,10 @@ func (m *teaModel) cancelActiveOperation() {
 }
 
 func (m *teaModel) handleShellSubmit(cmdStr string) tea.Cmd {
+	if m.source.busy {
+		m.statusNotice = "Wait for the Git operation before running a shell command."
+		return nil
+	}
 	if m.processMgr == nil {
 		m.processMgr = NewProcessManager()
 	}
@@ -1824,6 +1922,12 @@ func (m *teaModel) handleBgSlashCommand(inputVal string) tea.Cmd {
 }
 
 func (m *teaModel) changeWorkingDirectory(path string) error {
+	if m.source.busy {
+		return fmt.Errorf("wait for the Git operation before changing workspaces")
+	}
+	if m.editor != nil && m.editor.dirty {
+		return fmt.Errorf("save or discard the unsaved editor buffer first")
+	}
 	newDir, err := resolveInteractiveDirectory(m.workingDir, path)
 	if err != nil {
 		return err
@@ -1833,6 +1937,8 @@ func (m *teaModel) changeWorkingDirectory(path string) error {
 		return err
 	}
 	m.workingDir = newDir
+	m.source = sourceControl{refreshID: m.source.refreshID + 1, selectionID: m.source.selectionID + 1, historyID: m.source.historyID + 1, branchID: m.source.branchID + 1}
+	m.gitRoot = ""
 	m.initGitWatcher()
 	m.permissionController().SetWorkspace(newDir)
 	m.checkpointMgr = NewCheckpointManager(newDir)
@@ -1878,6 +1984,10 @@ func setFirstLinePrompt(ta *textarea.Model, prompt string) {
 }
 
 func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
+	if m.source.busy && inputVal != "/git" && inputVal != "/changes" {
+		m.statusNotice = "Wait for the Git operation before starting work."
+		return nil
+	}
 	skillPrompt := ""
 	// 1. Check for slash commands
 	if strings.HasPrefix(inputVal, "/") {
@@ -1941,24 +2051,10 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 			return m.clearStatusAfter(2 * time.Second)
 
 		case "/changes":
-			if len(m.changes.files) == 0 {
-				m.statusNotice = "No modified files in session or working tree."
-				return m.clearStatusAfter(2 * time.Second)
-			}
-			targetIdx := 0
-			if len(parts) > 1 {
-				arg := strings.TrimSpace(inputVal[len(parts[0]):])
-				for i, f := range m.changes.files {
-					if f.Path == arg || strings.HasSuffix(f.Path, arg) {
-						targetIdx = i
-						break
-					}
-				}
-			} else if m.changes.cursor >= 0 && m.changes.cursor < len(m.changes.files) {
-				targetIdx = m.changes.cursor
-			}
-			m.openDiffModal(targetIdx)
-			return nil
+			return m.openSourceControl(strings.TrimSpace(strings.TrimPrefix(inputVal, parts[0])))
+
+		case "/git":
+			return m.openSourceControl("")
 
 		case "/edit", "/nano", "/vim":
 			if len(parts) < 2 {
@@ -1987,42 +2083,14 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 				return nil
 			}
 			arg := strings.TrimSpace(inputVal[len(parts[0]):])
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			if arg == "all" || arg == "." {
-				if err := gitrepo.DiscardAll(ctx, m.workingDir); err != nil {
-					m.appendHistory(styleDiffDel.Render(fmt.Sprintf("Discard error: %v\n\n", err)))
-				} else {
-					m.statusNotice = "✓ Discarded all uncommitted changes."
-					m.appendHistory(styleStatusNotice.Render("✓ Discarded all uncommitted changes across working tree.\n\n"))
-				}
-				return m.refreshGitStatusCmd()
-			}
-
-			matchedPath := arg
-			isUntracked := false
-			for _, f := range m.changes.files {
-				if f.Path == arg || strings.HasSuffix(f.Path, arg) {
-					matchedPath = f.Path
-					isUntracked = f.Status == "?"
-					break
-				}
-			}
-			if err := gitrepo.RemoveFileChanges(ctx, m.workingDir, matchedPath, isUntracked); err != nil {
-				m.appendHistory(styleDiffDel.Render(fmt.Sprintf("Discard error: %v\n\n", err)))
-			} else {
-				m.statusNotice = fmt.Sprintf("✓ Discarded %s.", filepath.Base(matchedPath))
-				m.appendHistory(styleStatusNotice.Render(fmt.Sprintf("✓ Discarded changes in %s.\n\n", matchedPath)))
-			}
-			return m.refreshGitStatusCmd()
-
+			m.source.requestedDiscard = arg
+			return m.openSourceControl("")
 		case "/diff":
 			if len(parts) > 1 {
 				arg := strings.TrimSpace(inputVal[len(parts[0]):])
 				for i, f := range m.changes.files {
 					if f.Path == arg || strings.HasSuffix(f.Path, arg) {
-						m.openDiffModal(i)
-						return nil
+						return m.openSourceControl(m.changes.files[i].Path)
 					}
 				}
 			}
@@ -2856,6 +2924,10 @@ func (m *teaModel) prevDiffFile() {
 }
 
 func (m *teaModel) toggleStageCurrentFile() {
+	if reason := m.sourceBusyReason(); reason != "" {
+		m.statusNotice = reason
+		return
+	}
 	if !m.checkpointMgr.IsGitRepo() || m.diffCursor < 0 || m.diffCursor >= len(m.changes.files) {
 		return
 	}
@@ -2892,6 +2964,10 @@ func (m *teaModel) cycleDiffSource() {
 }
 
 func (m *teaModel) discardCurrentFile() {
+	if reason := m.sourceBusyReason(); reason != "" {
+		m.statusNotice = reason
+		return
+	}
 	if m.diffCursor < 0 || m.diffCursor >= len(m.changes.files) {
 		return
 	}
@@ -2902,7 +2978,13 @@ func (m *teaModel) discardCurrentFile() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		isUntracked := f.Status == "?"
-		if err := gitrepo.RemoveFileChanges(ctx, m.workingDir, f.Path, isUntracked); err != nil {
+		var err error
+		if isUntracked {
+			err = gitrepo.DeleteUntracked(ctx, m.workingDir, []string{f.Path})
+		} else {
+			err = gitrepo.Discard(ctx, m.workingDir, []string{f.Path})
+		}
+		if err != nil {
 			m.statusNotice = fmt.Sprintf("Discard failed: %v", err)
 			return
 		}
@@ -3202,6 +3284,13 @@ func (m *teaModel) render() string {
 		return "Initializing fastllm..."
 	}
 	m.hits.reset()
+	if m.source.active && m.pendingPermission == nil && (m.pendingPlan == "" || m.isExecuting) {
+		frame := m.renderSource()
+		if m.commandPalette != nil {
+			return m.overlayModal(frame, m.renderCommandPalette())
+		}
+		return frame
+	}
 	if m.editorShown() {
 		m.hits.add(hitModal, 0, 0, m.width, m.height)
 		return m.renderEditor()

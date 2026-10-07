@@ -1,0 +1,4 @@
+- decided_at: 2026-10-07T15:53:29+00:00
+  event: initial
+  value: Separate workspace state with generation-tagged asynchronous commands and one mutation at a time
+  reason: Preserves chat and drafts while reusing editor/diff rendering; extending execution modes would conflate navigation with running work

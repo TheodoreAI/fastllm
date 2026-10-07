@@ -87,6 +87,10 @@ func (m *teaModel) diffModalGeometry() (modalWidth, vpWidth, vpHeight int, split
 // lays it out. Side by side, the diff carries the whole file, so both
 // columns read as complete versions rather than hunks.
 func (m *teaModel) loadDiffText() {
+	root := m.workingDir
+	if m.gitRoot != "" {
+		root = m.gitRoot
+	}
 	f, ok := m.currentDiffFile()
 	if !ok {
 		return
@@ -100,7 +104,7 @@ func (m *teaModel) loadDiffText() {
 	case !m.checkpointMgr.IsGitRepo():
 		text = fmt.Sprintf("File: %s\nAdded: +%d lines\nRemoved: -%d lines", f.Path, f.Added, f.Removed)
 	case f.Status == "?":
-		fullPath := filepath.Join(m.workingDir, filepath.FromSlash(f.Path))
+		fullPath := filepath.Join(root, filepath.FromSlash(f.Path))
 		if data, err := os.ReadFile(fullPath); err == nil {
 			text = FormatUntrackedAsDiff(f.Path, string(data))
 		} else {
@@ -115,9 +119,9 @@ func (m *teaModel) loadDiffText() {
 			if split {
 				contextLines = gitrepo.FullFileContext
 			}
-			text, err = gitrepo.DiffHEAD(ctx, m.workingDir, f.Path, contextLines)
+			text, err = gitrepo.DiffHEAD(ctx, root, f.Path, contextLines)
 		default:
-			text, err = gitrepo.Diff(ctx, m.workingDir, f.Path, m.diffSource == diffSourceStaged)
+			text, err = gitrepo.Diff(ctx, root, f.Path, m.diffSource == diffSourceStaged)
 		}
 		cancel()
 		if err != nil {

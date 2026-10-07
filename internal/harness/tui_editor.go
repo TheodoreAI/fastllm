@@ -44,6 +44,7 @@ const (
 type editorSession struct {
 	*fileEditor
 	path string // absolute
+	root string // fixed user-driven file context, independent of agent workspace
 	rel  string // relative to the workspace, slash-separated
 	// crlf and finalNL are the file's line endings, kept on save.
 	crlf, finalNL bool
@@ -105,13 +106,24 @@ func detectIndent(text string) string {
 }
 
 // editorFiles is the files layer the editor writes through.
-func (m *teaModel) editorFiles() *files.Reader { return files.New(m.workingDir, true) }
+func (m *teaModel) editorRoot() string {
+	if m.source.active && m.source.root != "" {
+		return m.source.root
+	}
+	return m.workingDir
+}
+func (m *teaModel) editorFiles() *files.Reader { return files.New(m.editorRoot(), true) }
 
 // openEditor opens requested (relative to the workspace, or absolute
 // inside it) in the editor. A path that does not exist yet opens empty and
 // is created on save.
 func (m *teaModel) openEditor(requested string, returnToDiff bool) error {
-	requested = strings.TrimSpace(requested)
+	if !m.source.active {
+		requested = strings.TrimSpace(requested)
+	}
+	if m.editor != nil && m.editor.dirty {
+		return errors.New("save or discard the unsaved buffer first")
+	}
 	if requested == "" {
 		return errors.New("no file named")
 	}
@@ -119,7 +131,7 @@ func (m *teaModel) openEditor(requested string, returnToDiff bool) error {
 	if err != nil {
 		return err
 	}
-	rel, err := filepath.Rel(m.workingDir, path)
+	rel, err := filepath.Rel(m.editorRoot(), path)
 	if err != nil {
 		rel = path
 	}
@@ -152,6 +164,7 @@ func (m *teaModel) openEditor(requested string, returnToDiff bool) error {
 	s := &editorSession{
 		fileEditor:   newFileEditor(text, DetectLanguage(path)),
 		path:         path,
+		root:         m.editorRoot(),
 		rel:          rel,
 		crlf:         crlf,
 		finalNL:      finalNL,
@@ -161,9 +174,9 @@ func (m *teaModel) openEditor(requested string, returnToDiff bool) error {
 		marksStale:   true,
 		returnToDiff: returnToDiff,
 	}
-	if m.checkpointMgr != nil && m.checkpointMgr.IsGitRepo() {
+	if !m.source.active && m.checkpointMgr != nil && m.checkpointMgr.IsGitRepo() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		head, err := gitrepo.ShowHEAD(ctx, m.workingDir, rel)
+		head, err := gitrepo.ShowHEAD(ctx, m.editorRoot(), rel)
 		cancel()
 		if err == nil {
 			s.hasHead = true
@@ -185,6 +198,13 @@ func (m *teaModel) openEditor(requested string, returnToDiff bool) error {
 func (m *teaModel) closeEditor() {
 	s := m.editor
 	m.editor = nil
+	if m.source.active {
+		if m.sourceExitEditor {
+			m.sourceExitEditor = false
+			m.leaveSource()
+		}
+		return
+	}
 	if s != nil && s.returnToDiff {
 		m.syncGitStatus()
 		if idx := m.changedFileIndex(s.rel); idx >= 0 {
@@ -225,6 +245,10 @@ func (m *teaModel) changedFileIndex(rel string) int {
 // what to do if something did.
 func (m *teaModel) saveEditor(force bool) tea.Cmd {
 	s := m.editor
+	if reason := m.sourceBusyReason(); reason != "" {
+		s.notice = reason
+		return nil
+	}
 	if !force {
 		current, err := os.ReadFile(s.path)
 		existsNow := err == nil
@@ -234,7 +258,11 @@ func (m *teaModel) saveEditor(force bool) tea.Cmd {
 		}
 	}
 	content := s.fileContent()
-	if err := m.editorFiles().Write(s.rel, content); err != nil {
+	root := s.root
+	if root == "" {
+		root = m.editorRoot()
+	}
+	if err := files.New(root, true).Write(s.rel, content); err != nil {
 		s.notice = ColorRed("Save failed: " + err.Error())
 		return nil
 	}
@@ -243,8 +271,8 @@ func (m *teaModel) saveEditor(force bool) tea.Cmd {
 	s.dirty = false
 	s.marksStale = true
 	s.prompt = editorPromptNone
-	s.notice = ColorGreen("✓ Saved " + s.rel)
-	return m.refreshGitStatusCmd()
+	s.notice = ColorGreen("✓ Saved " + sourceLabel(s.rel))
+	return tea.Batch(m.refreshGitStatusCmd(), m.refreshSourceCmd())
 }
 
 // reloadEditor replaces the buffer with the file on disk, keeping the
@@ -267,6 +295,14 @@ func (m *teaModel) reloadEditor() {
 
 // editorShowDiff opens the diff modal on the editor's file.
 func (m *teaModel) editorShowDiff() {
+	if m.source.active {
+		if m.editor.dirty {
+			m.editor.prompt = editorPromptClose
+		} else {
+			m.closeEditor()
+		}
+		return
+	}
 	s := m.editor
 	if s.dirty {
 		s.notice = ColorYellow("Save with Ctrl+S first: the diff compares the file on disk.")
@@ -285,6 +321,9 @@ func (m *teaModel) editorShowDiff() {
 // editorGeometry lays out the editor: a title row, the text, a status row.
 func (m *teaModel) editorGeometry() (bodyHeight, gutterWidth, codeWidth int) {
 	width, height := max(m.width, 20), max(m.height, 5)
+	if m.source.active {
+		_, width, height = m.sourceGeometry()
+	}
 	bodyHeight = height - 2
 	numWidth := 3
 	if m.editor != nil {
@@ -310,6 +349,8 @@ func (m *teaModel) handleEditorKey(msg tea.KeyPressMsg) tea.Cmd {
 			m.closeEditor()
 		case "esc", "ctrl+c":
 			s.prompt = editorPromptNone
+			m.sourceExitEditor = false
+			m.source.pendingAction = ""
 		}
 		return nil
 	case editorPromptConflict:
@@ -604,6 +645,9 @@ func (m *teaModel) handleEditorMouse(msg tea.MouseMsg) {
 func (m *teaModel) renderEditor() string {
 	s := m.editor
 	width := max(m.width, 20)
+	if m.source.active {
+		_, width, _ = m.sourceGeometry()
+	}
 	bodyHeight, gutterWidth, codeWidth := m.editorGeometry()
 	if s.freeScroll {
 		s.top = min(max(s.top, 0), max(len(s.lines)-1, 0))
@@ -620,7 +664,7 @@ func (m *teaModel) renderEditor() string {
 
 	rows := make([]string, 0, bodyHeight+2)
 
-	title := ColorCyan(StyleBold(" ✎ " + s.rel))
+	title := ColorCyan(StyleBold(" ✎ " + sourceLabel(s.rel)))
 	if s.lang != "" {
 		title += " " + styleHeaderPill.Render(strings.ToUpper(s.lang))
 	}
@@ -678,10 +722,10 @@ func (m *teaModel) renderEditorStatus(width int) string {
 	s := m.editor
 	switch s.prompt {
 	case editorPromptClose:
-		return clampToWidth(ColorYellow(StyleBold(" Unsaved changes in "+s.rel+"."))+
+		return clampToWidth(ColorYellow(StyleBold(" Unsaved changes in "+sourceLabel(s.rel)+"."))+
 			styleMuted.Render("  s: Save and close  •  d: Discard  •  Esc: Keep editing"), width)
 	case editorPromptConflict:
-		return clampToWidth(ColorRed(StyleBold(" "+s.rel+" changed on disk since it was opened."))+
+		return clampToWidth(ColorRed(StyleBold(" "+sourceLabel(s.rel)+" changed on disk since it was opened."))+
 			styleMuted.Render("  o: Overwrite  •  r: Reload from disk  •  Esc: Cancel"), width)
 	}
 	left := s.notice

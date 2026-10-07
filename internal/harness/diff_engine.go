@@ -81,13 +81,13 @@ func ParseDiffForDisplay(diffText string) []ParsedDiffFile {
 
 		if strings.HasPrefix(rawLine, "--- ") {
 			path := strings.TrimPrefix(rawLine, "--- ")
-			path = strings.TrimPrefix(path, "a/")
 			if idx := strings.Index(path, "\t"); idx != -1 {
 				path = path[:idx]
 			}
-			if currentFile.OldPath == "" {
-				currentFile.OldPath = path
+			if decoded, err := strconv.Unquote(path); err == nil {
+				path = decoded
 			}
+			currentFile.OldPath = strings.TrimPrefix(path, "a/")
 			currentFile.Lines = append(currentFile.Lines, ParsedDiffLine{
 				Kind: DiffLineHeader,
 				Raw:  rawLine,
@@ -97,13 +97,13 @@ func ParseDiffForDisplay(diffText string) []ParsedDiffFile {
 
 		if strings.HasPrefix(rawLine, "+++ ") {
 			path := strings.TrimPrefix(rawLine, "+++ ")
-			path = strings.TrimPrefix(path, "b/")
 			if idx := strings.Index(path, "\t"); idx != -1 {
 				path = path[:idx]
 			}
-			if currentFile.NewPath == "" {
-				currentFile.NewPath = path
+			if decoded, err := strconv.Unquote(path); err == nil {
+				path = decoded
 			}
+			currentFile.NewPath = strings.TrimPrefix(path, "b/")
 			currentFile.Lines = append(currentFile.Lines, ParsedDiffLine{
 				Kind: DiffLineHeader,
 				Raw:  rawLine,

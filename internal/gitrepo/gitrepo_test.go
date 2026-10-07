@@ -24,6 +24,8 @@ func newTestRepo(t *testing.T) string {
 		}
 	}
 	run("init", "-q")
+	run("config", "core.autocrlf", "false")
+	run("config", "core.eol", "lf")
 	run("config", "user.email", "test@example.com")
 	run("config", "user.name", "Test")
 
@@ -626,4 +628,3 @@ func TestDiscardAll(t *testing.T) {
 		t.Fatalf("expected clean working tree, got files: %+v", status.Files)
 	}
 }
-
