@@ -48,6 +48,17 @@ type sourceControl struct {
 	dialogOffset                      int
 	branchID                          uint64
 	pendingKey                        string
+	// diffKey/diffRendered cache the highlighted diff; viewContent is what
+	// the viewport currently holds, so unchanged frames skip SetContent.
+	diffKey                   sourceDiffKey
+	diffRendered, viewContent string
+}
+
+// sourceDiffKey is everything the rendered diff depends on.
+type sourceDiffKey struct {
+	text, detailID, group, theme string
+	noRepo, unified              bool
+	width                        int
 }
 
 type sourceStatusMsg struct {
@@ -196,12 +207,19 @@ func (s *sourceControl) selected() sourceEntry {
 func (m *teaModel) loadSourceSelection() tea.Cmd {
 	s := &m.source
 	e := s.selected()
+	// A refresh of the selection already on screen (live Git watcher,
+	// Refresh, a save) swaps the diff in place: blanking it and jumping to
+	// the top would flicker and undo the user's scrolling.
+	same := s.selectedKey == e.key() && s.text != ""
 	s.selectedKey = e.key()
 	s.selectionID++
 	id := s.selectionID
 	root := s.root
-	s.detail = gitrepo.CommitDetail{}
+	if !same {
+		s.detail = gitrepo.CommitDetail{}
+	}
 	if e.path == "" {
+		s.detail = gitrepo.CommitDetail{}
 		s.text = "Select a file to review its diff."
 		s.loading = false
 		return nil
@@ -210,8 +228,10 @@ func (m *teaModel) loadSourceSelection() tea.Cmd {
 		return m.sourceHistoryCmd(len(s.history))
 	}
 	s.loading = true
-	s.text = "Loading diff…"
-	s.view.GotoTop()
+	if !same {
+		s.text = "Loading diff…"
+		s.view.GotoTop()
+	}
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
@@ -351,7 +371,6 @@ func (m *teaModel) handleSourceResult(msg tea.Msg) (bool, tea.Cmd) {
 			cmd = tea.Batch(cmd, m.editorHeadCmd())
 		}
 		if changed || len(s.history) == 0 {
-			s.history = nil
 			return true, tea.Batch(cmd, m.sourceHistoryCmd(0))
 		}
 		return true, cmd
@@ -809,6 +828,65 @@ func sourceRows(rows []string, width, height int) string {
 	return strings.Join(out, "\n")
 }
 
+// sourceDiffContent renders the detail pane's diff. Highlighting a large
+// commit is expensive, and renderSource runs on every mouse event, so the
+// result is cached until something it depends on changes.
+func (m *teaModel) sourceDiffContent(detail int) string {
+	s := &m.source
+	key := sourceDiffKey{text: s.text, detailID: s.detail.ID, group: s.selected().group, theme: currentTheme.Name, noRepo: s.root == "", unified: s.unified, width: detail}
+	if key == s.diffKey && s.diffRendered != "" {
+		return s.diffRendered
+	}
+	content := s.text
+	if s.root == "" {
+		content = "Not a Git repository. Open fastllm inside an existing repository.\nRefresh [r] · Chat [q]"
+	}
+	files := ParseDiffForDisplay(strings.TrimRight(content, "\r\n"))
+	var diffRows []string
+	if s.detail.ID != "" {
+		diffRows = append(diffRows, styleDiffHdr.Render(s.detail.ID), styleMuted.Render(sanitizeUntrusted(s.detail.Author+" · "+s.detail.Timestamp)), sanitizeUntrusted(s.detail.Message))
+		for _, f := range s.detail.Files {
+			diffRows = append(diffRows, sourceLabel(f.Staged+" "+f.Path))
+		}
+	}
+	if len(files) > 0 && files[0].MaxLine > 0 {
+		for _, f := range files {
+			filePath := f.NewPath
+			if filePath == "/dev/null" {
+				filePath = f.OldPath
+			}
+			label := sourceLabel(filePath)
+			diffRows = append(diffRows, styleDiffHdr.Render(label))
+			if detail >= 100 && !s.unified {
+				before, after := "Index", "Working tree"
+				if key.group == "Conflicts" {
+					before = "Ours (stage 2)"
+				}
+				if key.group == "Staged Changes" {
+					before, after = "HEAD", "Index"
+				}
+				if s.detail.ID != "" {
+					before, after = "First parent", "Commit"
+					if s.detail.Parent == "" {
+						before = "Empty tree"
+					}
+				}
+				diffRows = append(diffRows, PadRight(before, detail/2)+after)
+				diffRows = append(diffRows, RenderSplitDiff(f, DetectLanguage(f.NewPath), detail)...)
+			} else {
+				var b strings.Builder
+				renderFileDiff(&b, f, label, DetectLanguage(filePath), DefaultDiffOptions())
+				diffRows = append(diffRows, b.String())
+			}
+		}
+		content = strings.Join(diffRows, "\n")
+	} else {
+		content = strings.Join(diffRows, "\n") + "\n" + styleMuted.Render(sanitizeUntrusted(content))
+	}
+	s.diffKey, s.diffRendered = key, content
+	return content
+}
+
 func (m *teaModel) renderSource() string {
 	s := &m.source
 	sidebar, detail, height := m.sourceGeometry()
@@ -863,60 +941,18 @@ func (m *teaModel) renderSource() string {
 		}
 		rows = append(rows, label)
 	}
-	content := s.text
-	if s.root == "" {
-		content = "Not a Git repository. Open fastllm inside an existing repository.\nRefresh [r] · Chat [q]"
-	}
-	files := ParseDiffForDisplay(strings.TrimRight(content, "\r\n"))
 	s.view.SetWidth(detail)
 	s.view.SetHeight(height)
-	var diffRows []string
-	if s.detail.ID != "" {
-		diffRows = append(diffRows, styleDiffHdr.Render(s.detail.ID), styleMuted.Render(sanitizeUntrusted(s.detail.Author+" · "+s.detail.Timestamp)), sanitizeUntrusted(s.detail.Message))
-		for _, f := range s.detail.Files {
-			diffRows = append(diffRows, sourceLabel(f.Staged+" "+f.Path))
-		}
-	}
-	if len(files) > 0 && files[0].MaxLine > 0 {
-		for _, f := range files {
-			filePath := f.NewPath
-			if filePath == "/dev/null" {
-				filePath = f.OldPath
-			}
-			label := sourceLabel(filePath)
-			diffRows = append(diffRows, styleDiffHdr.Render(label))
-			if detail >= 100 && !s.unified {
-				before, after := "Index", "Working tree"
-				if s.selected().group == "Conflicts" {
-					before = "Ours (stage 2)"
-				}
-				if s.selected().group == "Staged Changes" {
-					before, after = "HEAD", "Index"
-				}
-				if s.detail.ID != "" {
-					before, after = "First parent", "Commit"
-					if s.detail.Parent == "" {
-						before = "Empty tree"
-					}
-				}
-				diffRows = append(diffRows, PadRight(before, detail/2)+after)
-				diffRows = append(diffRows, RenderSplitDiff(f, DetectLanguage(f.NewPath), detail)...)
-			} else {
-				var b strings.Builder
-				renderFileDiff(&b, f, label, DetectLanguage(filePath), DefaultDiffOptions())
-				diffRows = append(diffRows, b.String())
-			}
-		}
-		content = strings.Join(diffRows, "\n")
-	} else {
-		content = strings.Join(diffRows, "\n") + "\n" + styleMuted.Render(sanitizeUntrusted(content))
-	}
+	var content string
 	if m.editor != nil {
 		content = m.renderEditor()
 	} else {
-		offset := s.view.YOffset()
-		s.view.SetContent(content)
-		s.view.SetYOffset(offset)
+		if diff := m.sourceDiffContent(detail); diff != s.viewContent {
+			offset := s.view.YOffset()
+			s.view.SetContent(diff)
+			s.view.SetYOffset(offset)
+			s.viewContent = diff
+		}
 		content = s.view.View()
 	}
 	var body string

@@ -252,6 +252,7 @@ type teaModel struct {
 	streamHeaderShown   bool
 	agentWorkStarted    bool
 	lastResponse        string
+	lastShellOutput     string
 	activeTurn          int
 	activeTool          string
 	activeArgs          string
@@ -1210,6 +1211,7 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						MaxLines:    maxLines,
 						AgentCalled: true,
 					})
+					m.lastShellOutput = ev.ToolCall.Result
 					m.appendHistory(box + "\n\n")
 				} else {
 					previewLines := 4
@@ -1411,6 +1413,7 @@ func (m *teaModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.shellTracker != nil {
 				m.shellTracker.Record(cmdToRender, output, exitCode, msg.Duration)
 			}
+			m.lastShellOutput = output
 			terminalBox := formatTUITerminal(TerminalBoxOptions{
 				Command:     cmdToRender,
 				Output:      output,
@@ -2325,7 +2328,11 @@ func (m *teaModel) handleAgentSubmit(inputVal string) tea.Cmd {
 					target, what = m.historyText.String(), "transcript"
 				case "code":
 					target, what = lastCodeBlock(m.lastResponse), "code block"
+				case "shell":
+					target, what = m.lastShellOutput, "shell output"
 				}
+			} else if (m.mode == modeShell || target == "") && m.lastShellOutput != "" {
+				target, what = m.lastShellOutput, "shell output"
 			}
 			if strings.TrimSpace(target) == "" {
 				m.statusNotice = "Nothing to copy yet."

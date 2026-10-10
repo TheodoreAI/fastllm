@@ -414,7 +414,7 @@ func FormatTerminalBox(opts TerminalBoxOptions) string {
 	} else {
 		for _, line := range showLines {
 			line = strings.TrimRight(line, "\r")
-			b.WriteString(formatTerminalBoxLine(ColorGray(line), contentWidth) + "\n")
+			b.WriteString(formatTerminalBoxLine(ColorBrightWhite(line), contentWidth) + "\n")
 		}
 		if truncatedCount > 0 {
 			hint := fmt.Sprintf("... %d more lines ...", truncatedCount)

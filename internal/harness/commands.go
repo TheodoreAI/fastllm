@@ -42,7 +42,7 @@ var commandSections = []commandSection{
 		{"/cls", "Clear terminal screen without resetting context"},
 		{"/compact", "Collapse older turns into a checkpoint without waiting for the budget"},
 		{"/find [text]", "Search the transcript (Ctrl+F); Enter/↓ next, ↑ previous, Esc close"},
-		{"/copy, /yank", "Copy last response to OS clipboard (/copy code for the last code block, /copy all for full log)"},
+		{"/copy, /yank", "Copy last response to OS clipboard (/copy shell for shell output, /copy code for code block, /copy all for full log)"},
 		{"/dir <path>", "Switch active working directory and reload workspace rules"},
 		{"/trust", "Use this workspace's .fastllm config after reviewing it"},
 		{"/untrust", "Stop using this workspace's .fastllm config"},
