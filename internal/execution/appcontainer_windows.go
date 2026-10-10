@@ -4,6 +4,7 @@ package execution
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -23,9 +24,10 @@ import (
 // AppContainerBackendName identifies the Windows isolated backend.
 const AppContainerBackendName = "appcontainer"
 
-// appContainerName is one fixed identity, so grants are made once and reused
-// rather than accumulating per run.
+// appContainerName is the legacy shared identity, retained only for revocation.
 const appContainerName = "fastllm.sandbox"
+
+const workspaceContainerPrefix = "fastllm.workspace."
 
 const (
 	procThreadAttributeSecurityCapabilities = 0x00020009
@@ -62,7 +64,7 @@ type securityCapabilities struct {
 // IsolatedBackend returns this platform's isolated backend.
 func IsolatedBackend() (Backend, bool) { return NewAppContainerBackend(), true }
 
-// NewAppContainerBackend runs commands inside one fixed AppContainer holding no
+// NewAppContainerBackend runs commands inside a per-workspace AppContainer holding no
 // capabilities, so the kernel denies it the network and every object not
 // granted to it. The token is inherited by every descendant, and each command
 // runs in a kill-on-close Job Object, so confinement needs no mediation by
@@ -75,15 +77,10 @@ func IsolatedBackend() (Backend, bool) { return NewAppContainerBackend(), true }
 // once, and are recorded so RevokeIsolatedBackend can remove them.
 func NewAppContainerBackend() Backend { return &appContainerBackend{} }
 
-type appContainerBackend struct {
-	once     sync.Once
-	identity *containerIdentity
-	err      error
-	// grants serializes permission changes and the grant record in-process.
-	grants sync.Mutex
-}
+type appContainerBackend struct{}
 
 type containerIdentity struct {
+	name   string
 	sid    *windows.SID
 	folder string
 }
@@ -91,24 +88,26 @@ type containerIdentity struct {
 func (*appContainerBackend) Name() string   { return AppContainerBackendName }
 func (*appContainerBackend) Isolated() bool { return true }
 
-func (b *appContainerBackend) Available(context.Context) error {
-	_, err := b.profile()
-	return err
-}
-
-// profile creates or reopens the container identity and its private folder.
-func (b *appContainerBackend) profile() (*containerIdentity, error) {
-	b.once.Do(func() { b.identity, b.err = openIdentity() })
-	return b.identity, b.err
-}
-
-func openIdentity() (*containerIdentity, error) {
+func (*appContainerBackend) Available(context.Context) error {
 	for _, proc := range []*windows.LazyProc{procCreateAppContainerProfile, procDeleteAppContainerProfile, procDeriveAppContainerSid, procGetAppContainerFolderPath} {
 		if err := proc.Find(); err != nil {
-			return nil, fmt.Errorf("AppContainer API unavailable: %w", err)
+			return fmt.Errorf("AppContainer API unavailable: %w", err)
 		}
 	}
-	name, err := windows.UTF16PtrFromString(appContainerName)
+	return nil
+}
+
+func workspaceContainerName(workspace string) string {
+	// Do not fold case: Windows also supports case-sensitive directories.
+	digest := sha256.Sum256([]byte(filepath.Clean(workspace)))
+	return fmt.Sprintf("%s%x", workspaceContainerPrefix, digest[:16])
+}
+
+func openIdentity(profileName string) (*containerIdentity, error) {
+	if err := (&appContainerBackend{}).Available(context.Background()); err != nil {
+		return nil, err
+	}
+	name, err := windows.UTF16PtrFromString(profileName)
 	if err != nil {
 		return nil, err
 	}
@@ -118,8 +117,15 @@ func openIdentity() (*containerIdentity, error) {
 		hr, _, _ = procDeriveAppContainerSid.Call(uintptr(unsafe.Pointer(name)), uintptr(unsafe.Pointer(&sid)))
 	}
 	if hr != 0 {
-		return nil, fmt.Errorf("AppContainer profile %q: HRESULT 0x%08x", appContainerName, uint32(hr))
+		return nil, fmt.Errorf("AppContainer profile %q: HRESULT 0x%08x", profileName, uint32(hr))
 	}
+	// Both APIs allocate the SID. Keep a Go-owned copy and free the native one.
+	ownedSID, err := sid.Copy()
+	windows.FreeSid(sid)
+	if err != nil {
+		return nil, err
+	}
+	sid = ownedSID
 	sidString, err := windows.UTF16PtrFromString(sid.String())
 	if err != nil {
 		return nil, err
@@ -129,7 +135,7 @@ func openIdentity() (*containerIdentity, error) {
 	if hr != 0 {
 		return nil, fmt.Errorf("AppContainer folder: HRESULT 0x%08x", uint32(hr))
 	}
-	identity := &containerIdentity{sid: sid, folder: windows.UTF16PtrToString(folder)}
+	identity := &containerIdentity{name: profileName, sid: sid, folder: windows.UTF16PtrToString(folder)}
 	windows.CoTaskMemFree(unsafe.Pointer(folder))
 	return identity, nil
 }
@@ -142,7 +148,8 @@ func profilesDirectory() (string, error) {
 }
 
 func (b *appContainerBackend) Open(ctx context.Context, spec ScopeSpec) (BackendScope, error) {
-	identity, err := b.profile()
+	// The manager supplies a canonical workspace, so aliases reuse an identity.
+	identity, err := openIdentity(workspaceContainerName(spec.Workspace))
 	if err != nil {
 		return nil, err
 	}
@@ -183,9 +190,11 @@ func (b *appContainerBackend) Open(ctx context.Context, spec ScopeSpec) (Backend
 // grant makes the workspace and its toolchain reachable to the container, and
 // records each tree so a revoke can find it.
 func (b *appContainerBackend) grant(identity *containerIdentity, workspace string) error {
-	b.grants.Lock()
-	defer b.grants.Unlock()
-	record := grantRecord{path: filepath.Join(identity.folder, "grants.txt")}
+	record, unlock, err := lockWorkspaceGrants(identity.name)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 
 	// Recorded before granting, so an interrupted grant is still revoked.
 	if err := record.add(treeGrant, workspace); err != nil {
@@ -195,6 +204,9 @@ func (b *appContainerBackend) grant(identity *containerIdentity, workspace strin
 		return fmt.Errorf("grant workspace to sandbox: %w", err)
 	}
 	for _, dir := range goReadPaths(workspace) {
+		if err := record.add(treeGrant, dir); err != nil {
+			return err
+		}
 		_, err := grantTree(dir, identity.sid, fileReadExecute)
 		// A toolchain the user cannot re-permission, such as one under
 		// Program Files, is normally readable to containers already.
@@ -204,11 +216,6 @@ func (b *appContainerBackend) grant(identity *containerIdentity, workspace strin
 		if err != nil {
 			return fmt.Errorf("grant %s to sandbox: %w", dir, err)
 		}
-		// Recorded even when the grant already existed, so one made before
-		// the record did is still revoked.
-		if err := record.add(treeGrant, dir); err != nil {
-			return err
-		}
 	}
 	return nil
 }
@@ -217,7 +224,7 @@ func (b *appContainerBackend) grant(identity *containerIdentity, workspace strin
 // told exactly which identity to grant rather than looking up its own, which
 // differs when another administrator account approves the elevation.
 func IsolationIdentity() (string, error) {
-	identity, err := openIdentity()
+	identity, err := openIdentity(appContainerName)
 	if err != nil {
 		return "", err
 	}
@@ -229,7 +236,7 @@ func IsolationIdentity() (string, error) {
 // from a workspace drive, but an earlier one-time setup made it, and only an
 // administrator can remove it.
 func IsolationSetupPresent() (bool, error) {
-	identity, err := openIdentity()
+	identity, err := openIdentity(appContainerName)
 	if err != nil {
 		return false, err
 	}
@@ -271,25 +278,46 @@ func setupTarget(sidString string) (*windows.SID, string, error) {
 // the identity it names. A backend constructed earlier must not be used
 // afterwards.
 func RevokeIsolatedBackend() error {
-	identity, err := openIdentity()
+	identity, err := openIdentity(appContainerName)
 	if err != nil {
 		return err
 	}
-	if present, err := IsolationSetupPresent(); err == nil && present {
+	if present, err := IsolationSetupPresent(); err != nil {
+		return err
+	} else if present {
 		return errors.New("the sandbox's profiles-directory grant is still present; revoke it with administrator rights first")
 	}
-	record := grantRecord{path: filepath.Join(identity.folder, "grants.txt")}
+	if err := revokeIdentity(identity, grantRecord{path: filepath.Join(identity.folder, "grants.txt")}); err != nil {
+		return err
+	}
+	return revokeWorkspaceIdentities()
+}
+
+func revokeIdentity(identity *containerIdentity, record grantRecord) error {
 	entries, err := record.entries()
 	if err != nil {
 		return err
 	}
 	var errs []error
 	for _, entry := range entries {
+		// Read-only system trees can be recorded before a denied grant attempt.
+		// Do not require WRITE_DAC (or propagate ACL changes) if no grant exists.
+		direct, err := directGrant(entry.path, identity.sid)
+		if errors.Is(err, windows.ERROR_FILE_NOT_FOUND) || errors.Is(err, windows.ERROR_PATH_NOT_FOUND) {
+			continue
+		}
+		if err != nil {
+			errs = append(errs, fmt.Errorf("inspect grant %s: %w", entry.path, err))
+			continue
+		}
+		if !direct {
+			continue
+		}
 		revoke := revokeTree
 		if entry.kind == selfGrant {
 			revoke = revokeSelf
 		}
-		err := revoke(entry.path, identity.sid)
+		err = revoke(entry.path, identity.sid)
 		if err != nil && !errors.Is(err, windows.ERROR_FILE_NOT_FOUND) && !errors.Is(err, windows.ERROR_PATH_NOT_FOUND) {
 			errs = append(errs, fmt.Errorf("revoke %s: %w", entry.path, err))
 		}
@@ -297,7 +325,7 @@ func RevokeIsolatedBackend() error {
 	if len(errs) > 0 {
 		return errors.Join(errs...)
 	}
-	name, err := windows.UTF16PtrFromString(appContainerName)
+	name, err := windows.UTF16PtrFromString(identity.name)
 	if err != nil {
 		return err
 	}
@@ -319,8 +347,8 @@ type grantEntry struct {
 	path string
 }
 
-// grantRecord is an append-only list of granted paths, one per line, kept in
-// the container's own folder so it is deleted with the identity it describes.
+// grantRecord is an append-only list of granted paths, one per line. Workspace
+// identities keep it in controller storage; only legacy records live in HOME.
 // A tree grant is a bare path; a directory-only grant is prefixed "self\t".
 type grantRecord struct{ path string }
 

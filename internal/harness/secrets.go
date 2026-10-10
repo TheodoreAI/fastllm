@@ -54,7 +54,20 @@ func (t *SessionTaint) Sources() []string {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return append([]string(nil), t.sources...)
+	return append([]string{}, t.sources...)
+}
+
+// restoredTaint treats pre-metadata transcripts conservatively: compaction may
+// have removed the original read_file call while retaining its secret contents.
+func (s *InteractiveSession) restoredTaint() *SessionTaint {
+	taint := NewSessionTaint()
+	for _, source := range s.SecretSources {
+		taint.Mark(source)
+	}
+	if s.SecretSources == nil && len(s.Messages) > 0 {
+		taint.Mark("a saved conversation with unknown secret-read history")
+	}
+	return taint
 }
 
 // secretNames are files that hold credentials by convention, matched on the

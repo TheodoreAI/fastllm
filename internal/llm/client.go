@@ -879,7 +879,11 @@ func readChatError(resp *http.Response) error {
 type chatStreamChunk struct {
 	Choices []struct {
 		Delta struct {
-			Content   string                `json:"content"`
+			// Content is a plain string on the OpenAI wire, but Mistral's
+			// reasoning models stream an array of typed blocks here
+			// ({"type":"thinking",...} and {"type":"text","text":...}), so
+			// it is kept raw and split by deltaContent.
+			Content   json.RawMessage       `json:"content"`
 			Reasoning string                `json:"reasoning"`
 			ToolCalls []streamToolCallDelta `json:"tool_calls"`
 		} `json:"delta"`
@@ -896,6 +900,44 @@ type chatStreamChunk struct {
 		CompletionTokens int `json:"completion_tokens"`
 		TotalTokens      int `json:"total_tokens"`
 	} `json:"usage"`
+}
+
+// deltaContent splits a stream delta's content into answer text and
+// reasoning text. OpenAI-wire servers send a plain string; Mistral's
+// reasoning models send an array of typed blocks in the same field, with
+// thinking text nested one level under "thinking":[{"type":"text","text":…}]
+// and answer text in {"type":"text","text":…} blocks, sometimes both in one
+// chunk. Anything else (empty, or an unrecognized shape) yields nothing, so an
+// unknown block type is dropped rather than corrupting the answer.
+func deltaContent(raw json.RawMessage) (text, reasoning string) {
+	if len(raw) == 0 {
+		return "", ""
+	}
+	var plain string
+	if err := json.Unmarshal(raw, &plain); err == nil {
+		return plain, ""
+	}
+	var blocks []struct {
+		Type     string `json:"type"`
+		Text     string `json:"text"`
+		Thinking []struct {
+			Text string `json:"text"`
+		} `json:"thinking"`
+	}
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		return "", ""
+	}
+	for _, block := range blocks {
+		switch block.Type {
+		case "text":
+			text += block.Text
+		case "thinking":
+			for _, part := range block.Thinking {
+				reasoning += part.Text
+			}
+		}
+	}
+	return text, reasoning
 }
 
 // StreamChat sends messages to the chat completion endpoint and calls
@@ -973,15 +1015,19 @@ func (c *Client) StreamChat(ctx context.Context, model string, messages []Messag
 			continue // skip malformed/keepalive lines
 		}
 		if len(chunk.Choices) > 0 {
-			if chunk.Choices[0].Delta.Content != "" {
+			text, thinking := deltaContent(chunk.Choices[0].Delta.Content)
+			if text != "" {
 				if useChannelFilter {
-					channelFilter.Feed(chunk.Choices[0].Delta.Content)
+					channelFilter.Feed(text)
 				} else {
-					onToken(chunk.Choices[0].Delta.Content)
+					onToken(text)
 				}
 			}
 			if chunk.Choices[0].Delta.Reasoning != "" && onReasoning != nil {
 				onReasoning(chunk.Choices[0].Delta.Reasoning)
+			}
+			if thinking != "" && onReasoning != nil {
+				onReasoning(thinking)
 			}
 		}
 		if chunk.Usage != nil && onUsage != nil {

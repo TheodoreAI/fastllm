@@ -178,6 +178,7 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 		activeSession.Model = model
 		activeSession.Runtime = runtimeSettings()
 		activeSession.Messages = append([]llm.Message(nil), sessionMessages[1:]...)
+		activeSession.SecretSources = taint.Sources()
 		if !activeSession.CustomTitle {
 			activeSession.Title = sessionTitle(activeSession.Messages)
 		}
@@ -242,6 +243,7 @@ func (r *Runner) runSimpleInteractive(initialReq RunRequest) error {
 			return err
 		}
 		sessionMessages = append([]llm.Message{{Role: "system", Content: currentSystemPrompt()}}, loaded.Messages...)
+		taint = loaded.restoredTaint()
 		loaded.ClosedAt = nil
 		activeSession = loaded
 		if observationStore != nil {

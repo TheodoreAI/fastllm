@@ -27,17 +27,19 @@ type InteractiveRuntime struct {
 }
 
 type InteractiveSession struct {
-	ID          string             `json:"id"`
-	Title       string             `json:"title"`
-	CreatedAt   time.Time          `json:"created_at"`
-	UpdatedAt   time.Time          `json:"updated_at"`
-	WorkingDir  string             `json:"working_dir"`
-	Model       string             `json:"model"`
-	Runtime     InteractiveRuntime `json:"runtime"`
-	Messages    []llm.Message      `json:"messages"`
-	Metrics     SessionMetrics     `json:"metrics,omitempty"`
-	ClosedAt    *time.Time         `json:"closed_at,omitempty"`
-	CustomTitle bool               `json:"custom_title,omitempty"`
+	ID         string             `json:"id"`
+	Title      string             `json:"title"`
+	CreatedAt  time.Time          `json:"created_at"`
+	UpdatedAt  time.Time          `json:"updated_at"`
+	WorkingDir string             `json:"working_dir"`
+	Model      string             `json:"model"`
+	Runtime    InteractiveRuntime `json:"runtime"`
+	Messages   []llm.Message      `json:"messages"`
+	// nil means legacy/unknown; an empty array records a known-clean conversation.
+	SecretSources []string       `json:"secret_sources"`
+	Metrics       SessionMetrics `json:"metrics,omitempty"`
+	ClosedAt      *time.Time     `json:"closed_at,omitempty"`
+	CustomTitle   bool           `json:"custom_title,omitempty"`
 	// ImportedFrom tags a session recovered from the legacy SQLite store so a
 	// repeated import skips it instead of duplicating it.
 	ImportedFrom string `json:"imported_from,omitempty"`
@@ -65,13 +67,14 @@ func newSessionID(at time.Time) string {
 func (s *SessionStore) New(workingDir, model string, runtime InteractiveRuntime) *InteractiveSession {
 	now := time.Now().UTC()
 	return &InteractiveSession{
-		ID:         newSessionID(now),
-		Title:      "New session",
-		CreatedAt:  now,
-		UpdatedAt:  now,
-		WorkingDir: workingDir,
-		Model:      model,
-		Runtime:    runtime,
+		ID:            newSessionID(now),
+		Title:         "New session",
+		CreatedAt:     now,
+		UpdatedAt:     now,
+		WorkingDir:    workingDir,
+		Model:         model,
+		Runtime:       runtime,
+		SecretSources: []string{},
 	}
 }
 

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"fastllm/internal/llm"
 )
 
 func TestIsSecretPath(t *testing.T) {
@@ -148,6 +150,83 @@ func TestSearchFilesSkipsSecrets(t *testing.T) {
 	}
 	if !strings.Contains(out, "main.go") {
 		t.Fatalf("search should still find ordinary files: %s", out)
+	}
+}
+
+func TestSearchFilesResolvesAliasesBeforeReading(t *testing.T) {
+	root := secretWorkspace(t)
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("API_TOKEN=outside-sentinel\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, target := range map[string]string{
+		"secret-alias.txt":   filepath.Join(root, ".env"),
+		"outside-alias.txt":  outside,
+		"ordinary-alias.txt": filepath.Join(root, "main.go"),
+	} {
+		if err := os.Symlink(target, filepath.Join(root, name)); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+	}
+	r := NewRunner(nil, root, "test")
+	defer r.Close()
+	out := r.executeSearchFiles(context.Background(), root, "API_TOKEN", "")
+	for _, forbidden := range []string{"sk-live-123", "outside-sentinel", "secret-alias", "outside-alias"} {
+		if strings.Contains(out, forbidden) {
+			t.Fatalf("search exposed %s: %s", forbidden, out)
+		}
+	}
+	if !strings.Contains(out, "ordinary-alias.txt") || !strings.Contains(out, "main.go") {
+		t.Fatalf("safe files and aliases must remain searchable: %s", out)
+	}
+}
+
+func TestSessionResumePreservesSecretProtection(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		sources []string
+		wantAsk bool
+	}{
+		{"tainted", []string{".env"}, true},
+		{"known-clean", []string{}, false},
+		{"legacy-unknown", nil, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &SessionStore{Dir: t.TempDir()}
+			session := store.New("", "", InteractiveRuntime{PermissionMode: PermissionFull})
+			session.SecretSources = tc.sources
+			session.Messages = []llm.Message{{Role: "assistant", Content: "Saved conversation content"}}
+			if err := store.Save(session); err != nil {
+				t.Fatal(err)
+			}
+			loaded, err := store.Load(session.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			m := permissionTestModel(t)
+			m.sessionStore = store
+			if err := m.loadSession(loaded); err != nil {
+				t.Fatal(err)
+			}
+			asked := 0
+			req := RunRequest{PermissionMode: PermissionFull, Taint: m.conversationTaint(), Authorize: func(c ConsentRequest) bool { asked++; return false }}
+			for _, tool := range []string{"web_fetch", "web_search"} {
+				ok, _ := admit(req, tool, `{"url":"https://example.com/","query":"test"}`)
+				if ok == tc.wantAsk {
+					t.Fatalf("%s allowed=%v, want ask=%v", tool, ok, tc.wantAsk)
+				}
+			}
+			if tc.wantAsk && asked != 2 {
+				t.Fatalf("asked %d times", asked)
+			}
+			resaved, err := store.Load(session.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (len(resaved.restoredTaint().Sources()) > 0) != tc.wantAsk {
+				t.Fatal("autosave lost restored taint")
+			}
+		})
 	}
 }
 

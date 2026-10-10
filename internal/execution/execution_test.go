@@ -43,6 +43,30 @@ func modelScope(t *testing.T, opts Options) (*Manager, *Scope) {
 	return m, s
 }
 
+func TestProcessLimitCountsOnlyActiveCommands(t *testing.T) {
+	_, scope := modelScope(t, Options{MaxProcesses: 1})
+	first, err := scope.Start(context.Background(), Command{Shell: sleepCommand(30)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scope.Start(context.Background(), Command{Shell: "echo blocked"}); err == nil {
+		t.Fatal("second live command exceeded limit")
+	}
+	if err := first.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		result, err := Run(WithScope(context.Background(), scope), Command{Shell: "echo complete"})
+		if err != nil || result.Err() != nil {
+			t.Fatalf("sequential launch %d: %v / %v", i, err, result.Err())
+		}
+	}
+	retained, err := scope.Process(first.Snapshot().ID)
+	if err != nil || !retained.Snapshot().Exited {
+		t.Fatalf("completed handle was lost: %v", err)
+	}
+}
+
 func TestStartDeniedWithoutFullPermission(t *testing.T) {
 	// A local subprocess can write and reach the network, so anything short of
 	// the full permission set must refuse to launch.

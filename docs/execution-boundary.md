@@ -39,6 +39,8 @@ are not authority outside their scope. Canceling a Wait only stops waiting;
 canceling a scope or explicitly stopping a process terminates execution.
 
 Output is bounded while being collected, with cursors and truncation indicators.
+The scope process limit counts active commands; completed handles remain available
+for status/output queries without consuming launch slots.
 The backend never writes to the terminal. A slow or disconnected UI does not
 block subprocess pipe drainage. Results distinguish launch errors, nonzero exit,
 timeouts, cancellation, and output loss. Windows foreground and background model
@@ -99,8 +101,8 @@ cleanup. Environment filtering is not credential isolation.
 ## Windows AppContainer backend
 
 `appcontainer` is the isolated backend on Windows, built on `golang.org/x/sys`
-with no external runtime. Every command runs under one fixed AppContainer
-identity, `fastllm.sandbox`, holding no capabilities. The kernel checks every
+with no external runtime. Commands use a stable AppContainer identity derived
+from the canonical workspace path, holding no capabilities. The kernel checks every
 file open and connection against that identity, so enforcement does not depend
 on fastllm seeing the command's calls after launch. The token is inherited by
 every descendant, and each command runs suspended until it is assigned to a
@@ -118,8 +120,11 @@ Opening a scope grants the identity full access to the workspace and read access
 to the Go module cache the workspace resolves, which holds any auto-selected
 toolchain. Windows copies an inheritable grant onto every existing file, so the
 first grant on the module cache takes seconds to minutes; later opens detect it.
-Grants persist and are recorded in the identity's own folder, and
-`RevokeIsolatedBackend` removes them and deletes the identity. Scratch state
+Grants persist and are recorded in controller-owned storage under
+`%LOCALAPPDATA%/fastllm/sandbox-grants`, outside the container's writable home.
+A cross-process lock serializes grant and revocation updates, including shared
+toolchain ACLs. `RevokeIsolatedBackend` removes the recorded grants and deletes
+the workspace identities as well as the legacy shared identity. Scratch state
 (`TEMP`, `GOCACHE`, `HOME`) lives in that folder, not the profile or workspace.
 
 Commands start in a drive letter mapped to the workspace, not at its host
@@ -146,11 +151,16 @@ changes no ACLs or capabilities; `CREATE_NO_WINDOW` still suppresses console
 windows. Containment tests require a startup marker from the sandboxed shell,
 so an initialization failure cannot masquerade as successful containment.
 
-The Windows identity is shared across scopes and its workspace grants persist.
-Its filesystem boundary therefore includes all previously granted trees, not
-just the current agent's workspace. It does not provide isolation between agents
-or their granted workspaces. Built-in file tools still run in the trusted host
-and enforce their paths through the application permission monitor.
+Windows scopes on the same canonical workspace share an identity and persistent
+grants. Unrelated workspaces have distinct identities, grants, and scratch folders.
+This isolates their commands from one another's workspace files; it does not
+separate agents working in the same tree, or remove access to descendants of an
+explicitly selected parent workspace. System/toolchain files remain readable.
+New runs never use the legacy `fastllm.sandbox` identity, so its historical grants
+do not authorize them. `-revoke-sandbox` also cleans up those legacy grants.
+Built-in file tools run in the trusted host and enforce their paths through the
+application permission monitor; search resolves aliases, excludes secret targets,
+and opens files through a traversal-resistant workspace root.
 
 The sandbox is opt-in: `/set sandbox on` in either terminal mode, saved with
 the session, or `-sandbox` on the command line. Child agents inherit it and

@@ -18,7 +18,7 @@ var sandboxFirstUseNotice = sandboxNoticeFor(runtime.GOOS)
 func sandboxNoticeFor(goos string) string {
 	switch goos {
 	case "windows":
-		return "Sandbox on: commands run isolated from the rest of this machine, with no network, " +
+		return "Sandbox on: commands use a workspace-specific identity with no network, " +
 			"from a drive letter mapped to the workspace. The first command grants the sandbox access to this workspace " +
 			"and the Go module cache, which can take a minute once."
 	case "darwin":
@@ -66,7 +66,7 @@ func sandboxPromptNote(scope *execution.Scope) string {
 	if !scope.Isolated() {
 		return ""
 	}
-	note := "<sandbox>\nCommands run in an isolated sandbox with no network access and no access to files outside the workspace."
+	note := "<sandbox>\nCommands run in an isolated sandbox with no network access. They can access the workspace, sandbox scratch storage, and permitted system/toolchain files. Unrelated workspaces are not granted access."
 	if view := scope.CommandWorkspace(); !strings.EqualFold(filepath.Clean(view), filepath.Clean(scope.Workspace())) {
 		note += fmt.Sprintf(" Inside commands the workspace is %s, not %s; use paths relative to the workspace in commands.", view, scope.Workspace())
 	}

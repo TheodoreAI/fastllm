@@ -209,15 +209,19 @@ func (c *Client) StreamChatWithTools(
 		}
 		if len(chunk.Choices) > 0 {
 			choice := chunk.Choices[0]
-			if choice.Delta.Content != "" {
+			text, thinking := deltaContent(choice.Delta.Content)
+			if text != "" {
 				if useChannelFilter {
-					channelFilter.Feed(choice.Delta.Content)
+					channelFilter.Feed(text)
 				} else {
-					emitText(choice.Delta.Content)
+					emitText(text)
 				}
 			}
 			if choice.Delta.Reasoning != "" {
 				emitReasoning(choice.Delta.Reasoning)
+			}
+			if thinking != "" {
+				emitReasoning(thinking)
 			}
 			for _, delta := range choice.Delta.ToolCalls {
 				calls.Add(delta)

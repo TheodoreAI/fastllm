@@ -36,7 +36,7 @@ type Options struct {
 	RequireIsolation bool
 	Timeout          time.Duration
 	MaxOutputBytes   int
-	MaxProcesses     int
+	MaxProcesses     int // maximum simultaneously active commands; exited handles remain readable
 }
 
 type Command struct {
@@ -338,7 +338,13 @@ func (s *Scope) Start(ctx context.Context, command Command) (Process, error) {
 	if err := s.checkLocked(); err != nil {
 		return nil, err
 	}
-	if len(s.processes) >= s.options.MaxProcesses {
+	running := 0
+	for _, process := range s.processes {
+		if !process.Snapshot().Exited {
+			running++
+		}
+	}
+	if running >= s.options.MaxProcesses {
 		return nil, fmt.Errorf("scope process limit reached")
 	}
 	if (command.Executable == "") == (strings.TrimSpace(command.Shell) == "") {

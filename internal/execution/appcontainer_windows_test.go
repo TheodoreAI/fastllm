@@ -27,12 +27,21 @@ func containerScopes(t *testing.T, workspace string) (sandboxed, local *Scope) {
 	if err := backend.Available(context.Background()); err != nil {
 		t.Skipf("AppContainer unavailable: %v", err)
 	}
+	canonical, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := revokeWorkspaceIdentity(workspaceContainerName(canonical)); err != nil {
+			t.Errorf("revoke test workspace: %v", err)
+		}
+	})
 	m := NewManager()
 	t.Cleanup(func() { _ = m.Close(context.Background()) })
 	if err := m.Register(backend); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	sandboxed, err := m.Open(context.Background(), Options{
+	sandboxed, err = m.Open(context.Background(), Options{
 		Workspace: workspace, Policy: LocalPolicy(),
 		Backend: AppContainerBackendName, RequireIsolation: true,
 		Timeout: 2 * time.Minute,
@@ -160,6 +169,11 @@ func TestWorkspaceDriveLivesAsLongAsItsScopes(t *testing.T) {
 		return s
 	}
 	first, second := open(), open()
+	t.Cleanup(func() {
+		if err := revokeWorkspaceIdentity(workspaceContainerName(first.Workspace())); err != nil {
+			t.Errorf("revoke test workspace: %v", err)
+		}
+	})
 	drive := strings.TrimSuffix(first.CommandWorkspace(), `\`)
 	if second.CommandWorkspace() != first.CommandWorkspace() {
 		t.Fatalf("two scopes on one workspace got %q and %q; they should share a letter", first.CommandWorkspace(), second.CommandWorkspace())
@@ -180,6 +194,64 @@ func TestWorkspaceDriveLivesAsLongAsItsScopes(t *testing.T) {
 	}
 	if target, ok := driveTarget(drive); ok && strings.EqualFold(target, resolved) {
 		t.Fatalf("%s still maps to the workspace after every scope closed", drive)
+	}
+}
+
+func TestAppContainerSeparatesWorkspaceIdentities(t *testing.T) {
+	firstRoot, secondRoot := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(firstRoot, "sentinel.txt"), []byte("workspace-one-secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	first, _ := containerScopes(t, firstRoot)
+	second, _ := containerScopes(t, secondRoot)
+	firstIdentity := first.backend.(*appContainerScope).identity
+	secondIdentity := second.backend.(*appContainerScope).identity
+	if firstIdentity.sid.Equals(secondIdentity.sid) {
+		t.Fatal("distinct workspaces share a SID")
+	}
+	target := first.CommandWorkspace() + "sentinel.txt"
+	control := runIn(t, first, Command{Shell: "Get-Content -LiteralPath " + psLiteral(target)})
+	if !strings.Contains(control.Output, "workspace-one-secret") {
+		t.Fatalf("positive control failed: %s", control.Output)
+	}
+	denied := runIn(t, second, Command{Shell: "Write-Output " + sandboxStarted + "; Get-Content -LiteralPath " + psLiteral(target)})
+	assertSandboxStarted(t, denied)
+	if strings.Contains(denied.Output, "workspace-one-secret") {
+		t.Fatalf("cross-workspace read: %s", denied.Output)
+	}
+	write := runIn(t, second, Command{Shell: "Write-Output " + sandboxStarted + "; Set-Content -LiteralPath " + psLiteral(first.CommandWorkspace()+"escaped.txt") + " -Value forbidden"})
+	assertSandboxStarted(t, write)
+	if _, err := os.Stat(filepath.Join(firstRoot, "escaped.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cross-workspace write: %v", err)
+	}
+	// Closing and reopening the same workspace reuses only its own grants.
+	if err := first.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	reopened, _ := containerScopes(t, firstRoot)
+	if !reopened.backend.(*appContainerScope).identity.sid.Equals(firstIdentity.sid) {
+		t.Fatal("workspace identity was not stable")
+	}
+	denied = runIn(t, second, Command{Shell: "Write-Output " + sandboxStarted + "; Get-Content -LiteralPath " + psLiteral(reopened.CommandWorkspace()+"sentinel.txt")})
+	assertSandboxStarted(t, denied)
+	if strings.Contains(denied.Output, "workspace-one-secret") {
+		t.Fatal("reopening widened another workspace")
+	}
+}
+
+func TestWorkspaceIdentityNames(t *testing.T) {
+	name := workspaceContainerName(`C:\project`)
+	if name != workspaceContainerName(`C:\project\.`) {
+		t.Fatal("equivalent canonical paths differ")
+	}
+	if name == workspaceContainerName(`C:\another`) {
+		t.Fatal("different paths collide")
+	}
+	if name == workspaceContainerName(`C:\PROJECT`) {
+		t.Fatal("case-sensitive workspace names collide")
+	}
+	if !validWorkspaceContainerName(name) || validWorkspaceContainerName("../"+name) || validWorkspaceContainerName(appContainerName) {
+		t.Fatal("invalid identity name validation")
 	}
 }
 
@@ -381,12 +453,9 @@ func TestAppContainerBuildsAndRunsGo(t *testing.T) {
 }
 
 func TestRevokeRemovesTreeAndDirectoryGrants(t *testing.T) {
-	identity, err := NewAppContainerBackend().(*appContainerBackend).profile()
-	if err != nil {
-		t.Skipf("AppContainer unavailable: %v", err)
-	}
 	shared := t.TempDir()
 	sandboxed, _ := containerScopes(t, t.TempDir())
+	identity := sandboxed.backend.(*appContainerScope).identity
 	write := func(name string) bool {
 		target := filepath.Join(shared, name)
 		runIn(t, sandboxed, Command{Shell: "Set-Content -LiteralPath " + psLiteral(target) + " -Value x"})

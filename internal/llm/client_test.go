@@ -300,3 +300,38 @@ func TestMessageAttachmentJSONSerialization(t *testing.T) {
 		t.Errorf("first attachment name mismatch: got %q", roundtrip.Attachments[0].Name)
 	}
 }
+
+func TestDeltaContentPlainString(t *testing.T) {
+	text, reasoning := deltaContent(json.RawMessage(`"hello"`))
+	if text != "hello" || reasoning != "" {
+		t.Fatalf("got text=%q reasoning=%q", text, reasoning)
+	}
+}
+
+func TestDeltaContentMistralThinkingBlocks(t *testing.T) {
+	raw := json.RawMessage(`[{"type":"thinking","thinking":[{"type":"text","text":"The user wants"}],"closed":true}]`)
+	text, reasoning := deltaContent(raw)
+	if text != "" || reasoning != "The user wants" {
+		t.Fatalf("got text=%q reasoning=%q", text, reasoning)
+	}
+}
+
+func TestDeltaContentMistralTextAndThinkingInOneChunk(t *testing.T) {
+	raw := json.RawMessage(`[{"type":"thinking","thinking":[{"type":"text","text":"done thinking"}]},{"type":"text","text":"OK"}]`)
+	text, reasoning := deltaContent(raw)
+	if text != "OK" || reasoning != "done thinking" {
+		t.Fatalf("got text=%q reasoning=%q", text, reasoning)
+	}
+}
+
+func TestDeltaContentEmptyAndUnknown(t *testing.T) {
+	if text, reasoning := deltaContent(nil); text != "" || reasoning != "" {
+		t.Fatalf("nil content produced %q/%q", text, reasoning)
+	}
+	if text, reasoning := deltaContent(json.RawMessage(`{}`)); text != "" || reasoning != "" {
+		t.Fatalf("object content produced %q/%q", text, reasoning)
+	}
+	if text, reasoning := deltaContent(json.RawMessage(`[{"type":"reference","reference_ids":["doc1"]}]`)); text != "" || reasoning != "" {
+		t.Fatalf("unknown block type produced %q/%q", text, reasoning)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -804,6 +805,13 @@ func (r *Runner) executeSearchFiles(ctx context.Context, root, pattern, requeste
 	var matches []string
 	const maxMatches = 150
 	const maxFileBytes = 1024 * 1024
+	reader := files.New(root, false)
+	canonicalRoot := canonicalPath(root)
+	rootHandle, err := os.OpenRoot(root)
+	if err != nil {
+		return "Error opening workspace: " + err.Error()
+	}
+	defer rootHandle.Close()
 
 scan:
 	for _, f := range all {
@@ -814,12 +822,17 @@ scan:
 		if isSecretPath(f) {
 			continue
 		}
-		fullPath := filepath.Join(root, f)
-		info, err := os.Stat(fullPath)
-		if err != nil || info.IsDir() || info.Size() > maxFileBytes {
+		resolved, err := reader.Resolve(f)
+		if err != nil {
 			continue
 		}
-		data, err := os.ReadFile(fullPath)
+		rel, err := filepath.Rel(canonicalRoot, resolved)
+		if err != nil || isSecretPath(rel) {
+			continue
+		}
+		// Root.Open also enforces containment if a directory is replaced after
+		// resolution. Read the resolved name, not an alias that could be retargeted.
+		data, err := readSearchFile(rootHandle, rel, maxFileBytes)
 		if err != nil || looksBinary(data) {
 			continue
 		}
@@ -846,6 +859,26 @@ scan:
 		res += fmt.Sprintf("\n\n[truncated to %d matches]", maxMatches)
 	}
 	return res
+}
+
+func readSearchFile(root *os.Root, name string, limit int64) ([]byte, error) {
+	file, err := root.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Size() > limit {
+		return nil, fmt.Errorf("not a searchable regular file")
+	}
+	data, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("file exceeds search limit")
+	}
+	return data, err
 }
 
 func (r *Runner) executeGlobFiles(ctx context.Context, root, patternValue, requestedPath string) string {
